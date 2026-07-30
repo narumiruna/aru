@@ -1,12 +1,14 @@
+mod instruction;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
 use crate::cli::{
-    Cli, Command, LockArgs, McpAddArgs, McpCommand, McpRemoveArgs, McpUpdateArgs, SkillAddArgs,
-    SkillCommand, SkillRemoveArgs, SkillUpdateArgs, SyncArgs, TargetAddArgs, TargetCommand,
-    TargetRemoveArgs, TargetSetArgs,
+    Cli, Command, InstructionCommand, LockArgs, McpAddArgs, McpCommand, McpRemoveArgs,
+    McpUpdateArgs, SkillAddArgs, SkillCommand, SkillRemoveArgs, SkillUpdateArgs, SyncArgs,
+    TargetAddArgs, TargetCommand, TargetRemoveArgs, TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
@@ -30,6 +32,12 @@ pub fn run() -> Result<()> {
         Command::Sync(args) => {
             let project = discover_project(cli.project)?;
             sync(&project, args)
+        }
+        Command::Instruction { command } => {
+            let project = discover_project(cli.project)?;
+            match command {
+                InstructionCommand::Init(args) => instruction::init(&project, args),
+            }
         }
         Command::Target { command } => {
             let project = discover_project(cli.project)?;
@@ -117,6 +125,7 @@ fn lock(project: &Path, args: LockArgs) -> Result<()> {
         false,
         false,
         false,
+        false,
         BTreeSet::new(),
         BTreeSet::new(),
     )
@@ -133,6 +142,7 @@ fn sync(project: &Path, args: SyncArgs) -> Result<()> {
         args.dry_run,
         args.locked,
         true,
+        args.merge,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
@@ -163,6 +173,7 @@ fn target_add(project: &Path, args: TargetAddArgs) -> Result<()> {
         targets,
         args.no_sync,
         args.dry_run,
+        args.merge,
         args.force,
     )
 }
@@ -198,6 +209,7 @@ fn target_remove(project: &Path, args: TargetRemoveArgs) -> Result<()> {
         args.no_sync,
         args.dry_run,
         false,
+        false,
     )
 }
 
@@ -217,6 +229,7 @@ fn target_set(project: &Path, args: TargetSetArgs) -> Result<()> {
         targets,
         args.no_sync,
         args.dry_run,
+        args.merge,
         args.force,
     )
 }
@@ -229,6 +242,7 @@ fn apply_target_change(
     targets: Vec<Target>,
     no_sync: bool,
     dry_run: bool,
+    merge_instructions: bool,
     force: bool,
 ) -> Result<()> {
     document.set_targets(&targets);
@@ -251,6 +265,7 @@ fn apply_target_change(
         document.bytes(),
         dry_run,
         !no_sync,
+        merge_instructions,
         force,
         target_plan,
         &targets,
@@ -364,6 +379,7 @@ fn skill_add_with_mode(
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         updates,
         BTreeSet::new(),
@@ -417,6 +433,7 @@ fn skill_add_explicit(
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         updates,
         BTreeSet::new(),
@@ -519,6 +536,7 @@ fn skill_remove(project: &Path, args: SkillRemoveArgs) -> Result<()> {
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
@@ -537,6 +555,7 @@ fn skill_update(project: &Path, args: SkillUpdateArgs) -> Result<()> {
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         updates,
         BTreeSet::new(),
@@ -586,6 +605,7 @@ fn mcp_add(project: &Path, args: McpAddArgs) -> Result<()> {
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
@@ -611,6 +631,7 @@ fn mcp_remove(project: &Path, args: McpRemoveArgs) -> Result<()> {
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
@@ -638,6 +659,7 @@ fn mcp_update(project: &Path, args: McpUpdateArgs) -> Result<()> {
         args.dry_run,
         false,
         !args.no_sync,
+        false,
         args.force,
         BTreeSet::new(),
         updates,
@@ -652,6 +674,7 @@ fn execute(
     dry_run: bool,
     locked: bool,
     project_projections: bool,
+    merge_instructions: bool,
     force: bool,
     update_skills: BTreeSet<String>,
     update_mcp: BTreeSet<String>,
@@ -663,6 +686,7 @@ fn execute(
         dry_run,
         locked,
         project_projections,
+        merge_instructions,
         force,
         update_skills,
         update_mcp,
@@ -678,6 +702,7 @@ fn execute_with_skill_hints(
     dry_run: bool,
     locked: bool,
     project_projections: bool,
+    merge_instructions: bool,
     force: bool,
     update_skills: BTreeSet<String>,
     update_mcp: BTreeSet<String>,
@@ -693,6 +718,7 @@ fn execute_with_skill_hints(
             dry_run,
             project_projections,
             force,
+            merge_instructions,
             manifest_bytes,
             update_skills: &update_skills,
             update_mcp: &update_mcp,
@@ -709,6 +735,7 @@ fn execute_target_change(
     manifest_bytes: Vec<u8>,
     dry_run: bool,
     project_projections: bool,
+    merge_instructions: bool,
     force: bool,
     target_plan: Vec<String>,
     targets: &[Target],
@@ -726,6 +753,7 @@ fn execute_target_change(
             dry_run,
             project_projections,
             force,
+            merge_instructions,
             manifest_bytes: Some(manifest_bytes),
             update_skills: &update_skills,
             update_mcp: &update_mcp,

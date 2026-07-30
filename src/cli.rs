@@ -8,7 +8,7 @@ use crate::manifest::Target;
 #[command(
     name = "aru",
     version,
-    about = "Project manager for coding-agent skills and MCP servers"
+    about = "Project manager for coding-agent instructions, skills, and MCP servers"
 )]
 pub struct Cli {
     /// Project directory (defaults to the nearest ancestor containing aru.toml).
@@ -26,6 +26,11 @@ pub enum Command {
     Lock(LockArgs),
     /// Reconcile the lock and all configured target project paths.
     Sync(SyncArgs),
+    /// Manage project instructions.
+    Instruction {
+        #[command(subcommand)]
+        command: InstructionCommand,
+    },
     /// Manage project targets.
     Target {
         #[command(subcommand)]
@@ -65,7 +70,29 @@ pub struct SyncArgs {
     /// Resolve and print the plan without writing any file or cache.
     #[arg(long)]
     pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding instruction blocks.
+    #[arg(long, conflicts_with = "force")]
+    pub merge: bool,
     /// Destructively take over colliding unmanaged entries.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InstructionCommand {
+    /// Discover existing AGENTS.md files and synchronize their projections.
+    Init(InstructionInitArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InstructionInitArgs {
+    /// Resolve and print the plan without writing any file.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding instruction blocks.
+    #[arg(long, conflicts_with = "force")]
+    pub merge: bool,
+    /// Destructively replace colliding unmanaged instruction outputs.
     #[arg(long)]
     pub force: bool,
 }
@@ -84,7 +111,7 @@ pub enum TargetCommand {
 
 #[derive(Debug, Args)]
 pub struct TargetAddArgs {
-    /// Target to add (codex or claude); may be repeated.
+    /// Target to add; may be repeated.
     #[arg(value_name = "TARGET", required = true, num_args = 1..)]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
@@ -93,6 +120,9 @@ pub struct TargetAddArgs {
     /// Print a deterministic plan without writing.
     #[arg(long)]
     pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding instruction blocks.
+    #[arg(long, conflicts_with = "force")]
+    pub merge: bool,
     /// Destructively take over colliding unmanaged entries.
     #[arg(long)]
     pub force: bool,
@@ -113,7 +143,7 @@ pub struct TargetRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct TargetSetArgs {
-    /// Exact target set (codex and/or claude).
+    /// Exact target set.
     #[arg(value_name = "TARGET", required = true, num_args = 1..)]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
@@ -122,6 +152,9 @@ pub struct TargetSetArgs {
     /// Print a deterministic plan without writing.
     #[arg(long)]
     pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding instruction blocks.
+    #[arg(long, conflicts_with = "force")]
+    pub merge: bool,
     /// Destructively take over colliding unmanaged entries.
     #[arg(long)]
     pub force: bool,

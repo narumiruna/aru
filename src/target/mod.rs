@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod instructions;
 
 use serde_json::{Map, Value, json};
 
@@ -7,6 +8,61 @@ use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
 use crate::lockfile::McpTarget;
 use crate::manifest::Target;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstructionCapability {
+    NativeAgents,
+    Claude,
+    Copilot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetCapabilities {
+    pub instructions: InstructionCapability,
+    pub skills: bool,
+    pub mcp: bool,
+}
+
+pub fn capabilities(target: Target) -> TargetCapabilities {
+    match target {
+        Target::Codex => TargetCapabilities {
+            instructions: InstructionCapability::NativeAgents,
+            skills: true,
+            mcp: true,
+        },
+        Target::Claude => TargetCapabilities {
+            instructions: InstructionCapability::Claude,
+            skills: true,
+            mcp: true,
+        },
+        Target::Copilot => TargetCapabilities {
+            instructions: InstructionCapability::Copilot,
+            skills: false,
+            mcp: false,
+        },
+        Target::Pi | Target::Opencode => TargetCapabilities {
+            instructions: InstructionCapability::NativeAgents,
+            skills: false,
+            mcp: false,
+        },
+    }
+}
+
+pub fn skill_targets(targets: &[Target]) -> Vec<Target> {
+    targets
+        .iter()
+        .copied()
+        .filter(|target| capabilities(*target).skills)
+        .collect()
+}
+
+pub fn mcp_targets(targets: &[Target]) -> Vec<Target> {
+    targets
+        .iter()
+        .copied()
+        .filter(|target| capabilities(*target).mcp)
+        .collect()
+}
 
 pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
     match (target.target, target.transport.as_str()) {

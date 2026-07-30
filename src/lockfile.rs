@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, IoContext, Result};
+use crate::instruction::InstructionScope;
 use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
-pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 1;
+pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -72,6 +73,15 @@ pub struct McpServer {
     pub targets: Vec<McpTarget>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct LockedInstructionSource {
+    pub source: String,
+    pub scope: InstructionScope,
+    pub targets: Vec<Target>,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub struct ProjectionBaseline {
@@ -87,6 +97,12 @@ pub struct Lockfile {
     pub version: u32,
     pub package_input_hash: String,
     pub projection_input_hash: String,
+    #[serde(
+        default,
+        rename = "instruction-source",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub instruction_sources: Vec<LockedInstructionSource>,
     #[serde(
         default,
         rename = "skill-package",
@@ -109,6 +125,7 @@ impl Lockfile {
             version: 1,
             package_input_hash: String::new(),
             projection_input_hash: String::new(),
+            instruction_sources: Vec::new(),
             skill_packages: Vec::new(),
             mcp_servers: Vec::new(),
             projection_baselines: Vec::new(),
@@ -135,6 +152,20 @@ impl Lockfile {
                 "unsupported aru.lock version {}; expected 1",
                 self.version
             )));
+        }
+        let mut instruction_sources = BTreeSet::new();
+        for instruction in &self.instruction_sources {
+            if !instruction_sources.insert(&instruction.source) {
+                return Err(AruError::msg(
+                    "aru.lock contains duplicate instruction source",
+                ));
+            }
+            let unique_targets: BTreeSet<_> = instruction.targets.iter().collect();
+            if unique_targets.len() != instruction.targets.len() {
+                return Err(AruError::msg(
+                    "aru.lock contains duplicate instruction source target",
+                ));
+            }
         }
         let mut sources = BTreeSet::new();
         let mut skill_names = BTreeSet::new();
@@ -178,6 +209,12 @@ impl Lockfile {
     }
 
     pub fn normalize(&mut self) {
+        self.instruction_sources
+            .sort_by(|left, right| left.source.cmp(&right.source));
+        for instruction in &mut self.instruction_sources {
+            instruction.targets.sort();
+            instruction.targets.dedup();
+        }
         self.skill_packages
             .sort_by(|left, right| left.source.cmp(&right.source));
         for package in &mut self.skill_packages {
@@ -217,6 +254,20 @@ impl Lockfile {
             mcp: &self.mcp_servers,
         })
     }
+
+    pub fn lock_identity_digest(&self) -> Result<String> {
+        #[derive(Serialize)]
+        struct Identity<'a> {
+            instructions: &'a [LockedInstructionSource],
+            skills: &'a [SkillPackage],
+            mcp: &'a [McpServer],
+        }
+        canonical_json_digest(&Identity {
+            instructions: &self.instruction_sources,
+            skills: &self.skill_packages,
+            mcp: &self.mcp_servers,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +296,44 @@ mod tests {
         let mut right = left.clone();
         right.projection_baselines.reverse();
         assert_eq!(left.bytes().unwrap(), right.bytes().unwrap());
+    }
+
+    #[test]
+    fn instruction_sources_are_normalized_and_change_only_complete_lock_identity() {
+        let mut lock = Lockfile::empty();
+        let package_identity = lock.package_identity_digest().unwrap();
+        let lock_identity = lock.lock_identity_digest().unwrap();
+        lock.instruction_sources.push(LockedInstructionSource {
+            source: "AGENTS.md".into(),
+            scope: InstructionScope::SourceDirectory {
+                directory: ".".into(),
+            },
+            targets: vec![Target::Copilot, Target::Claude],
+            sha256: "sha256:source".into(),
+        });
+        assert_eq!(package_identity, lock.package_identity_digest().unwrap());
+        assert_ne!(lock_identity, lock.lock_identity_digest().unwrap());
+        let bytes = lock.bytes().unwrap();
+        let parsed: Lockfile = toml::from_str(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert_eq!(
+            parsed.instruction_sources[0].targets,
+            [Target::Claude, Target::Copilot]
+        );
+    }
+
+    #[test]
+    fn duplicate_instruction_sources_are_rejected() {
+        let source = LockedInstructionSource {
+            source: "AGENTS.md".into(),
+            scope: InstructionScope::SourceDirectory {
+                directory: ".".into(),
+            },
+            targets: vec![Target::Claude],
+            sha256: "sha256:source".into(),
+        };
+        let mut lock = Lockfile::empty();
+        lock.instruction_sources = vec![source.clone(), source];
+        assert!(lock.validate().is_err());
     }
 
     #[test]
