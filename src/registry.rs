@@ -591,6 +591,8 @@ mod tests {
             transport: None,
             package_registry: None,
             url: None,
+            command: None,
+            args: Vec::new(),
             bearer_token_env: None,
         };
         let found = candidates(&server, &requirement, &[Target::Codex]).unwrap();
@@ -624,6 +626,8 @@ mod tests {
             transport: None,
             package_registry: None,
             url: None,
+            command: None,
+            args: Vec::new(),
             bearer_token_env: None,
         };
         assert!(
@@ -668,6 +672,8 @@ mod tests {
             transport: None,
             package_registry: None,
             url: None,
+            command: None,
+            args: Vec::new(),
             bearer_token_env: None,
         };
         let forward = candidates(&response.server, &requirement, &[Target::Codex]).unwrap();

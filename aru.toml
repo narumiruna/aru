@@ -2,6 +2,21 @@
 targets = ["codex", "claude"]
 
 [skills]
-"narumiruna/skills" = { include = ["designing-user-experiences", "writing-agents-md", "writing-git-commits", "writing-plans", "writing-roadmap"], exclude = [] }
+"narumiruna/skills" = { include = [
+  "designing-user-experiences",
+  "writing-agents-md",
+  "writing-git-commits",
+  "writing-plans",
+  "writing-roadmap"
+], exclude = [] }
 
 [mcp]
+[mcp.chrome-devtools]
+registry = "https://registry.modelcontextprotocol.io"
+server = "io.github.ChromeDevTools/chrome-devtools-mcp"
+transport = "stdio"
+package-registry = "npm"
+
+[mcp.yfinance]
+command = "uvx"
+args = ["--with", "mcp<2", "yfmcp@0.12.2"]

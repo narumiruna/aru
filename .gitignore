@@ -22,8 +22,10 @@ debug
 
 
 # Local source checkouts used for implementation research
-/third_party/reference/
-.aru/
 .agents/
+.aru/
 .claude/
+.codex/
+.mcp.json
+/third_party/reference/
 docs/plans/archived/

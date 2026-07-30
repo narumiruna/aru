@@ -70,6 +70,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             let mut map = Map::new();
             map.insert("command".into(), json!(target.command));
             map.insert("args".into(), json!(target.args));
+            map.insert("enabled".into(), json!(true));
             if !target.env_vars.is_empty() {
                 map.insert("env_vars".into(), json!(target.env_vars));
             }
@@ -78,6 +79,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
         (Target::Codex, "streamable-http") => {
             let mut map = Map::new();
             map.insert("url".into(), json!(target.url));
+            map.insert("enabled".into(), json!(true));
             if let Some(env) = &target.bearer_token_env {
                 map.insert("bearer_token_env_var".into(), json!(env));
             }

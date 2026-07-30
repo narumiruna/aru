@@ -59,17 +59,19 @@ aru skill add ssh://git@example.com/team/skills.git --rev 67cd354 --skill review
 
 `--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. Use `--branch main` to explicitly track a moving branch, or `--rev <SHA>` for an immutable commit. `--version`, `--branch`, and `--rev` are mutually exclusive; omitting all three continues to select the latest matching SemVer tag, never the default branch. `--upgrade` / `-U` makes add re-resolve this source instead of reusing its lock: a new source installs normally, an existing SemVer source selects the latest matching tag, a branch selects its current head, and an exact revision remains fixed. Source positionals never contain a path selector or reference, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
 
-Add a Registry package or a direct remote MCP server:
+Add a Registry package, direct remote, or direct stdio MCP server:
 
 ```console
 aru mcp add io.example/context --name context --transport stdio --package-registry npm
 aru mcp add --url https://docs.example.com/mcp --name docs \
   --bearer-token-env DOCS_MCP_TOKEN
+aru mcp add --command uvx --arg=--with --arg 'mcp<2' \
+  --arg yfmcp@0.12.2 --name yfinance
 aru mcp update context
 aru mcp remove docs
 ```
 
-A Registry candidate must be unique after transport, package-registry, and filtering against every configured target with an implemented MCP adapter. aru never chooses the first API array item.
+A Registry candidate must be unique after transport, package-registry, and filtering against every configured target with an implemented MCP adapter. aru never chooses the first API array item. Direct stdio intent stores the executable and each repeated `--arg` as an ordered argv array; use `--arg=--flag` for an argument beginning with `-`. aru never executes these commands during add, lock, or sync, and package versions should be pinned explicitly in argv. The yfinance example also constrains its unbounded MCP SDK dependency below 2 because `yfmcp` 0.12.2 uses the 1.x API.
 
 ## Offline local example
 
@@ -221,7 +223,7 @@ aru treats discovered instruction/skill content and Registry metadata as untrust
 - the canonical digest includes a format version, delimited portable path, executable marker, length, and raw bytes for every sorted regular file;
 - Registry requests use HTTPS without URL userinfo, 10-second connect/30-second total timeouts, at most three redirects, 10 MiB bodies, 100 pages, and 10,000 records;
 - malformed, oversized, truncated, cyclic, ambiguous, inactive, or unsupported metadata fails before writes;
-- MCP command and argument data stays in arrays and is never shell-expanded;
+- MCP command and argument data stays in arrays and is never shell-expanded; direct stdio commands are projected but never executed by aru;
 - aru stores only secret environment variable names/placeholders. It does not read secret values;
 - existing unmanaged instruction destinations and skill/MCP entries collide by default. `--merge` is limited to preserving unmanaged Markdown around instruction blocks; owned entries that differ from their last-applied semantic digest report drift and are preserved;
 - only aru-owned server keys are merged or removed. Unrelated TOML comments/keys and JSON entries survive. Invalid existing config fails closed.

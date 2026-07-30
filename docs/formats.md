@@ -26,6 +26,10 @@ targets = ["claude", "copilot"]
 transport = "streamable-http"
 url = "https://docs.example.com/mcp"
 bearer-token-env = "DOCS_TOKEN"
+
+[mcp.yfinance]
+command = "uvx"
+args = ["--with", "mcp<2", "yfmcp@0.12.2"]
 ```
 
 The manifest is intentionally unversioned during early development. `project.targets` is a non-empty, duplicate-free persistent set. Target commands retain the existing value decoration so a trailing comment on `targets` survives mutation.
@@ -37,7 +41,7 @@ Each `instructions.sources` entry has non-empty project-relative `files`, option
 
 Source `targets` default to the complete project target set and otherwise must be a duplicate-free subset. Discovery always excludes `.git/**` and `.aru/**`; onboarding also skips common build/vendor roots and writes the exact files it found. Unsafe/absolute patterns, parent traversal, duplicate matches, symlinks, non-regular files, non-UTF-8 paths/content, files larger than 1 MiB, generated output paths, and reserved aru marker text fail before writes.
 
-Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. An MCP entry has exactly one of `server` (Registry) or `url` (direct remote). Secret-bearing fields contain environment names only.
+Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
 
 `package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes targets and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
 
@@ -67,11 +71,11 @@ Generated path-specific files are wholly aru-owned. Removing a source or target 
 
 `version = 1`. Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, and source SHA-256. `aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
 
-Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each configured target with an implemented MCP adapter.
+Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each configured target with an implemented MCP adapter. Direct stdio entries lock their exact command and ordered argv with `version = "direct"`; they contain no resolved package metadata.
 
 `projection-input-hash` covers complete lock identity, sorted project targets, and adapter capability schema. `projection-baseline` contains only currently desired semantic instruction, skill, and MCP entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
 
-Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when Codex is also selected and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Instruction-only targets are filtered out before skill/MCP resolution. A declared skill or MCP requirement with no capable configured target fails explicitly.
+Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when Codex is also selected and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Codex MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name user-level entry. Instruction-only targets are filtered out before skill/MCP resolution. A declared skill or MCP requirement with no capable configured target fails explicitly.
 
 The canonical skill digest byte stream is:
 

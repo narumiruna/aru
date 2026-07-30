@@ -218,6 +218,10 @@ pub struct McpRequirement {
     pub package_registry: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     #[serde(
         default,
         rename = "bearer-token-env",
@@ -229,14 +233,55 @@ pub struct McpRequirement {
 impl McpRequirement {
     pub fn validate(&self, name: &str) -> Result<()> {
         validate_name(name, "MCP name")?;
-        let direct = self.url.is_some();
-        let registry = self.server.is_some();
-        if direct == registry {
+        let source_count = usize::from(self.server.is_some())
+            + usize::from(self.url.is_some())
+            + usize::from(self.command.is_some());
+        if source_count != 1 {
             return Err(AruError::msg(format!(
-                "MCP {name:?} must set exactly one of url or server"
+                "MCP {name:?} must set exactly one of server, url, or command"
             )));
         }
-        if direct {
+        if self.command.is_none() && !self.args.is_empty() {
+            return Err(AruError::msg(format!(
+                "MCP {name:?} args require a direct stdio command"
+            )));
+        }
+        if let Some(command) = &self.command {
+            if command.is_empty() || command.contains('\0') {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} command must be non-empty and contain no NUL"
+                )));
+            }
+            if self.args.iter().any(|argument| argument.contains('\0')) {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} arguments must contain no NUL"
+                )));
+            }
+            if self.version.is_some() {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} cannot set version"
+                )));
+            }
+            if self.registry.is_some() || self.package_registry.is_some() {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} cannot set registry or package-registry"
+                )));
+            }
+            if self.bearer_token_env.is_some() {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} cannot set bearer-token-env"
+                )));
+            }
+            if self
+                .transport
+                .as_deref()
+                .is_some_and(|transport| transport != "stdio")
+            {
+                return Err(AruError::msg(format!(
+                    "direct stdio MCP {name:?} requires stdio transport"
+                )));
+            }
+        } else if self.url.is_some() {
             if self.version.is_some() || self.package_registry.is_some() {
                 return Err(AruError::msg(format!(
                     "direct MCP {name:?} cannot set version or package-registry"
@@ -452,11 +497,15 @@ fn mcp_table(requirement: &McpRequirement) -> Table {
         ("transport", requirement.transport.as_ref()),
         ("package-registry", requirement.package_registry.as_ref()),
         ("url", requirement.url.as_ref()),
+        ("command", requirement.command.as_ref()),
         ("bearer-token-env", requirement.bearer_token_env.as_ref()),
     ] {
         if let Some(value) = value {
             table[key] = toml_edit::value(value.as_str());
         }
+    }
+    if !requirement.args.is_empty() {
+        table["args"] = Item::Value(string_array(&requirement.args).into());
     }
     table
 }

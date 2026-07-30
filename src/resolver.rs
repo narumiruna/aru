@@ -381,6 +381,8 @@ fn normalized_mcp(requirement: &McpRequirement) -> McpRequirement {
         normalized.version = Some(normalize_semver_requirement(
             normalized.version.as_deref().unwrap_or("*"),
         ));
+    } else if normalized.command.is_some() && normalized.transport.is_none() {
+        normalized.transport = Some("stdio".into());
     } else if normalized.url.is_some() && normalized.transport.is_none() {
         normalized.transport = Some("streamable-http".into());
     }
@@ -477,7 +479,29 @@ fn resolve_mcp(
     descriptor: &str,
 ) -> Result<McpServer> {
     let (server_id, registry, version, metadata_sha256, candidate) =
-        if let Some(url) = &requirement.url {
+        if let Some(command) = &requirement.command {
+            let candidate = ResolvedCandidate {
+                kind: "command".into(),
+                transport: requirement
+                    .transport
+                    .clone()
+                    .unwrap_or_else(|| "stdio".into()),
+                command: Some(command.clone()),
+                args: requirement.args.clone(),
+                env_vars: Vec::new(),
+                env_http_headers: BTreeMap::new(),
+                bearer_token_env: None,
+                url: None,
+                package: None,
+            };
+            (
+                name.to_owned(),
+                None,
+                "direct".to_owned(),
+                canonical_json_digest(&candidate)?,
+                candidate,
+            )
+        } else if let Some(url) = &requirement.url {
             let candidate = ResolvedCandidate {
                 kind: "remote".into(),
                 transport: requirement
