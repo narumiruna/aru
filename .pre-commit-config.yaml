@@ -22,3 +22,7 @@ repos:
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust, toml]
+  - repo: https://github.com/tombi-toml/tombi-pre-commit
+    rev: v1.2.4
+    hooks:
+      - id: tombi-format
