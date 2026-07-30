@@ -2,11 +2,6 @@
 targets = ["codex", "claude"]
 
 [skills]
-"narumiruna/skills" = { include = [
-  "designing-user-experiences",
-  "writing-agents-md",
-  "writing-git-commits",
-  "writing-plans"
-], exclude = [] }
+"narumiruna/skills" = { include = ["designing-user-experiences", "writing-agents-md", "writing-git-commits", "writing-plans", "writing-roadmap"], exclude = [] }
 
 [mcp]
