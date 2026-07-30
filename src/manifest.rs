@@ -49,6 +49,8 @@ pub struct SkillRequirement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rev: Option<String>,
     #[serde(default = "wildcard")]
     pub include: Vec<String>,
@@ -66,6 +68,7 @@ impl Default for SkillRequirement {
     fn default() -> Self {
         Self {
             version: None,
+            branch: None,
             rev: None,
             include: wildcard(),
             exclude: Vec::new(),
@@ -90,10 +93,16 @@ impl SkillRequirement {
     }
 
     pub fn validate(&self, source: &str) -> Result<()> {
-        if self.version.is_some() && self.rev.is_some() {
+        let references = usize::from(self.version.is_some())
+            + usize::from(self.branch.is_some())
+            + usize::from(self.rev.is_some());
+        if references > 1 {
             return Err(AruError::msg(format!(
-                "skill source {source:?} cannot set both version and rev"
+                "skill source {source:?} can set only one of version, branch, or rev"
             )));
+        }
+        if let Some(branch) = &self.branch {
+            validate_branch_name(branch)?;
         }
         if self.include.is_empty() {
             return Err(AruError::msg(format!(
@@ -181,7 +190,6 @@ impl McpRequirement {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Manifest {
-    pub schema: u32,
     pub project: Project,
     #[serde(default)]
     pub skills: BTreeMap<String, SkillRequirement>,
@@ -191,12 +199,6 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
-        if self.schema != 1 {
-            return Err(AruError::msg(format!(
-                "unsupported aru.toml schema {}; expected 1",
-                self.schema
-            )));
-        }
         if self.project.agents.is_empty() {
             return Err(AruError::msg("project.agents must not be empty"));
         }
@@ -244,7 +246,6 @@ impl ManifestDocument {
 
     pub fn new(agents: &[Agent]) -> Self {
         let mut doc = DocumentMut::new();
-        doc["schema"] = toml_edit::value(1);
         let mut project = Table::new();
         project["agents"] = Item::Value(agent_array(agents).into());
         doc["project"] = Item::Table(project);
@@ -316,6 +317,9 @@ fn skill_inline(requirement: &SkillRequirement) -> InlineTable {
     if let Some(version) = &requirement.version {
         table.insert("version", Value::from(version.as_str()));
     }
+    if let Some(branch) = &requirement.branch {
+        table.insert("branch", Value::from(branch.as_str()));
+    }
     if let Some(rev) = &requirement.rev {
         table.insert("rev", Value::from(rev.as_str()));
     }
@@ -355,6 +359,31 @@ fn string_array(values: &[String]) -> Array {
         array.push(value.as_str());
     }
     array
+}
+
+pub fn validate_branch_name(name: &str) -> Result<()> {
+    let invalid_character = name.chars().any(|character| {
+        character.is_control() || character.is_whitespace() || "~^:?*[\\".contains(character)
+    });
+    let invalid_component = name.split('/').any(|component| {
+        component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
+    });
+    let valid = !name.is_empty()
+        && name.len() <= 255
+        && name != "@"
+        && !name.starts_with('-')
+        && !name.starts_with('/')
+        && !name.ends_with('/')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && !name.contains("@{")
+        && !invalid_character
+        && !invalid_component;
+    if valid {
+        Ok(())
+    } else {
+        Err(AruError::msg(format!("invalid Git branch name {name:?}")))
+    }
 }
 
 pub fn validate_name(name: &str, kind: &str) -> Result<()> {
@@ -411,7 +440,7 @@ mod tests {
 
     #[test]
     fn mutation_preserves_unrelated_comments() {
-        let text = "# heading\nschema = 1\n\n[project]\nagents = [\"codex\"] # keep\n\n[skills]\n# package note\n\"owner/repo\" = { include = [\"old\"] }\n\n[custom]\nanswer = 42\n";
+        let text = "# heading\nfuture = 1\n\n[project]\nagents = [\"codex\"] # keep\n\n[skills]\n# package note\n\"owner/repo\" = { include = [\"old\"] }\n\n[custom]\nanswer = 42\n";
         let doc = text.parse::<DocumentMut>().unwrap();
         let mut document = ManifestDocument {
             path: PathBuf::from("aru.toml"),
@@ -432,7 +461,55 @@ mod tests {
     }
 
     #[test]
-    fn v1_manifest_fixture_parses_and_preserves_comments() {
+    fn branch_fixture_round_trips_without_manifest_schema() {
+        let fixture = include_str!("../tests/fixtures/contracts/aru-branch.toml");
+        let document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: fixture.parse().unwrap(),
+        };
+        let manifest = document.manifest().unwrap();
+        assert_eq!(
+            manifest.skills["owner/repository"].branch.as_deref(),
+            Some("main")
+        );
+        assert_eq!(document.bytes(), fixture.as_bytes());
+        assert!(!fixture.contains("schema ="));
+        assert!(
+            !String::from_utf8(ManifestDocument::new(&[Agent::Codex]).bytes())
+                .unwrap()
+                .contains("schema =")
+        );
+    }
+
+    #[test]
+    fn branch_mutation_preserves_comments_and_reference_kinds_are_exclusive() {
+        let text = "# keep\nfuture = 999\n\n[project]\nagents = [\"codex\"]\n\n[skills]\n";
+        let mut document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+        document.set_skill(
+            "owner/repo",
+            &SkillRequirement {
+                branch: Some("main".into()),
+                ..SkillRequirement::default()
+            },
+        );
+        assert!(document.manifest().is_ok());
+        let output = String::from_utf8(document.bytes()).unwrap();
+        assert!(output.starts_with("# keep\nfuture = 999"));
+        assert!(output.contains("branch = \"main\""));
+
+        let invalid = SkillRequirement {
+            version: Some("1.0.0".into()),
+            branch: Some("main".into()),
+            ..SkillRequirement::default()
+        };
+        assert!(invalid.validate("owner/repo").is_err());
+    }
+
+    #[test]
+    fn manifest_fixture_parses_and_preserves_comments() {
         let fixture = include_str!("../tests/fixtures/contracts/aru.toml");
         let document = ManifestDocument {
             path: PathBuf::from("aru.toml"),

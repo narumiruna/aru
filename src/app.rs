@@ -286,11 +286,18 @@ fn skill_add_base_requirement(
     let mut requirement = existing.cloned().unwrap_or_default();
     if let Some(version) = &args.version {
         requirement.version = Some(version.clone());
+        requirement.branch = None;
+        requirement.rev = None;
+    }
+    if let Some(branch) = &args.branch {
+        requirement.branch = Some(branch.clone());
+        requirement.version = None;
         requirement.rev = None;
     }
     if let Some(revision) = &args.rev {
         requirement.rev = Some(revision.clone());
         requirement.version = None;
+        requirement.branch = None;
     }
     requirement
 }
@@ -697,6 +704,7 @@ mod tests {
             skills: Vec::new(),
             path: None,
             version: Some("=1.0.0".into()),
+            branch: None,
             rev: None,
             no_sync: false,
             dry_run: false,

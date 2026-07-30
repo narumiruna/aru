@@ -24,6 +24,16 @@ fn git(repository: &Path, arguments: &[&str]) {
     assert!(status.success(), "git {arguments:?} failed");
 }
 
+fn git_output(repository: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(repository)
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {arguments:?} failed");
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
 fn create_repository(root: &Path, skills: &[&str]) {
     std::fs::create_dir_all(root).unwrap();
     git(root, &["init", "--quiet"]);
@@ -83,6 +93,7 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
         .stdout(predicate::str::contains("-a, --all"))
         .stdout(predicate::str::contains("--skill <NAME>"))
         .stdout(predicate::str::contains("--path <PATH>"))
+        .stdout(predicate::str::contains("--branch <NAME>"))
         .stdout(predicate::str::contains("--no-sync"));
 
     cargo_bin_cmd!("aru")
@@ -98,6 +109,21 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
+    for reference in ["--version", "--rev"] {
+        cargo_bin_cmd!("aru")
+            .args([
+                "skill",
+                "add",
+                "owner/repo",
+                "--branch",
+                "main",
+                reference,
+                "1.0.0",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
     cargo_bin_cmd!("aru")
         .args([
             "skill",
@@ -186,15 +212,23 @@ fn public_interactive_git_select_and_cancel_smoke() {
         .success();
     let source = Path::new("narumiruna/skills");
 
-    let mut select = interactive_add(&project, source, &["--version", "=0.5.0"]);
+    let mut select = interactive_add(&project, source, &["--branch", "main"]);
     select.expect("Select skills to install").unwrap();
-    select.send("writing-plans").unwrap();
+    select.send("designing-user-experiences").unwrap();
     select.send(" ").unwrap();
     select.send("\r").unwrap();
     select.expect(Eof).unwrap();
-    assert!(project.join(".agents/skills/writing-plans").is_dir());
-    let lock = std::fs::read_to_string(project.join("aru.lock")).unwrap();
-    assert!(lock.contains("67cd354cc2eeb417db200a4f8d78869b03a0753d"));
+    assert!(
+        project
+            .join(".agents/skills/designing-user-experiences")
+            .is_dir()
+    );
+    let parsed_lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(parsed_lock.skill_packages[0].requirement, "branch:main");
+    assert_eq!(parsed_lock.skill_packages[0].version, "main");
+    assert_eq!(parsed_lock.skill_packages[0].revision.len(), 40);
 
     let manifest = std::fs::read(project.join("aru.toml")).unwrap();
     let lock = std::fs::read(project.join("aru.lock")).unwrap();
@@ -215,12 +249,13 @@ fn terminal_multiselect_filters_and_installs_only_the_checked_skill() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha", "beta", "zeta"]);
+    git(&repository, &["branch", "live"]);
     aru(&project)
         .args(["init", "--agent", "codex"])
         .assert()
         .success();
 
-    let mut session = interactive_add(&project, &repository, &[]);
+    let mut session = interactive_add(&project, &repository, &["--branch", "live"]);
     session.expect("Select skills to install").unwrap();
     session.send("\r").unwrap();
     session.expect("select at least one skill").unwrap();
@@ -231,6 +266,7 @@ fn terminal_multiselect_filters_and_installs_only_the_checked_skill() {
 
     let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
     assert!(manifest.contains("include = [\"beta\"]"));
+    assert!(manifest.contains("branch = \"live\""));
     assert!(!manifest.contains("include = [\"*\"]"));
     assert!(!project.join(".agents/skills/alpha").exists());
     assert!(project.join(".agents/skills/beta").is_dir());
@@ -322,6 +358,90 @@ fn terminal_dry_run_prompts_but_writes_nothing() {
     assert!(!project.join(".aru/cache").exists());
     assert!(!project.join(".aru/state.toml").exists());
     assert!(!project.join(".agents").exists());
+}
+
+#[test]
+fn branch_add_stays_pinned_until_named_update_and_locked_replays() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha"]);
+    git(&repository, &["branch", "live"]);
+    let first_revision = git_output(&repository, &["rev-parse", "HEAD"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--branch",
+            "live",
+            "--skill",
+            "alpha",
+        ])
+        .assert()
+        .success();
+    let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+    assert!(manifest.contains("branch = \"live\""));
+    assert!(!manifest.contains("schema ="));
+    let first = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.skill_packages[0].requirement, "branch:live");
+    assert_eq!(first.skill_packages[0].version, "live");
+    assert_eq!(first.skill_packages[0].revision, first_revision);
+
+    add_version(&repository, "alpha", "1.1.0");
+    git(&repository, &["branch", "--force", "live", "HEAD"]);
+    let second_revision = git_output(&repository, &["rev-parse", "HEAD"]);
+    aru(&project).arg("sync").assert().success();
+    let conservative = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(conservative.skill_packages[0].revision, first_revision);
+    aru(&project).args(["sync", "--locked"]).assert().success();
+
+    aru(&project)
+        .args(["skill", "update", repository.to_str().unwrap()])
+        .assert()
+        .success();
+    let updated = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.skill_packages[0].revision, second_revision);
+    assert_eq!(updated.skill_packages[0].requirement, "branch:live");
+}
+
+#[test]
+fn invalid_branch_fails_before_fetch_or_write() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            "owner/repository",
+            "--branch=-main",
+            "--skill",
+            "alpha",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid Git branch name"));
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru/cache").exists());
 }
 
 #[test]

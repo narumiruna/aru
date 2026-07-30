@@ -1,0 +1,10 @@
+# Manifest formats are intentionally unversioned during early development.
+[project]
+agents = ["codex"]
+
+[skills]
+"owner/repository" = { branch = "main", include = ["designing-user-experiences"], exclude = [
+
+] }
+
+[mcp]

@@ -73,6 +73,7 @@ pub enum SkillCommand {
 
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selector").args(["all", "skills", "path"]).multiple(false)))]
+#[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
 pub struct SkillAddArgs {
     /// GitHub owner/repo, Git URL, SSH source, or local Git repository.
     pub source: String,
@@ -86,10 +87,13 @@ pub struct SkillAddArgs {
     #[arg(long, value_name = "PATH")]
     pub path: Option<String>,
     /// Cargo-style SemVer tag requirement (a bare version uses caret semantics).
-    #[arg(long, conflicts_with = "rev")]
+    #[arg(long)]
     pub version: Option<String>,
+    /// Moving Git branch to resolve and pin to an exact commit.
+    #[arg(long, value_name = "NAME")]
+    pub branch: Option<String>,
     /// Exact Git commit (7-40 hexadecimal characters).
-    #[arg(long, conflicts_with = "version")]
+    #[arg(long)]
     pub rev: Option<String>,
     /// Update manifest and lock but skip agent project paths.
     #[arg(long)]

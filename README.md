@@ -32,10 +32,11 @@ aru skill add owner/repository --all           # non-interactive wildcard
 aru skill add owner/repository -a              # short form
 aru skill add owner/repository --skill review --skill applying-tdd
 aru skill add owner/repository --path extras/review
+aru skill add owner/repository --branch main       # opt in to a moving branch
 aru skill add ssh://git@example.com/team/skills.git --rev 67cd354 --skill review
 ```
 
-`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. `--version` and `--rev` are mutually exclusive. Source positionals never contain a path selector or version, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
+`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. Use `--branch main` to explicitly track a moving branch, or `--rev <SHA>` for an immutable commit. `--version`, `--branch`, and `--rev` are mutually exclusive; omitting all three continues to select the latest matching SemVer tag, never the default branch. Source positionals never contain a path selector or reference, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
 
 Add a Registry package or a direct remote MCP server:
 
@@ -95,7 +96,7 @@ write lockfile
 | `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
 | `.aru/transaction.toml` | No | Crash-recovery journal, present only during an interrupted operation |
 
-`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated agent paths because teams may choose to commit them.
+`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated agent paths because teams may choose to commit them. During early development, `aru.toml` is intentionally unversioned and contains no schema field.
 
 ### Manifest selection semantics
 
@@ -105,19 +106,30 @@ write lockfile
 - Explicit `--skill` additions remain additive. Removing the final explicit name removes the package.
 - A `--path` selection always persists `paths.<name>` in `aru.toml` until explicitly removed.
 - Equivalent canonical Git sources do not create duplicate packages.
-- Registry and Git versions stay locked during ordinary sync. `skill update [source]` and `mcp update [name]` unlock only selected packages.
+- Registry versions, Git tags, branches, and revisions stay locked to exact identities during ordinary sync. `skill update [source]` re-resolves only selected tag/branch sources; `mcp update [name]` unlocks only selected MCP packages.
 - Direct MCP URLs have no upgradable version.
 
 ### Lock and sync modes
 
 - `aru lock` resolves and writes the lock without changing agent project paths.
 - `aru sync` reuses every compatible locked package, fills missing lock/projection data, and reconciles project paths.
-- `aru sync --locked` rejects a missing or stale lock, including incomplete per-agent MCP targets. It never changes the lock.
+- `aru sync --locked` rejects a missing or stale lock, including incomplete per-agent MCP targets. It never changes the lock or advances a branch.
 - `--no-sync` on add/remove/update still resolves and transactionally updates `aru.toml` plus `aru.lock`; it only skips projections.
 - `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or agent paths.
 - `--force` is destructive takeover of a colliding unmanaged key/path. The operation plan says `force replace`; a later remove does not restore the previous unmanaged value.
 
 Changing only `project.agents` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-agent target selections.
+
+### Branch sources
+
+Branch tracking is an explicit development-mode opt-in:
+
+```console
+aru skill add narumiruna/skills --branch main
+aru skill update narumiruna/skills  # move the lock to the current branch head
+```
+
+The manifest records `branch = "main"`, while `aru.lock` records `requirement = "branch:main"` and the exact 40-hex commit shown in the selection preview. Normal `aru sync` and `aru sync --locked` keep that SHA. A force-push can make an older locked commit unreachable from a clean checkout; use immutable SemVer tags for published, long-lived, reproducible installations.
 
 ## Agent capability matrix
 

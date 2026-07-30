@@ -5,6 +5,7 @@ use std::process::{Command, Output, Stdio};
 use semver::{Version, VersionReq};
 
 use crate::error::{AruError, Result};
+use crate::manifest::validate_branch_name;
 
 pub const GIT_TAG_OUTPUT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub const GIT_TAG_REF_MAX_RECORDS: usize = 20_000;
@@ -122,10 +123,22 @@ pub fn canonicalize(project: &Path, input: &str) -> Result<GitSource> {
 pub fn resolve(
     source: &GitSource,
     version: Option<&str>,
+    branch: Option<&str>,
     rev: Option<&str>,
 ) -> Result<GitResolution> {
-    if version.is_some() && rev.is_some() {
-        return Err(AruError::msg("--version and --rev are mutually exclusive"));
+    let references =
+        usize::from(version.is_some()) + usize::from(branch.is_some()) + usize::from(rev.is_some());
+    if references > 1 {
+        return Err(AruError::msg(
+            "--version, --branch, and --rev are mutually exclusive",
+        ));
+    }
+    if let Some(branch) = branch {
+        validate_branch_name(branch)?;
+        return Ok(GitResolution {
+            version: branch.to_owned(),
+            revision: resolve_branch(source, branch)?,
+        });
     }
     if let Some(revision) = rev {
         validate_revision(revision)?;
@@ -216,6 +229,59 @@ pub fn checkout_exact(source: &GitSource, revision: &str, destination: &Path) ->
     std::fs::remove_dir_all(&git_dir)
         .map_err(|error| AruError::msg(format!("could not finalize Git checkout: {error}")))?;
     Ok(resolved.to_ascii_lowercase())
+}
+
+fn resolve_branch(source: &GitSource, branch: &str) -> Result<String> {
+    let reference = format!("refs/heads/{branch}");
+    let output = git_stdout_bounded(
+        &[
+            "ls-remote",
+            "--heads",
+            "--refs",
+            "--",
+            source.fetch.as_str(),
+            reference.as_str(),
+        ],
+        GIT_TAG_OUTPUT_MAX_BYTES,
+    )?;
+    let stdout = String::from_utf8(output)
+        .map_err(|_| AruError::msg("git returned non-UTF-8 branch data"))?;
+    parse_branch_head(&stdout, &reference)
+}
+
+fn parse_branch_head(stdout: &str, expected_reference: &str) -> Result<String> {
+    if stdout.lines().count() > GIT_TAG_REF_MAX_RECORDS {
+        return Err(AruError::msg(format!(
+            "Git branch inventory exceeds record limit {GIT_TAG_REF_MAX_RECORDS}"
+        )));
+    }
+    let mut found = None;
+    for (index, line) in stdout.lines().enumerate() {
+        if index >= GIT_TAG_REF_MAX_RECORDS {
+            return Err(AruError::msg(format!(
+                "Git branch inventory exceeds record limit {GIT_TAG_REF_MAX_RECORDS}"
+            )));
+        }
+        let Some((revision, reference)) = line.split_once('\t') else {
+            return Err(AruError::msg("git returned malformed branch data"));
+        };
+        if reference != expected_reference
+            || revision.len() != 40
+            || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || found.is_some()
+        {
+            return Err(AruError::msg(
+                "git returned ambiguous or malformed branch data",
+            ));
+        }
+        found = Some(revision.to_ascii_lowercase());
+    }
+    found.ok_or_else(|| {
+        let branch = expected_reference
+            .strip_prefix("refs/heads/")
+            .unwrap_or(expected_reference);
+        AruError::msg(format!("Git source has no branch named {branch:?}"))
+    })
 }
 
 fn resolve_revision(source: &GitSource, revision: &str) -> Result<String> {
@@ -399,6 +465,27 @@ pub fn checkout_path(base: &Path, source_hash: &str, revision: &str) -> PathBuf 
 mod tests {
     use super::*;
 
+    fn git(repository: &Path, arguments: &[&str]) {
+        assert!(
+            Command::new("git")
+                .current_dir(repository)
+                .args(arguments)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    fn git_output(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+
     #[test]
     fn canonicalizes_shorthand_without_credentials() {
         let source = canonicalize(Path::new("."), "narumiruna/skills").unwrap();
@@ -440,6 +527,7 @@ mod tests {
                     repository_name: "x".into(),
                 },
                 None,
+                None,
                 Some("--help")
             )
             .is_err()
@@ -451,6 +539,70 @@ mod tests {
         let line = "0123456789abcdef0123456789abcdef01234567\trefs/tags/1.0.0\n";
         let inventory = line.repeat(GIT_TAG_REF_MAX_RECORDS + 1);
         assert!(parse_semver_tags(&inventory).is_err());
+    }
+
+    #[test]
+    fn branch_resolution_is_exact_moving_and_strictly_validated() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("repository");
+        std::fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "--quiet"]);
+        git(&repository, &["config", "user.email", "test@example.com"]);
+        git(&repository, &["config", "user.name", "Test"]);
+        std::fs::write(repository.join("file"), "first").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "first"]);
+        git(&repository, &["tag", "1.0.0"]);
+        git(&repository, &["branch", "feature/nested"]);
+        let first = git_output(&repository, &["rev-parse", "HEAD"]);
+        let source = canonicalize(temporary.path(), "repository").unwrap();
+
+        let resolved = resolve(&source, None, Some("feature/nested"), None).unwrap();
+        assert_eq!(resolved.version, "feature/nested");
+        assert_eq!(resolved.revision, first.trim());
+
+        std::fs::write(repository.join("file"), "second").unwrap();
+        git(&repository, &["commit", "--quiet", "-am", "second"]);
+        git(
+            &repository,
+            &["branch", "--force", "feature/nested", "HEAD"],
+        );
+        let second = resolve(&source, None, Some("feature/nested"), None).unwrap();
+        assert_ne!(second.revision, resolved.revision);
+        let default_release = resolve(&source, None, None, None).unwrap();
+        assert_eq!(default_release.version, "1.0.0");
+        assert_eq!(default_release.revision, first.trim());
+        assert!(resolve(&source, None, Some("missing"), None).is_err());
+        for invalid in ["-main", "bad..name", "wild*card", "@{upstream}"] {
+            assert!(resolve(&source, None, Some(invalid), None).is_err());
+        }
+    }
+
+    #[test]
+    fn branch_head_parser_rejects_ambiguous_or_malformed_output() {
+        let sha = "0123456789012345678901234567890123456789";
+        assert_eq!(
+            parse_branch_head(&format!("{sha}\trefs/heads/main\n"), "refs/heads/main").unwrap(),
+            sha
+        );
+        assert!(parse_branch_head("malformed\n", "refs/heads/main").is_err());
+        assert!(
+            parse_branch_head(
+                &format!("{sha}\trefs/heads/main\n{sha}\trefs/heads/main\n"),
+                "refs/heads/main"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_branch_head(&format!("{sha}\trefs/heads/other\n"), "refs/heads/main").is_err()
+        );
+        let oversized = format!("{sha}\trefs/heads/main\n").repeat(GIT_TAG_REF_MAX_RECORDS + 1);
+        assert!(
+            parse_branch_head(&oversized, "refs/heads/main")
+                .unwrap_err()
+                .to_string()
+                .contains("record limit")
+        );
     }
 
     #[test]
@@ -512,7 +664,7 @@ mod tests {
                 .success()
         );
         let source = canonicalize(temporary.path(), "remote.git").unwrap();
-        let resolved = resolve(&source, Some("=2.0.0"), None).unwrap();
+        let resolved = resolve(&source, Some("=2.0.0"), None, None).unwrap();
         assert_eq!(resolved.revision, expected.trim());
         let checkout = temporary.path().join("checkout");
         assert_eq!(

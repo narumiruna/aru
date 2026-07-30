@@ -242,6 +242,10 @@ fn resolve_skill_reference(
                     .rev
                     .as_ref()
                     .is_none_or(|rev| package.revision.starts_with(&rev.to_ascii_lowercase()))
+                && requirement
+                    .branch
+                    .as_ref()
+                    .is_none_or(|branch| package.version == *branch)
                 && requirement.version.as_deref().is_none_or(|_| {
                     git::locked_version_matches(requirement.version.as_deref(), &package.version)
                 })
@@ -253,6 +257,7 @@ fn resolve_skill_reference(
         let resolved = git::resolve(
             source,
             requirement.version.as_deref(),
+            requirement.branch.as_deref(),
             requirement.rev.as_deref(),
         )?;
         Ok((resolved.version, resolved.revision))
@@ -276,6 +281,10 @@ fn validate_skill_hint(
             .rev
             .as_ref()
             .is_some_and(|revision| !hint.revision.starts_with(&revision.to_ascii_lowercase()))
+        || requirement
+            .branch
+            .as_ref()
+            .is_some_and(|branch| hint.version != *branch)
         || requirement.version.as_deref().is_some_and(|_| {
             !git::locked_version_matches(requirement.version.as_deref(), &hint.version)
         })
@@ -324,7 +333,7 @@ fn package_input_hash(
         .map(|(key, requirement)| {
             let mut requirement = requirement.clone();
             requirement.normalize();
-            if requirement.rev.is_none() {
+            if requirement.rev.is_none() && requirement.branch.is_none() {
                 requirement.version = Some(normalize_semver_requirement(
                     requirement.version.as_deref().unwrap_or("*"),
                 ));
@@ -368,6 +377,8 @@ fn normalize_semver_requirement(requirement: &str) -> String {
 fn skill_requirement_descriptor(requirement: &SkillRequirement) -> String {
     if let Some(rev) = &requirement.rev {
         format!("rev:{}", rev.to_ascii_lowercase())
+    } else if let Some(branch) = &requirement.branch {
+        format!("branch:{branch}")
     } else {
         format!(
             "version:{}",
@@ -711,7 +722,6 @@ mod tests {
             ..SkillRequirement::default()
         };
         let manifest = Manifest {
-            schema: 1,
             project: crate::manifest::Project {
                 agents: vec![Agent::Codex],
             },
@@ -799,6 +809,101 @@ mod tests {
     }
 
     #[test]
+    fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("repository");
+        let project = temporary.path().join("project");
+        std::fs::create_dir(&repository).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        git(&repository, &["init", "--quiet"]);
+        git(&repository, &["config", "user.email", "test@example.com"]);
+        git(&repository, &["config", "user.name", "Test"]);
+        write_skill(&repository, "alpha");
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "first"]);
+        git(&repository, &["branch", "live"]);
+        let first_revision = git(&repository, &["rev-parse", "HEAD"]);
+
+        let requirement = SkillRequirement {
+            branch: Some("live".into()),
+            ..SkillRequirement::default()
+        };
+        let manifest = Manifest {
+            project: crate::manifest::Project {
+                agents: vec![Agent::Codex],
+            },
+            skills: BTreeMap::from([(
+                repository.to_string_lossy().into_owned(),
+                requirement.clone(),
+            )]),
+            mcp: BTreeMap::new(),
+        };
+        let empty_hints = BTreeMap::new();
+        let first = resolve(
+            &project,
+            &manifest,
+            ResolveOptions {
+                previous: None,
+                locked: false,
+                update_skills: &BTreeSet::new(),
+                update_mcp: &BTreeSet::new(),
+                dry_run: false,
+                skill_hints: &empty_hints,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.lock.skill_packages[0].requirement, "branch:live");
+        assert_eq!(first.lock.skill_packages[0].version, "live");
+
+        std::fs::write(repository.join("changed"), "second").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "second"]);
+        git(&repository, &["branch", "--force", "live", "HEAD"]);
+        let second_revision = git(&repository, &["rev-parse", "HEAD"]);
+
+        let inspection = inspect_skill_source(
+            &project,
+            &repository.to_string_lossy(),
+            &requirement,
+            Some(&first.lock),
+            false,
+        )
+        .unwrap();
+        assert_eq!(inspection.revision, first_revision);
+        let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
+        let pinned = resolve(
+            &project,
+            &manifest,
+            ResolveOptions {
+                previous: None,
+                locked: false,
+                update_skills: &BTreeSet::new(),
+                update_mcp: &BTreeSet::new(),
+                dry_run: false,
+                skill_hints: &hints,
+            },
+        )
+        .unwrap();
+        assert_eq!(pinned.lock.skill_packages[0].revision, first_revision);
+
+        let source = first.lock.skill_packages[0].source.clone();
+        let updated = resolve(
+            &project,
+            &manifest,
+            ResolveOptions {
+                previous: Some(&first.lock),
+                locked: false,
+                update_skills: &BTreeSet::from([source]),
+                update_mcp: &BTreeSet::new(),
+                dry_run: false,
+                skill_hints: &empty_hints,
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.lock.skill_packages[0].revision, second_revision);
+    }
+
+    #[test]
     fn package_hash_excludes_agents() {
         let source = GitSource {
             identity: "git+https://example.com/a.git".into(),
@@ -808,7 +913,6 @@ mod tests {
         let mut sources = BTreeMap::new();
         sources.insert("source".into(), source);
         let mut manifest = Manifest {
-            schema: 1,
             project: crate::manifest::Project {
                 agents: vec![Agent::Codex],
             },
