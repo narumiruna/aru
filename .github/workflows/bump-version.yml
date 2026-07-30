@@ -24,7 +24,7 @@ jobs:
   bump-version:
     name: Bump version and tag
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out main
         uses: actions/checkout@v7
@@ -35,17 +35,46 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-check
+          cache-on-failure: true
 
       - name: Bump package version
         id: version
         env:
           BUMP: ${{ inputs.bump }}
         run: |
-          version="$(scripts/bump-version.sh "$BUMP")"
+          version="$(bash scripts/bump-version.sh "$BUMP")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
-      - name: Commit, tag, and push
+      - name: Commit version bump
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): bump version to $VERSION"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Verify crate package
+        run: cargo package --locked
+
+      - name: Create and push tag
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -54,11 +83,8 @@ jobs:
             echo "Tag $TAG already exists" >&2
             exit 1
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to $VERSION"
-          git tag "$TAG"
+          git diff --exit-code
+          git tag --annotate "$TAG" --message "aru $VERSION"
           git push --atomic origin HEAD:main "refs/tags/$TAG"
 
       - name: Write summary
@@ -72,4 +98,5 @@ jobs:
             echo "- Version: \`$VERSION\`"
             echo "- Tag: \`$TAG\`"
             echo "- Bump type: \`${{ inputs.bump }}\`"
+            echo "- Release workflows: triggered"
           } >> "$GITHUB_STEP_SUMMARY"

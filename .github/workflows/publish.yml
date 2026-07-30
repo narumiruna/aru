@@ -1,0 +1,117 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate tag, version, and main ancestry
+        id: release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vX.Y.Z, got: $TAG" >&2
+            exit 1
+          fi
+          version="${TAG#v}"
+          manifest_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq --raw-output '.packages[] | select(.name == "aru") | .version'
+          )"
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "Tag $TAG does not match Cargo.toml version $manifest_version" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-list --max-count=1 "$TAG")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Tag $TAG does not point to a commit on main" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify crate package
+        run: cargo package --locked
+
+      - name: Check whether version is already published
+        id: published
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          response="$RUNNER_TEMP/crates-io-aru.json"
+          status="$(
+            curl --silent --show-error \
+              --header "User-Agent: aru-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              https://crates.io/api/v1/crates/aru
+          )"
+          if [[ "$status" != "200" ]]; then
+            echo "crates.io returned HTTP $status" >&2
+            cat "$response" >&2
+            exit 1
+          fi
+          if jq --exit-status --arg version "$VERSION" \
+            '.versions | any(.num == $version)' "$response" > /dev/null; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Authenticate with crates.io
+        if: steps.published.outputs.already_published == 'false'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crate
+        if: steps.published.outputs.already_published == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+      - name: Write summary
+        env:
+          ALREADY_PUBLISHED: ${{ steps.published.outputs.already_published }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          {
+            echo "## crates.io Publish"
+            echo
+            echo "- Crate: \`aru\`"
+            echo "- Version: \`$VERSION\`"
+            if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
+              echo "- Result: already published"
+            else
+              echo "- Result: published"
+            fi
+            echo "- URL: https://crates.io/crates/aru/$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"

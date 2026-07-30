@@ -3,16 +3,34 @@ name = "aru"
 version = "0.0.0"
 edition = "2024"
 description = "An agent package and project manager, written in Rust."
-license = "MIT"
 repository = "https://github.com/narumiruna/aru"
+license = "MIT"
+include = [
+  "/Cargo.lock",
+  "/Cargo.toml",
+  "/LICENSE",
+  "/README.md",
+  "/docs/formats.md",
+  "/docs/spikes/**",
+  "/src/**",
+  "/tests/cli.rs",
+]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 fs2 = "0.4"
 hex = "0.4"
-inquire = { version = "0.9.4", default-features = false, features = ["crossterm", "fuzzy"] }
+inquire = {
+  version = "0.9.4",
+  default-features = false,
+  features = ["crossterm", "fuzzy"]
+}
 percent-encoding = "2.3"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = {
+  version = "0.12",
+  default-features = false,
+  features = ["blocking", "json", "rustls-tls"]
+}
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
