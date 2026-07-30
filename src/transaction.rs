@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use fs2::FileExt;
@@ -555,8 +555,16 @@ fn hash_file(hasher: &mut Sha256, path: &Path, metadata: &std::fs::Metadata) -> 
     #[cfg(not(unix))]
     hasher.update([0]);
     let mut file = File::open(path).at(path)?;
-    std::io::copy(&mut file, hasher)
-        .map_err(|error| AruError::msg(format!("could not digest {}: {error}", path.display())))?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            AruError::msg(format!("could not digest {}: {error}", path.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
     Ok(())
 }
 
