@@ -7,14 +7,12 @@ repos:
         language: system
         pass_filenames: false
         types_or: [rust, toml]
-
       - id: cargo-clippy
         name: cargo clippy
         entry: cargo clippy --all-targets --all-features -- -D warnings
         language: system
         pass_filenames: false
         types_or: [rust, toml]
-
       - id: cargo-test
         name: cargo test
         entry: cargo test --all-targets --all-features
@@ -22,4 +20,7 @@ repos:
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust, toml]
-
+  - repo: https://github.com/narumiruna/aru-pre-commit
+    rev: v0.0.3
+    hooks:
+      - id: aru-sync
