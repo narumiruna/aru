@@ -1,0 +1,9 @@
+[package]
+name = "aru"
+version = "0.0.0"
+edition = "2024"
+description = "An agent package and project manager, written in Rust."
+license = "MIT"
+repository = "https://github.com/narumiruna/aru"
+
+[dependencies]
