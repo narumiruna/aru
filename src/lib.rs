@@ -4,6 +4,7 @@ pub mod cache;
 pub mod cli;
 pub mod digest;
 pub mod error;
+pub mod interactive;
 pub mod lockfile;
 pub mod manifest;
 pub mod ownership;

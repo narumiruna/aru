@@ -72,10 +72,13 @@ pub enum SkillCommand {
 }
 
 #[derive(Debug, Args)]
-#[command(group(ArgGroup::new("selector").args(["skills", "path"]).multiple(false)))]
+#[command(group(ArgGroup::new("selector").args(["all", "skills", "path"]).multiple(false)))]
 pub struct SkillAddArgs {
     /// GitHub owner/repo, Git URL, SSH source, or local Git repository.
     pub source: String,
+    /// Select every current and future skill exported by this source.
+    #[arg(short = 'a', long)]
+    pub all: bool,
     /// Select a stable skill name; may be repeated.
     #[arg(long = "skill", value_name = "NAME", action = ArgAction::Append)]
     pub skills: Vec<String>,

@@ -8,7 +8,7 @@ use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::{LOCK_FILE, Lockfile};
 use crate::manifest::{Agent, Manifest};
 use crate::ownership::{OwnershipAction, STATE_FILE, State, StateEntry, reconcile};
-use crate::resolver::{ResolveOptions, resolve};
+use crate::resolver::{ResolveOptions, SkillResolutionHint, resolve};
 use crate::skill::canonical_skill_digest;
 use crate::transaction::{Operation, path_digest};
 
@@ -21,6 +21,7 @@ pub struct SyncOptions<'a> {
     pub manifest_bytes: Option<Vec<u8>>,
     pub update_skills: &'a BTreeSet<String>,
     pub update_mcp: &'a BTreeSet<String>,
+    pub skill_hints: &'a BTreeMap<String, SkillResolutionHint>,
 }
 
 pub struct SyncResult {
@@ -43,6 +44,7 @@ pub fn prepare(
             update_skills: options.update_skills,
             update_mcp: options.update_mcp,
             dry_run: options.dry_run,
+            skill_hints: options.skill_hints,
         },
     )?;
     let mut operations = Vec::new();

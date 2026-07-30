@@ -31,10 +31,10 @@ struct Frontmatter {
     description: String,
 }
 
-pub fn discover_and_select(
+pub fn discover_candidates(
     root: &Path,
     root_name: &str,
-    requirement: &SkillRequirement,
+    explicit_paths: &BTreeMap<String, String>,
 ) -> Result<Vec<DiscoveredSkill>> {
     let mut candidates = BTreeMap::<String, PathBuf>::new();
 
@@ -45,7 +45,7 @@ pub fn discover_and_select(
     if conventional.exists() {
         discover_conventional(&conventional, &mut candidates)?;
     }
-    for (expected_name, relative) in &requirement.paths {
+    for (expected_name, relative) in explicit_paths {
         let relative_path = validate_relative_selector(relative)?;
         let selected = root.join(&relative_path);
         if !selected.join("SKILL.md").is_file() {
@@ -68,16 +68,45 @@ pub fn discover_and_select(
         ));
     }
 
+    candidates
+        .into_iter()
+        .map(|(name, path)| {
+            let relative = path.strip_prefix(root).map_err(|_| {
+                AruError::msg("internal error: discovered skill escaped source root")
+            })?;
+            let relative_path = if relative.as_os_str().is_empty() {
+                ".".to_owned()
+            } else {
+                portable_path(relative)?
+            };
+            Ok(DiscoveredSkill {
+                name,
+                relative_path,
+                sha256: canonical_skill_digest(&path)?,
+                absolute_path: path,
+            })
+        })
+        .collect()
+}
+
+pub fn select_candidates(
+    candidates: Vec<DiscoveredSkill>,
+    requirement: &SkillRequirement,
+) -> Result<Vec<DiscoveredSkill>> {
+    let available: BTreeMap<_, _> = candidates
+        .into_iter()
+        .map(|candidate| (candidate.name.clone(), candidate))
+        .collect();
     let mut selected_names: Vec<String> = if requirement.is_wildcard() {
-        candidates
+        available
             .keys()
             .filter(|name| !requirement.exclude.contains(name))
             .cloned()
             .collect()
     } else {
         for name in &requirement.include {
-            if !candidates.contains_key(name) {
-                let available = candidates.keys().cloned().collect::<Vec<_>>().join(", ");
+            if !available.contains_key(name) {
+                let available = available.keys().cloned().collect::<Vec<_>>().join(", ");
                 return Err(AruError::msg(format!(
                     "skill {name:?} was not found; available skills: {available}"
                 )));
@@ -95,47 +124,30 @@ pub fn discover_and_select(
     let mut selected_paths: Vec<PathBuf> = Vec::new();
     let mut output = Vec::new();
     for name in selected_names {
-        let path = candidates.get(&name).unwrap();
+        let candidate = available.get(&name).unwrap();
         for previous in &selected_paths {
-            if path.starts_with(previous) || previous.starts_with(path) {
+            if candidate.absolute_path.starts_with(previous)
+                || previous.starts_with(&candidate.absolute_path)
+            {
                 return Err(AruError::msg(format!(
                     "selected skill trees overlap at {}",
-                    path.display()
+                    candidate.absolute_path.display()
                 )));
             }
         }
-        let expected_parent = if path == root {
-            root_name
-        } else {
-            path.file_name()
-                .and_then(|part| part.to_str())
-                .ok_or_else(|| AruError::msg("skill directory name is not UTF-8"))?
-        };
-        let declared = parse_skill_name(&path.join("SKILL.md"))?;
-        if declared != expected_parent || declared != name {
-            return Err(AruError::msg(format!(
-                "SKILL.md name {declared:?} must match parent directory {expected_parent:?}"
-            )));
-        }
-        let sha256 = canonical_skill_digest(path)?;
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| AruError::msg("internal error: discovered skill escaped source root"))?;
-        let relative_path = if relative.as_os_str().is_empty() {
-            ".".to_owned()
-        } else {
-            portable_path(relative)?
-        };
-        selected_paths.push(path.clone());
-        output.push(DiscoveredSkill {
-            name,
-            relative_path,
-            absolute_path: path.clone(),
-            sha256,
-        });
+        selected_paths.push(candidate.absolute_path.clone());
+        output.push(candidate.clone());
     }
-    output.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(output)
+}
+
+pub fn discover_and_select(
+    root: &Path,
+    root_name: &str,
+    requirement: &SkillRequirement,
+) -> Result<Vec<DiscoveredSkill>> {
+    let candidates = discover_candidates(root, root_name, &requirement.paths)?;
+    select_candidates(candidates, requirement)
 }
 
 fn discover_conventional(root: &Path, candidates: &mut BTreeMap<String, PathBuf>) -> Result<()> {
@@ -453,6 +465,30 @@ mod tests {
         let selected = discover_and_select(temporary.path(), "repository", &requirement).unwrap();
         assert_eq!(selected[0].relative_path, "skills/a/nested/alpha");
         assert_eq!(selected[0].sha256.len(), 71);
+    }
+
+    #[test]
+    fn candidate_inventory_is_sorted_and_includes_explicit_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(&temporary.path().join("skills/zeta"), "zeta");
+        write_skill(&temporary.path().join("skills/alpha"), "alpha");
+        write_skill(&temporary.path().join("extras/custom"), "custom");
+        let paths = BTreeMap::from([("custom".into(), "extras/custom".into())]);
+
+        let candidates = discover_candidates(temporary.path(), "repository", &paths).unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "custom", "zeta"]
+        );
+        assert_eq!(candidates[1].relative_path, "extras/custom");
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.sha256.starts_with("sha256:"))
+        );
     }
 
     #[test]

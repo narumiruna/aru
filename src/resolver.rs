@@ -13,7 +13,7 @@ use crate::lockfile::{
 };
 use crate::manifest::{Agent, Manifest, McpRequirement, SkillRequirement};
 use crate::registry::{RegistryClient, ResolvedCandidate};
-use crate::skill::{DiscoveredSkill, discover_and_select};
+use crate::skill::{DiscoveredSkill, discover_and_select, discover_candidates};
 use crate::source::git::{self, GitSource};
 
 #[derive(Debug)]
@@ -28,6 +28,33 @@ pub struct ResolveOptions<'a> {
     pub update_skills: &'a BTreeSet<String>,
     pub update_mcp: &'a BTreeSet<String>,
     pub dry_run: bool,
+    pub skill_hints: &'a BTreeMap<String, SkillResolutionHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillResolutionHint {
+    pub requirement: String,
+    pub version: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkillSourceInspection {
+    pub source: String,
+    pub requirement: String,
+    pub version: String,
+    pub revision: String,
+    pub candidates: Vec<DiscoveredSkill>,
+}
+
+impl SkillSourceInspection {
+    pub fn hint(&self) -> SkillResolutionHint {
+        SkillResolutionHint {
+            requirement: self.requirement.clone(),
+            version: self.version.clone(),
+            revision: self.revision.clone(),
+        }
+    }
 }
 
 pub fn resolve(
@@ -74,29 +101,11 @@ pub fn resolve(
                 .find(|package| package.source == source.identity)
         });
         let update = options.update_skills.contains(&source.identity);
-        let (version, revision) = if !update
-            && old.is_some_and(|package| {
-                package.requirement == descriptor
-                    && requirement
-                        .rev
-                        .as_ref()
-                        .is_none_or(|rev| package.revision.starts_with(&rev.to_ascii_lowercase()))
-                    && requirement.version.as_deref().is_none_or(|_| {
-                        git::locked_version_matches(
-                            requirement.version.as_deref(),
-                            &package.version,
-                        )
-                    })
-            }) {
-            let package = old.unwrap();
-            (package.version.clone(), package.revision.clone())
+        let (version, revision) = if let Some(hint) = options.skill_hints.get(&source.identity) {
+            validate_skill_hint(hint, &source.identity, requirement)?;
+            (hint.version.clone(), hint.revision.clone())
         } else {
-            let resolved = git::resolve(
-                source,
-                requirement.version.as_deref(),
-                requirement.rev.as_deref(),
-            )?;
-            (resolved.version, resolved.revision)
+            resolve_skill_reference(source, requirement, old, update)?
         };
         let checkout = cache.checkout(source, &revision)?;
         let mut selected = discover_and_select(&checkout, &source.repository_name, requirement)?;
@@ -172,6 +181,110 @@ pub fn resolve(
         lock,
         skill_sources,
     })
+}
+
+pub fn inspect_skill_source(
+    project: &Path,
+    manifest_source: &str,
+    requirement: &SkillRequirement,
+    previous: Option<&Lockfile>,
+    dry_run: bool,
+) -> Result<SkillSourceInspection> {
+    let source = git::canonicalize(project, manifest_source)?;
+    let descriptor = skill_requirement_descriptor(requirement);
+    let old = previous.and_then(|lock| {
+        lock.skill_packages
+            .iter()
+            .find(|package| package.source == source.identity)
+    });
+    let (version, revision) = resolve_skill_reference(&source, requirement, old, false)?;
+    let cache = if dry_run {
+        Cache::ephemeral()?
+    } else {
+        Cache::project(project)
+    };
+    let mut checkout = cache.checkout(&source, &revision)?;
+    let mut candidates =
+        discover_candidates(&checkout, &source.repository_name, &requirement.paths)?;
+    if let Some(old) = old
+        && selected_digest_mismatch(&candidates, old)
+    {
+        cache.invalidate(&source, &revision)?;
+        checkout = cache.checkout(&source, &revision)?;
+        candidates = discover_candidates(&checkout, &source.repository_name, &requirement.paths)?;
+        if selected_digest_mismatch(&candidates, old) {
+            return Err(AruError::msg(format!(
+                "content for locked Git revision {} does not match aru.lock",
+                revision
+            )));
+        }
+    }
+    Ok(SkillSourceInspection {
+        source: source.identity,
+        requirement: descriptor,
+        version,
+        revision,
+        candidates,
+    })
+}
+
+fn resolve_skill_reference(
+    source: &GitSource,
+    requirement: &SkillRequirement,
+    old: Option<&SkillPackage>,
+    update: bool,
+) -> Result<(String, String)> {
+    let descriptor = skill_requirement_descriptor(requirement);
+    if !update
+        && old.is_some_and(|package| {
+            package.requirement == descriptor
+                && requirement
+                    .rev
+                    .as_ref()
+                    .is_none_or(|rev| package.revision.starts_with(&rev.to_ascii_lowercase()))
+                && requirement.version.as_deref().is_none_or(|_| {
+                    git::locked_version_matches(requirement.version.as_deref(), &package.version)
+                })
+        })
+    {
+        let package = old.unwrap();
+        Ok((package.version.clone(), package.revision.clone()))
+    } else {
+        let resolved = git::resolve(
+            source,
+            requirement.version.as_deref(),
+            requirement.rev.as_deref(),
+        )?;
+        Ok((resolved.version, resolved.revision))
+    }
+}
+
+fn validate_skill_hint(
+    hint: &SkillResolutionHint,
+    source_identity: &str,
+    requirement: &SkillRequirement,
+) -> Result<()> {
+    if hint.requirement != skill_requirement_descriptor(requirement) {
+        return Err(AruError::msg(format!(
+            "interactive skill preview for {source_identity:?} no longer matches the requirement"
+        )));
+    }
+    let revision_valid =
+        hint.revision.len() == 40 && hint.revision.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !revision_valid
+        || requirement
+            .rev
+            .as_ref()
+            .is_some_and(|revision| !hint.revision.starts_with(&revision.to_ascii_lowercase()))
+        || requirement.version.as_deref().is_some_and(|_| {
+            !git::locked_version_matches(requirement.version.as_deref(), &hint.version)
+        })
+    {
+        return Err(AruError::msg(format!(
+            "interactive skill preview for {source_identity:?} has an invalid resolved revision"
+        )));
+    }
+    Ok(())
 }
 
 fn canonical_sources(project: &Path, manifest: &Manifest) -> Result<BTreeMap<String, GitSource>> {
@@ -552,7 +665,138 @@ pub fn canonical_update_skill_targets(
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
+
+    fn git(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn write_skill(repository: &Path, name: &str) {
+        let directory = repository.join("skills").join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test\n---\n# Test\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("repository");
+        let project = temporary.path().join("project");
+        std::fs::create_dir(&repository).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        git(&repository, &["init", "--quiet"]);
+        git(&repository, &["config", "user.email", "test@example.com"]);
+        git(&repository, &["config", "user.name", "Test"]);
+        write_skill(&repository, "zeta");
+        write_skill(&repository, "alpha");
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "first"]);
+        git(&repository, &["tag", "1.0.0"]);
+        let first_revision = git(&repository, &["rev-parse", "HEAD"]);
+
+        let requirement = SkillRequirement {
+            version: Some("=1.0.0".into()),
+            ..SkillRequirement::default()
+        };
+        let manifest = Manifest {
+            schema: 1,
+            project: crate::manifest::Project {
+                agents: vec![Agent::Codex],
+            },
+            skills: BTreeMap::from([(
+                repository.to_string_lossy().into_owned(),
+                requirement.clone(),
+            )]),
+            mcp: BTreeMap::new(),
+        };
+        let empty_hints = BTreeMap::new();
+        let initial = resolve(
+            &project,
+            &manifest,
+            ResolveOptions {
+                previous: None,
+                locked: false,
+                update_skills: &BTreeSet::new(),
+                update_mcp: &BTreeSet::new(),
+                dry_run: false,
+                skill_hints: &empty_hints,
+            },
+        )
+        .unwrap();
+
+        std::fs::write(repository.join("changed"), "second").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "second"]);
+        let second_revision = git(&repository, &["rev-parse", "HEAD"]);
+        git(&repository, &["tag", "--force", "1.0.0"]);
+
+        let inspection = inspect_skill_source(
+            &project,
+            &repository.to_string_lossy(),
+            &requirement,
+            Some(&initial.lock),
+            false,
+        )
+        .unwrap();
+        assert_eq!(inspection.revision, first_revision);
+        assert_eq!(
+            inspection
+                .candidates
+                .iter()
+                .map(|candidate| candidate.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "zeta"]
+        );
+
+        let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
+        let pinned = resolve(
+            &project,
+            &manifest,
+            ResolveOptions {
+                previous: None,
+                locked: false,
+                update_skills: &BTreeSet::new(),
+                update_mcp: &BTreeSet::new(),
+                dry_run: false,
+                skill_hints: &hints,
+            },
+        )
+        .unwrap();
+        assert_eq!(pinned.lock.skill_packages[0].revision, first_revision);
+
+        let changed_requirement = SkillRequirement {
+            version: None,
+            rev: Some(second_revision.clone()),
+            ..requirement.clone()
+        };
+        let changed = inspect_skill_source(
+            &project,
+            &repository.to_string_lossy(),
+            &changed_requirement,
+            Some(&initial.lock),
+            false,
+        )
+        .unwrap();
+        assert_eq!(changed.revision, second_revision);
+
+        let invalid = SkillResolutionHint {
+            requirement: "version:>=9.0.0".into(),
+            ..inspection.hint()
+        };
+        assert!(validate_skill_hint(&invalid, &inspection.source, &requirement).is_err());
+    }
 
     #[test]
     fn package_hash_excludes_agents() {

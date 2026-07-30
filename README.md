@@ -15,22 +15,27 @@ A system `git` executable is required. Git subprocesses use argument arrays and 
 
 ```console
 aru init --agent codex --agent claude-code
-aru skill add narumiruna/skills --skill writing-plans --version 0.5.0
+aru skill add narumiruna/skills
+# Use the searchable menu to select writing-plans, then lock replay is non-interactive.
 aru sync --locked
 aru skill update narumiruna/skills
 aru skill remove narumiruna/skills --skill writing-plans
 ```
 
-Add every valid export from a collection by omitting selectors. Use repeatable `--skill` for stable names, or `--path` only for a non-standard repository layout:
+In an interactive terminal, omitting selectors opens a searchable multi-select menu. Type to filter, use ↑/↓ to move, Space to toggle, →/← to select all/none, Enter to confirm, or Esc to cancel without changing project files. At least one skill must be selected.
+
+Use `--all` / `-a` to track every current and future export without a prompt. Use repeatable `--skill` for explicit automation, or `--path` only for a non-standard repository layout:
 
 ```console
-aru skill add owner/repository
+aru skill add owner/repository                 # interactive menu
+aru skill add owner/repository --all           # non-interactive wildcard
+aru skill add owner/repository -a              # short form
 aru skill add owner/repository --skill review --skill applying-tdd
 aru skill add owner/repository --path extras/review
 aru skill add ssh://git@example.com/team/skills.git --rev 67cd354 --skill review
 ```
 
-`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. `--version` and `--rev` are mutually exclusive. Source positionals never contain a path selector or version, so SCP-like `git@host:path` remains unambiguous.
+`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. `--version` and `--rev` are mutually exclusive. Source positionals never contain a path selector or version, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
 
 Add a Registry package or a direct remote MCP server:
 
@@ -94,8 +99,10 @@ write lockfile
 
 ### Manifest selection semantics
 
-- `include = ["*"]` tracks every valid export; `exclude` records per-skill removals.
-- Explicit `include` lists are additive. Removing the final explicit name removes the package.
+- `include = ["*"]` tracks every valid current and future export; only `--all` / `-a` creates new wildcard intent. `exclude` records per-skill removals.
+- Interactive selection writes an explicit snapshot, even when every visible item is selected. Reopening the menu preselects current explicit entries and replaces that source's complete explicit selection on confirmation.
+- Reopening an unchanged wildcard preselects all exports and preserves wildcard intent if all remain selected; deselecting any export converts it to an explicit snapshot.
+- Explicit `--skill` additions remain additive. Removing the final explicit name removes the package.
 - A `--path` selection always persists `paths.<name>` in `aru.toml` until explicitly removed.
 - Equivalent canonical Git sources do not create duplicate packages.
 - Registry and Git versions stay locked during ordinary sync. `skill update [source]` and `mcp update [name]` unlock only selected packages.
@@ -164,4 +171,4 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
 ```
 
-Tests use temporary Git repositories and local Registry fixtures. Live network is reserved for an explicit public Git smoke test.
+Tests use temporary Git repositories, local Registry fixtures, and Unix PTYs (`expectrl`) for the real `inquire` keyboard flow. Live network is reserved for an explicit public Git smoke test.

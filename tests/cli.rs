@@ -4,6 +4,11 @@ use std::process::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 
+#[cfg(unix)]
+use expectrl::{ControlCode, Eof, Expect, Session};
+#[cfg(unix)]
+use std::time::Duration;
+
 fn aru(project: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("aru");
     command.args(["--project", project.to_str().unwrap()]);
@@ -38,6 +43,26 @@ fn create_repository(root: &Path, skills: &[&str]) {
     git(root, &["tag", "1.0.0"]);
 }
 
+#[cfg(unix)]
+fn interactive_add(
+    project: &Path,
+    repository: &Path,
+    extra: &[&str],
+) -> expectrl::session::OsSession {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
+    command.args([
+        "--project",
+        project.to_str().unwrap(),
+        "skill",
+        "add",
+        repository.to_str().unwrap(),
+    ]);
+    command.args(extra);
+    let mut session = Session::spawn(command).unwrap();
+    session.set_expect_timeout(Some(Duration::from_secs(20)));
+    session
+}
+
 fn add_version(repository: &Path, name: &str, tag: &str) {
     std::fs::write(
         repository.join("skills").join(name).join("extra.md"),
@@ -55,6 +80,7 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
         .args(["skill", "add", "--help"])
         .assert()
         .success()
+        .stdout(predicate::str::contains("-a, --all"))
         .stdout(predicate::str::contains("--skill <NAME>"))
         .stdout(predicate::str::contains("--path <PATH>"))
         .stdout(predicate::str::contains("--no-sync"));
@@ -85,11 +111,217 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
+    for selector in ["--skill", "--path"] {
+        cargo_bin_cmd!("aru")
+            .args(["skill", "add", "owner/repo", "--all", selector, "review"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
     cargo_bin_cmd!("aru")
         .args(["mcp", "add", "--name", "missing-source"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("required arguments"));
+}
+
+#[test]
+fn non_terminal_bare_add_fails_before_fetch_or_write() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+
+    aru(&project)
+        .args(["skill", "add", "owner/repository"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "interactive skill selection requires a terminal",
+        ))
+        .stderr(predicate::str::contains("--all"));
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru/cache").exists());
+}
+
+#[test]
+fn all_long_and_short_flags_install_wildcard_without_a_prompt() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    create_repository(&repository, &["alpha", "beta"]);
+    for (index, flag) in ["--all", "-a"].into_iter().enumerate() {
+        let project = temporary.path().join(format!("project-{index}"));
+        std::fs::create_dir(&project).unwrap();
+        aru(&project)
+            .args(["init", "--agent", "codex"])
+            .assert()
+            .success();
+        aru(&project)
+            .args(["skill", "add", repository.to_str().unwrap(), flag])
+            .assert()
+            .success();
+        let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+        assert!(manifest.contains("include = [\"*\"]"));
+        assert!(project.join(".agents/skills/alpha").is_dir());
+        assert!(project.join(".agents/skills/beta").is_dir());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires public Git network"]
+fn public_interactive_git_select_and_cancel_smoke() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let source = Path::new("narumiruna/skills");
+
+    let mut select = interactive_add(&project, source, &["--version", "=0.5.0"]);
+    select.expect("Select skills to install").unwrap();
+    select.send("writing-plans").unwrap();
+    select.send(" ").unwrap();
+    select.send("\r").unwrap();
+    select.expect(Eof).unwrap();
+    assert!(project.join(".agents/skills/writing-plans").is_dir());
+    let lock = std::fs::read_to_string(project.join("aru.lock")).unwrap();
+    assert!(lock.contains("67cd354cc2eeb417db200a4f8d78869b03a0753d"));
+
+    let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+    let lock = std::fs::read(project.join("aru.lock")).unwrap();
+    let mut cancel = interactive_add(&project, source, &[]);
+    cancel.expect("Select skills to install").unwrap();
+    cancel.send(ControlCode::ESC).unwrap();
+    cancel.expect("skill selection canceled").unwrap();
+    cancel.expect(Eof).unwrap();
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert_eq!(std::fs::read(project.join("aru.lock")).unwrap(), lock);
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_multiselect_filters_and_installs_only_the_checked_skill() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha", "beta", "zeta"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+
+    let mut session = interactive_add(&project, &repository, &[]);
+    session.expect("Select skills to install").unwrap();
+    session.send("\r").unwrap();
+    session.expect("select at least one skill").unwrap();
+    session.send("beta").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session.expect(Eof).unwrap();
+
+    let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+    assert!(manifest.contains("include = [\"beta\"]"));
+    assert!(!manifest.contains("include = [\"*\"]"));
+    assert!(!project.join(".agents/skills/alpha").exists());
+    assert!(project.join(".agents/skills/beta").is_dir());
+    assert!(!project.join(".agents/skills/zeta").exists());
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lock.skill_packages[0].skills[0].name, "beta");
+    aru(&project).args(["sync", "--locked"]).assert().success();
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_escape_cancels_without_project_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let before = std::fs::read(project.join("aru.toml")).unwrap();
+
+    let mut session = interactive_add(&project, &repository, &[]);
+    session.expect("Select skills to install").unwrap();
+    session.send(ControlCode::ESC).unwrap();
+    session.expect("skill selection canceled").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), before);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru/state.toml").exists());
+    assert!(!project.join(".agents").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_interrupt_exits_without_project_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let before = std::fs::read(project.join("aru.toml")).unwrap();
+
+    let mut session = interactive_add(&project, &repository, &[]);
+    session.expect("Select skills to install").unwrap();
+    session.send(ControlCode::ETX).unwrap();
+    session
+        .expect("interactive skill selection was interrupted")
+        .unwrap();
+    session.expect(Eof).unwrap();
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), before);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru/state.toml").exists());
+    assert!(!project.join(".agents").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_dry_run_prompts_but_writes_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+    let before = std::fs::read(project.join("aru.toml")).unwrap();
+
+    let mut session = interactive_add(&project, &repository, &["--dry-run"]);
+    session.expect("Select skills to install").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session.expect("dry-run: lock skill alpha").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), before);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru/cache").exists());
+    assert!(!project.join(".aru/state.toml").exists());
+    assert!(!project.join(".agents").exists());
 }
 
 #[test]
@@ -227,7 +459,7 @@ fn named_skill_update_does_not_unlock_other_sources() {
         .success();
     for repository in [&first_repository, &second_repository] {
         aru(&project)
-            .args(["skill", "add", repository.to_str().unwrap()])
+            .args(["skill", "add", repository.to_str().unwrap(), "--all"])
             .assert()
             .success();
     }
@@ -311,7 +543,7 @@ fn wildcard_exclude_and_explicit_path_intent_are_persisted() {
         .success();
 
     aru(&project)
-        .args(["skill", "add", repository.to_str().unwrap()])
+        .args(["skill", "add", repository.to_str().unwrap(), "--all"])
         .assert()
         .success();
     aru(&project)
@@ -359,7 +591,13 @@ fn dry_run_does_not_change_manifest_lock_cache_state_or_projections() {
     let before = std::fs::read(project.join("aru.toml")).unwrap();
 
     aru(&project)
-        .args(["skill", "add", repository.to_str().unwrap(), "--dry-run"])
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--dry-run",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("dry-run: lock skill alpha"));
@@ -515,7 +753,7 @@ fn unmanaged_collision_requires_force_and_unknown_orphans_survive_remove() {
     std::fs::write(orphan.join("keep"), "unmanaged").unwrap();
 
     aru(&project)
-        .args(["skill", "add", repository.to_str().unwrap()])
+        .args(["skill", "add", repository.to_str().unwrap(), "--all"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("collision"));
@@ -529,6 +767,7 @@ fn unmanaged_collision_requires_force_and_unknown_orphans_survive_remove() {
             "skill",
             "add",
             repository.to_str().unwrap(),
+            "--all",
             "--force",
             "--dry-run",
         ])
@@ -541,7 +780,13 @@ fn unmanaged_collision_requires_force_and_unknown_orphans_survive_remove() {
             .contains("Unmanaged")
     );
     aru(&project)
-        .args(["skill", "add", repository.to_str().unwrap(), "--force"])
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--force",
+        ])
         .assert()
         .success();
     assert!(
