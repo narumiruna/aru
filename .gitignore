@@ -27,3 +27,5 @@ target
 
 # Local source checkouts used for implementation research
 /third_party/reference/
+.aru/
+.agents/

@@ -1,0 +1,9 @@
+schema = 1
+
+[project]
+agents = ["codex"]
+
+[skills]
+"narumiruna/skills" = { include = ["writing-plans"], exclude = [] }
+
+[mcp]
