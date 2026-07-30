@@ -7,8 +7,21 @@
 
 ## Install
 
+Install the latest release from [crates.io](https://crates.io/crates/aru):
+
+```console
+cargo install aru
+```
+
+Or install from the current source checkout:
+
 ```console
 cargo install --path .
+```
+
+Then verify the installation:
+
+```console
 aru --help
 ```
 
