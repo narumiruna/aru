@@ -1,6 +1,6 @@
 [package]
 name = "aru"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 description = "A project manager for coding-agent skills and MCP servers, written in Rust."
 repository = "https://github.com/narumiruna/aru"
