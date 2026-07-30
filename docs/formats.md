@@ -18,15 +18,17 @@ url = "https://docs.example.com/mcp"
 bearer-token-env = "DOCS_TOKEN"
 ```
 
-The manifest is intentionally unversioned during early development. Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. An MCP entry has exactly one of `server` (Registry) or `url` (direct remote). Secret-bearing fields contain environment names only.
+The manifest is intentionally unversioned during early development. `project.targets` is a non-empty, duplicate-free persistent set; `aru target add` unions it, `remove` subtracts from it, and `set` replaces it exactly. Target commands retain the existing value decoration so a trailing comment on `targets` survives mutation. Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. An MCP entry has exactly one of `server` (Registry) or `url` (direct remote). Secret-bearing fields contain environment names only.
 
-`package-input-hash` canonicalizes every skill requirement with credential-free source identity plus every MCP requirement. It excludes `project.targets`.
+`package-input-hash` canonicalizes every skill requirement with credential-free source identity plus every MCP requirement. It excludes `project.targets`. Target changes therefore preserve package identity while rebuilding `projection-input-hash` and per-target projections.
 
 ## `aru.lock`
 
 `version = 1`. Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection per selected target.
 
 `projection-input-hash` covers exact package lock identity, sorted targets, target-specific projections, and adapter capability schema version. `projection-baseline` contains only currently desired semantic entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
+
+Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when Codex is also selected and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Changing the target set may therefore convert an owned Claude entry between copy and symlink in the same transaction. If local ownership proof is missing, removed-target artifacts are preserved and reported for manual review. A `--no-sync` change that would defer a copy/symlink conversion is rejected when its old managed mode cannot be persisted safely.
 
 The canonical skill digest byte stream is:
 

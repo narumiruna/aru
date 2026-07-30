@@ -26,6 +26,11 @@ pub enum Command {
     Lock(LockArgs),
     /// Reconcile the lock and all configured target project paths.
     Sync(SyncArgs),
+    /// Manage project targets.
+    Target {
+        #[command(subcommand)]
+        command: TargetCommand,
+    },
     /// Manage Agent Skills packages.
     Skill {
         #[command(subcommand)]
@@ -58,6 +63,63 @@ pub struct SyncArgs {
     #[arg(long)]
     pub locked: bool,
     /// Resolve and print the plan without writing any file or cache.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TargetCommand {
+    /// Add one or more targets to the configured set.
+    Add(TargetAddArgs),
+    /// Remove one or more targets from the configured set.
+    Remove(TargetRemoveArgs),
+    /// Replace the configured target set exactly.
+    Set(TargetSetArgs),
+    /// List configured targets.
+    List,
+}
+
+#[derive(Debug, Args)]
+pub struct TargetAddArgs {
+    /// Target to add (codex or claude); may be repeated.
+    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    pub targets: Vec<Target>,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long)]
+    pub no_sync: bool,
+    /// Print a deterministic plan without writing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TargetRemoveArgs {
+    /// Configured target to remove; may be repeated.
+    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    pub targets: Vec<Target>,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long)]
+    pub no_sync: bool,
+    /// Print a deterministic plan without writing.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TargetSetArgs {
+    /// Exact target set (codex and/or claude).
+    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    pub targets: Vec<Target>,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long)]
+    pub no_sync: bool,
+    /// Print a deterministic plan without writing.
     #[arg(long)]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.

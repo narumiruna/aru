@@ -86,14 +86,29 @@ lock skill demo 1.0.0 sha256:…
 write lockfile
 ```
 
+## Manage targets
+
+Targets are the persistent set of coding-agent project layouts that aru reconciles. List the set declared in `aru.toml`, extend or reduce it, or replace it exactly:
+
+```console
+aru target list
+aru target add claude
+aru target remove codex
+aru target set codex claude
+```
+
+`add` performs a set union, `remove` performs a set subtraction, and `set` replaces the complete set atomically. At least one target must remain, so use `aru target set claude` to switch a Codex-only project without an intermediate two-target sync. Repeating an already configured target is safe. Unknown or unconfigured removal arguments fail before writes.
+
+Target mutations resolve the complete result before atomically updating `aru.toml`, `aru.lock`, local ownership state, and owned project paths. They preserve locked package versions and accept `--dry-run`; `add` and `set` accept `--force` for explicit takeover of new-target collisions. `--no-sync` updates only manifest and lock intent, prints that target paths are pending, and requires a later `aru sync`. If local ownership state is missing and deferral would lose the information needed for a Claude copy/symlink conversion, aru rejects `--no-sync` and asks you to apply the target change directly.
+
 ## Project files
 
 | Path | Commit? | Purpose |
 | --- | --- | --- |
 | `aru.toml` | Yes | Human-maintained requirements, selectors, and target list |
 | `aru.lock` | Yes | Exact Git commits, content digests, MCP metadata/candidates, per-target projections, and portable ownership baseline |
-| `.agents/skills/<name>` | Optional | Canonical installed skill bytes; Codex reads this directly |
-| `.claude/skills/<name>` | Optional | Relative link to the canonical skill, or a verified copy where links are unavailable |
+| `.agents/skills/<name>` | Optional | Codex project skill projection |
+| `.claude/skills/<name>` | Optional | Claude project skill projection: a relative link to `.agents` when both targets are selected and links are available, otherwise a verified copy |
 | `.codex/config.toml` | Optional | Codex project MCP entries |
 | `.mcp.json` | Optional | Claude Code project MCP entries |
 | `.aru/cache/` | No | Immutable, content-addressed Git checkouts |
@@ -122,7 +137,7 @@ write lockfile
 - `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
 - `--force` is destructive takeover of a colliding unmanaged key/path. The operation plan says `force replace`; a later remove does not restore the previous unmanaged value.
 
-Changing only `project.targets` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-target projections.
+Changing only `project.targets` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-target projections. Prefer `aru target add`, `remove`, or `set` so the manifest, lock, ownership state, and target paths change in one transaction.
 
 ### Branch sources
 

@@ -28,6 +28,7 @@ pub struct SyncResult {
     pub lock: Lockfile,
     pub operations: Vec<Operation>,
     pub plan: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 pub fn prepare(
@@ -49,17 +50,31 @@ pub fn prepare(
     )?;
     let mut operations = Vec::new();
     let mut plan = lock_diff_plan(options.previous, &resolution.lock);
+    let mut warnings = Vec::new();
 
     if options.project_projections {
         prepare_projections(
             project,
             manifest,
             &resolution.lock,
+            options.previous,
             &resolution.skill_sources,
             options.force,
             &mut operations,
             &mut plan,
+            &mut warnings,
         )?;
+    } else {
+        let state = State::load(project)?;
+        let state_map = state.by_identity();
+        warn_unowned_removed_projections(
+            project,
+            options.previous,
+            &resolution.lock,
+            &state_map,
+            &mut warnings,
+        );
+        validate_deferred_skill_layout(project, options.previous, &resolution.lock, &state_map)?;
     }
 
     let lock_bytes = resolution.lock.bytes()?;
@@ -83,21 +98,27 @@ pub fn prepare(
     }
     operations.sort_by(|left, right| left.destination.cmp(&right.destination));
     plan.sort();
+    warnings.sort();
+    warnings.dedup();
     Ok(SyncResult {
         lock: resolution.lock,
         operations,
         plan,
+        warnings,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_projections(
     project: &Path,
     manifest: &Manifest,
     lock: &Lockfile,
+    previous: Option<&Lockfile>,
     skill_sources: &BTreeMap<String, PathBuf>,
     force: bool,
     operations: &mut Vec<Operation>,
     plan: &mut Vec<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<()> {
     let state = State::load(project)?;
     let state_map = state.by_identity();
@@ -105,74 +126,67 @@ fn prepare_projections(
     let mut next_state = Vec::new();
     let mut processed = BTreeSet::new();
 
+    let projects_codex = manifest.project.targets.contains(&Target::Codex);
+    let projects_claude = manifest.project.targets.contains(&Target::Claude);
     for package in &lock.skill_packages {
         for skill in &package.skills {
             let source = skill_sources.get(&skill.name).ok_or_else(|| {
                 AruError::msg(format!("missing materialized skill {:?}", skill.name))
             })?;
-            prepare_skill_entry(
-                project,
-                lock,
-                &state_map,
-                Target::Codex,
-                &skill.name,
-                &skill.sha256,
-                source,
-                PathBuf::from(format!(".agents/skills/{}", skill.name)),
-                "copy",
-                None,
-                force,
-                &lock_identity,
-                operations,
-                plan,
-                &mut next_state,
-                &mut processed,
-            )?;
-            if manifest.project.targets.contains(&Target::Claude) {
+            if projects_codex {
+                prepare_skill_entry(
+                    project,
+                    lock,
+                    previous,
+                    &state_map,
+                    Target::Codex,
+                    &skill.name,
+                    &skill.sha256,
+                    source,
+                    PathBuf::from(format!(".agents/skills/{}", skill.name)),
+                    "copy",
+                    None,
+                    force,
+                    &lock_identity,
+                    operations,
+                    plan,
+                    &mut next_state,
+                    &mut processed,
+                )?;
+            }
+            if projects_claude {
                 let destination = PathBuf::from(format!(".claude/skills/{}", skill.name));
-                if supports_project_symlink() {
-                    let target = PathBuf::from(format!("../../.agents/skills/{}", skill.name));
-                    prepare_skill_entry(
-                        project,
-                        lock,
-                        &state_map,
-                        Target::Claude,
-                        &skill.name,
-                        &skill.sha256,
-                        source,
-                        destination,
-                        "symlink",
-                        Some(target),
-                        force,
-                        &lock_identity,
-                        operations,
-                        plan,
-                        &mut next_state,
-                        &mut processed,
-                    )?;
+                let link_target = (projects_codex && supports_project_symlink())
+                    .then(|| PathBuf::from(format!("../../.agents/skills/{}", skill.name)));
+                let mode = if link_target.is_some() {
+                    "symlink"
                 } else {
-                    prepare_skill_entry(
-                        project,
-                        lock,
-                        &state_map,
-                        Target::Claude,
-                        &skill.name,
-                        &skill.sha256,
-                        source,
-                        destination,
-                        "copy",
-                        None,
-                        force,
-                        &lock_identity,
-                        operations,
-                        plan,
-                        &mut next_state,
-                        &mut processed,
-                    )?;
-                }
+                    "copy"
+                };
+                prepare_skill_entry(
+                    project,
+                    lock,
+                    previous,
+                    &state_map,
+                    Target::Claude,
+                    &skill.name,
+                    &skill.sha256,
+                    source,
+                    destination,
+                    mode,
+                    link_target,
+                    force,
+                    &lock_identity,
+                    operations,
+                    plan,
+                    &mut next_state,
+                    &mut processed,
+                )?;
             }
         }
     }
+
+    warn_unowned_removed_projections(project, previous, lock, &state_map, warnings);
 
     for entry in &state.entries {
         let identity = state_identity(entry);
@@ -242,10 +256,110 @@ fn prepare_projections(
     Ok(())
 }
 
+fn projected_skill_mode(lock: &Lockfile, target: Target, name: &str) -> Option<&'static str> {
+    lock.projection_baselines
+        .iter()
+        .any(|baseline| {
+            baseline.target == target && baseline.kind == "skill" && baseline.key == name
+        })
+        .then(|| {
+            if target == Target::Claude
+                && supports_project_symlink()
+                && lock.projection_baselines.iter().any(|baseline| {
+                    baseline.target == Target::Codex
+                        && baseline.kind == "skill"
+                        && baseline.key == name
+                })
+            {
+                "symlink"
+            } else {
+                "copy"
+            }
+        })
+}
+
+fn validate_deferred_skill_layout(
+    project: &Path,
+    previous: Option<&Lockfile>,
+    lock: &Lockfile,
+    state_map: &BTreeMap<(String, String, String), &StateEntry>,
+) -> Result<()> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    for baseline in &lock.projection_baselines {
+        if baseline.target != Target::Claude || baseline.kind != "skill" {
+            continue;
+        }
+        let Some(previous_mode) = projected_skill_mode(previous, Target::Claude, &baseline.key)
+        else {
+            continue;
+        };
+        let desired_mode = projected_skill_mode(lock, Target::Claude, &baseline.key).unwrap();
+        if previous_mode == desired_mode {
+            continue;
+        }
+        let destination = format!(".claude/skills/{}", baseline.key);
+        let identity = ("skill".into(), baseline.key.clone(), destination.clone());
+        if !state_map.contains_key(&identity)
+            && std::fs::symlink_metadata(project.join(&destination)).is_ok()
+        {
+            return Err(AruError::msg(format!(
+                "cannot defer the target change with missing local ownership state: {destination} must change from {previous_mode} to {desired_mode}; rerun without --no-sync"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn warn_unowned_removed_projections(
+    project: &Path,
+    previous: Option<&Lockfile>,
+    lock: &Lockfile,
+    state_map: &BTreeMap<(String, String, String), &StateEntry>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    for baseline in &previous.projection_baselines {
+        let remains_desired = lock.projection_baselines.iter().any(|desired| {
+            desired.target == baseline.target
+                && desired.kind == baseline.kind
+                && desired.key == baseline.key
+        });
+        if remains_desired {
+            continue;
+        }
+        let destination = match (baseline.target, baseline.kind.as_str()) {
+            (Target::Codex, "skill") => format!(".agents/skills/{}", baseline.key),
+            (Target::Claude, "skill") => format!(".claude/skills/{}", baseline.key),
+            (Target::Codex, "mcp") => crate::target::codex::CONFIG_PATH.into(),
+            (Target::Claude, "mcp") => crate::target::claude::CONFIG_PATH.into(),
+            _ => continue,
+        };
+        let identity = (
+            baseline.kind.clone(),
+            baseline.key.clone(),
+            destination.clone(),
+        );
+        if state_map.contains_key(&identity)
+            || std::fs::symlink_metadata(project.join(&destination)).is_err()
+        {
+            continue;
+        }
+        warnings.push(format!(
+            "no local ownership record for removed {} {} {:?}; preserved {} for manual review",
+            baseline.target, baseline.kind, baseline.key, destination
+        ));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prepare_skill_entry(
     project: &Path,
     lock: &Lockfile,
+    previous: Option<&Lockfile>,
     state_map: &BTreeMap<(String, String, String), &StateEntry>,
     target: Target,
     name: &str,
@@ -270,14 +384,16 @@ fn prepare_skill_entry(
         .find(|baseline| {
             baseline.target == target && baseline.kind == "skill" && baseline.key == name
         })
-        .or_else(|| {
-            lock.projection_baselines
-                .iter()
-                .find(|baseline| baseline.kind == "skill" && baseline.key == name)
-        })
         .map(|baseline| baseline.sha256.as_str());
-    let current = observe_skill(project, &destination, link_target.as_deref())?;
-    let action = reconcile(
+    let previous_mode = previous.and_then(|previous| projected_skill_mode(previous, target, name));
+    let observed_mode = owned
+        .map(|entry| entry.mode.as_str())
+        .or(previous_mode)
+        .unwrap_or(mode);
+    let observed_link =
+        (observed_mode == "symlink").then(|| PathBuf::from(format!("../../.agents/skills/{name}")));
+    let current = observe_skill(project, &destination, observed_link.as_deref())?;
+    let mut action = reconcile(
         name,
         current.as_deref(),
         owned,
@@ -285,6 +401,10 @@ fn prepare_skill_entry(
         Some(desired_digest),
         force,
     )?;
+    let mode_changed = (owned.is_some() || previous_mode.is_some()) && observed_mode != mode;
+    if mode_changed && matches!(action, OwnershipAction::Adopt | OwnershipAction::Noop) {
+        action = OwnershipAction::Update;
+    }
     match action {
         OwnershipAction::Create | OwnershipAction::Update => {
             if mode == "symlink" {

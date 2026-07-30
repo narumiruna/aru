@@ -5,7 +5,8 @@ use clap::Parser;
 
 use crate::cli::{
     Cli, Command, LockArgs, McpAddArgs, McpCommand, McpRemoveArgs, McpUpdateArgs, SkillAddArgs,
-    SkillCommand, SkillRemoveArgs, SkillUpdateArgs, SyncArgs,
+    SkillCommand, SkillRemoveArgs, SkillUpdateArgs, SyncArgs, TargetAddArgs, TargetCommand,
+    TargetRemoveArgs, TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
@@ -15,7 +16,7 @@ use crate::interactive::{
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, McpRequirement, SkillRequirement, Target, validate_name};
 use crate::resolver::{SkillResolutionHint, canonical_update_skill_targets, inspect_skill_source};
-use crate::sync::{SyncOptions, garbage_collect, prepare};
+use crate::sync::{SyncOptions, SyncResult, garbage_collect, prepare};
 use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
 
 pub fn run() -> Result<()> {
@@ -29,6 +30,15 @@ pub fn run() -> Result<()> {
         Command::Sync(args) => {
             let project = discover_project(cli.project)?;
             sync(&project, args)
+        }
+        Command::Target { command } => {
+            let project = discover_project(cli.project)?;
+            match command {
+                TargetCommand::Add(args) => target_add(&project, args),
+                TargetCommand::Remove(args) => target_remove(&project, args),
+                TargetCommand::Set(args) => target_set(&project, args),
+                TargetCommand::List => target_list(&project),
+            }
         }
         Command::Skill { command } => {
             let project = discover_project(cli.project)?;
@@ -127,6 +137,129 @@ fn sync(project: &Path, args: SyncArgs) -> Result<()> {
         BTreeSet::new(),
         BTreeSet::new(),
     )
+}
+
+fn target_list(project: &Path) -> Result<()> {
+    let manifest = ManifestDocument::load(project)?.manifest()?;
+    let mut targets = manifest.project.targets;
+    targets.sort();
+    for target in targets {
+        println!("{target}");
+    }
+    Ok(())
+}
+
+fn target_add(project: &Path, args: TargetAddArgs) -> Result<()> {
+    let _guard = begin(project, args.dry_run)?;
+    let document = ManifestDocument::load(project)?;
+    let current = document.manifest()?.project.targets;
+    let mut targets = current.clone();
+    targets.extend(args.targets);
+    normalize_targets(&mut targets);
+    apply_target_change(
+        project,
+        document,
+        current,
+        targets,
+        args.no_sync,
+        args.dry_run,
+        args.force,
+    )
+}
+
+fn target_remove(project: &Path, args: TargetRemoveArgs) -> Result<()> {
+    let _guard = begin(project, args.dry_run)?;
+    let document = ManifestDocument::load(project)?;
+    let current = document.manifest()?.project.targets;
+    let mut requested = args.targets;
+    normalize_targets(&mut requested);
+    for target in &requested {
+        if !current.contains(target) {
+            return Err(AruError::msg(format!(
+                "target \"{target}\" is not configured"
+            )));
+        }
+    }
+    let targets = current
+        .iter()
+        .copied()
+        .filter(|target| !requested.contains(target))
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Err(AruError::msg(
+            "cannot remove the last target; use `aru target set <TARGET>` to switch targets",
+        ));
+    }
+    apply_target_change(
+        project,
+        document,
+        current,
+        targets,
+        args.no_sync,
+        args.dry_run,
+        false,
+    )
+}
+
+fn target_set(project: &Path, args: TargetSetArgs) -> Result<()> {
+    let _guard = begin(project, args.dry_run)?;
+    let document = ManifestDocument::load(project)?;
+    let current = document.manifest()?.project.targets;
+    let mut targets = args.targets;
+    normalize_targets(&mut targets);
+    if targets.is_empty() {
+        return Err(AruError::msg("aru target set requires at least one target"));
+    }
+    apply_target_change(
+        project,
+        document,
+        current,
+        targets,
+        args.no_sync,
+        args.dry_run,
+        args.force,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_target_change(
+    project: &Path,
+    mut document: ManifestDocument,
+    current: Vec<Target>,
+    targets: Vec<Target>,
+    no_sync: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<()> {
+    document.set_targets(&targets);
+    let manifest = document.manifest()?;
+    let current_set: BTreeSet<_> = current.into_iter().collect();
+    let target_set: BTreeSet<_> = targets.iter().copied().collect();
+    let mut target_plan = target_set
+        .difference(&current_set)
+        .map(|target| format!("add target {target}"))
+        .chain(
+            current_set
+                .difference(&target_set)
+                .map(|target| format!("remove target {target}")),
+        )
+        .collect::<Vec<_>>();
+    target_plan.sort();
+    execute_target_change(
+        project,
+        &manifest,
+        document.bytes(),
+        dry_run,
+        !no_sync,
+        force,
+        target_plan,
+        &targets,
+    )
+}
+
+fn normalize_targets(targets: &mut Vec<Target>) {
+    targets.sort();
+    targets.dedup();
 }
 
 fn skill_add(project: &Path, args: SkillAddArgs) -> Result<()> {
@@ -566,6 +699,63 @@ fn execute_with_skill_hints(
             skill_hints,
         },
     )?;
+    finish_execution(project, prepared, dry_run, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_target_change(
+    project: &Path,
+    manifest: &crate::manifest::Manifest,
+    manifest_bytes: Vec<u8>,
+    dry_run: bool,
+    project_projections: bool,
+    force: bool,
+    target_plan: Vec<String>,
+    targets: &[Target],
+) -> Result<()> {
+    let previous = Lockfile::load_optional(project)?;
+    let update_skills = BTreeSet::new();
+    let update_mcp = BTreeSet::new();
+    let skill_hints = BTreeMap::new();
+    let mut prepared = prepare(
+        project,
+        manifest,
+        SyncOptions {
+            previous: previous.as_ref(),
+            locked: false,
+            dry_run,
+            project_projections,
+            force,
+            manifest_bytes: Some(manifest_bytes),
+            update_skills: &update_skills,
+            update_mcp: &update_mcp,
+            skill_hints: &skill_hints,
+        },
+    )?;
+    prepared.plan.extend(target_plan);
+    prepared.plan.sort();
+    let configured = targets
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let completion = if project_projections {
+        format!("targets synchronized: {configured}")
+    } else {
+        "target paths were not changed (--no-sync); run `aru sync` to apply".into()
+    };
+    finish_execution(project, prepared, dry_run, Some(completion))
+}
+
+fn finish_execution(
+    project: &Path,
+    prepared: SyncResult,
+    dry_run: bool,
+    completion: Option<String>,
+) -> Result<()> {
+    for warning in &prepared.warnings {
+        eprintln!("warning: {warning}");
+    }
     if dry_run {
         if prepared.plan.is_empty() {
             println!("dry-run: no changes");
@@ -576,7 +766,8 @@ fn execute_with_skill_hints(
         }
         return Ok(());
     }
-    if prepared.operations.is_empty() {
+    let changed = !prepared.operations.is_empty();
+    if !changed {
         println!("aru project is already synchronized");
     } else {
         for item in &prepared.plan {
@@ -585,6 +776,9 @@ fn execute_with_skill_hints(
         apply(project, prepared.operations)?;
     }
     garbage_collect(project, &prepared.lock)?;
+    if changed && let Some(completion) = completion {
+        println!("{completion}");
+    }
     Ok(())
 }
 

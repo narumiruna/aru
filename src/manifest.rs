@@ -268,7 +268,14 @@ impl ManifestDocument {
     }
 
     pub fn set_targets(&mut self, targets: &[Target]) {
-        self.doc["project"]["targets"] = Item::Value(target_array(targets).into());
+        let decor = self.doc["project"]["targets"]
+            .as_value()
+            .map(|value| value.decor().clone());
+        let mut value = Value::Array(target_array(targets));
+        if let Some(decor) = decor {
+            *value.decor_mut() = decor;
+        }
+        self.doc["project"]["targets"] = Item::Value(value);
     }
 
     pub fn set_skill(&mut self, source: &str, requirement: &SkillRequirement) {
@@ -458,6 +465,22 @@ mod tests {
         assert!(output.contains("# package note"));
         assert!(output.contains("[custom]\nanswer = 42"));
         assert!(output.contains("include = [\"new\"]"));
+    }
+
+    #[test]
+    fn target_mutation_preserves_the_key_comment_and_unrelated_content() {
+        let text = "# heading\nfuture = 1\n\n[project]\ntargets = [\"codex\"] # why this set exists\n\n[custom]\nanswer = 42\n";
+        let mut document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+
+        document.set_targets(&[Target::Codex, Target::Claude]);
+
+        let output = String::from_utf8(document.bytes()).unwrap();
+        assert!(output.contains("targets = [\"codex\", \"claude\"] # why this set exists"));
+        assert!(output.starts_with("# heading\nfuture = 1"));
+        assert!(output.contains("[custom]\nanswer = 42"));
     }
 
     #[test]
