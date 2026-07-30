@@ -3,10 +3,10 @@ use std::path::Path;
 use serde_json::{Map, Value};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table};
 
-use crate::agent::normalized_entry;
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::McpTarget;
+use crate::target::normalized_entry;
 
 pub const CONFIG_PATH: &str = ".codex/config.toml";
 
@@ -177,7 +177,7 @@ fn value_to_json(value: &toml_edit::Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::Agent;
+    use crate::manifest::Target;
 
     #[test]
     fn merge_preserves_comments_and_unrelated_entries() {
@@ -193,7 +193,7 @@ mod tests {
             .set(
                 "managed",
                 &McpTarget {
-                    agent: Agent::Codex,
+                    target: Target::Codex,
                     kind: "package".into(),
                     transport: "stdio".into(),
                     command: Some("npx".into()),

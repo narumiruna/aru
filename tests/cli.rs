@@ -153,12 +153,46 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
 }
 
 #[test]
+fn init_uses_target_contract() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+
+    aru(&project)
+        .args(["init", "--target", "codex", "--target", "claude"])
+        .assert()
+        .success();
+
+    let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+    assert!(manifest.contains("targets = [\"codex\", \"claude\"]"));
+    assert!(!manifest.contains("agents ="));
+
+    let legacy_project = temporary.path().join("legacy-project");
+    std::fs::create_dir(&legacy_project).unwrap();
+    aru(&legacy_project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument '--agent'"));
+
+    let legacy_slug_project = temporary.path().join("legacy-slug-project");
+    std::fs::create_dir(&legacy_slug_project).unwrap();
+    aru(&legacy_slug_project)
+        .args(["init", "--target", "claude-code"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unknown target \"claude-code\"; expected codex or claude",
+        ));
+}
+
+#[test]
 fn non_terminal_bare_add_fails_before_fetch_or_write() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let manifest = std::fs::read(project.join("aru.toml")).unwrap();
@@ -186,7 +220,7 @@ fn all_long_and_short_flags_install_wildcard_without_a_prompt() {
         let project = temporary.path().join(format!("project-{index}"));
         std::fs::create_dir(&project).unwrap();
         aru(&project)
-            .args(["init", "--agent", "codex"])
+            .args(["init", "--target", "codex"])
             .assert()
             .success();
         aru(&project)
@@ -208,7 +242,7 @@ fn public_interactive_git_select_and_cancel_smoke() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let source = Path::new("narumiruna/skills");
@@ -252,7 +286,7 @@ fn terminal_multiselect_filters_and_installs_only_the_checked_skill() {
     create_repository(&repository, &["alpha", "beta", "zeta"]);
     git(&repository, &["branch", "live"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
 
@@ -288,7 +322,7 @@ fn terminal_escape_cancels_without_project_writes() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha", "beta"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let before = std::fs::read(project.join("aru.toml")).unwrap();
@@ -314,7 +348,7 @@ fn terminal_interrupt_exits_without_project_writes() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha", "beta"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let before = std::fs::read(project.join("aru.toml")).unwrap();
@@ -342,7 +376,7 @@ fn terminal_dry_run_prompts_but_writes_nothing() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha", "beta"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let before = std::fs::read(project.join("aru.toml")).unwrap();
@@ -369,7 +403,7 @@ fn skill_add_upgrade_installs_new_source_and_refreshes_existing_semver() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
 
@@ -432,7 +466,7 @@ fn branch_add_stays_pinned_until_named_update_and_locked_replays() {
     git(&repository, &["branch", "live"]);
     let first_revision = git_output(&repository, &["rev-parse", "HEAD"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
 
@@ -507,7 +541,7 @@ fn invalid_branch_fails_before_fetch_or_write() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let manifest = std::fs::read(project.join("aru.toml")).unwrap();
@@ -537,7 +571,7 @@ fn local_git_add_locked_sync_conservative_update_and_remove() {
     create_repository(&repository, &["alpha"]);
 
     aru(&project)
-        .args(["init", "--agent", "codex", "--agent", "claude-code"])
+        .args(["init", "--target", "codex", "--target", "claude"])
         .assert()
         .success();
     aru(&project)
@@ -658,7 +692,7 @@ fn named_skill_update_does_not_unlock_other_sources() {
     create_repository(&first_repository, &["first"]);
     create_repository(&second_repository, &["second"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     for repository in [&first_repository, &second_repository] {
@@ -691,7 +725,7 @@ fn named_mcp_update_keeps_untargeted_locked_entry() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     for (name, url) in [
@@ -742,7 +776,7 @@ fn wildcard_exclude_and_explicit_path_intent_are_persisted() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha", "beta"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
 
@@ -789,7 +823,7 @@ fn dry_run_does_not_change_manifest_lock_cache_state_or_projections() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let before = std::fs::read(project.join("aru.toml")).unwrap();
@@ -818,7 +852,7 @@ fn locked_sync_rejects_a_missing_lock() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     aru(&project)
@@ -829,12 +863,12 @@ fn locked_sync_rejects_a_missing_lock() {
 }
 
 #[test]
-fn agent_change_invalidates_locked_projection_but_normal_sync_reuses_packages() {
+fn target_change_invalidates_locked_projection_but_normal_sync_reuses_packages() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     aru(&project)
@@ -852,10 +886,9 @@ fn agent_change_invalidates_locked_projection_but_normal_sync_reuses_packages() 
         .unwrap()
         .unwrap();
     let manifest_path = project.join("aru.toml");
-    let manifest = std::fs::read_to_string(&manifest_path).unwrap().replace(
-        "agents = [\"codex\"]",
-        "agents = [\"codex\", \"claude-code\"]",
-    );
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("targets = [\"codex\"]", "targets = [\"codex\", \"claude\"]");
     std::fs::write(&manifest_path, manifest).unwrap();
 
     aru(&project)
@@ -878,7 +911,7 @@ fn state_loss_adopts_exact_baseline_and_drift_is_preserved() {
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     aru(&project)
-        .args(["init", "--agent", "codex", "--agent", "claude-code"])
+        .args(["init", "--target", "codex", "--target", "claude"])
         .assert()
         .success();
     aru(&project)
@@ -942,7 +975,7 @@ fn unmanaged_collision_requires_force_and_unknown_orphans_survive_remove() {
     std::fs::create_dir(&project).unwrap();
     create_repository(&repository, &["alpha"]);
     aru(&project)
-        .args(["init", "--agent", "codex"])
+        .args(["init", "--target", "codex"])
         .assert()
         .success();
     let collision = project.join(".agents/skills/alpha");

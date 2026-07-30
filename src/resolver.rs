@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::agent;
 use crate::cache::Cache;
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
@@ -11,10 +10,11 @@ use crate::lockfile::{
     ADAPTER_CAPABILITY_SCHEMA, LockedSkill, Lockfile, McpServer, McpTarget, ProjectionBaseline,
     SkillPackage,
 };
-use crate::manifest::{Agent, Manifest, McpRequirement, SkillRequirement};
+use crate::manifest::{Manifest, McpRequirement, SkillRequirement, Target};
 use crate::registry::{RegistryClient, ResolvedCandidate};
 use crate::skill::{DiscoveredSkill, discover_and_select, discover_candidates};
 use crate::source::git::{self, GitSource};
+use crate::target;
 
 #[derive(Debug)]
 pub struct Resolution {
@@ -151,13 +151,13 @@ pub fn resolve(
             !options.update_mcp.contains(name) && server.requirement == descriptor
         });
         let server = if let Some(old) = reusable {
-            rebuild_mcp_targets(old, requirement, &manifest.project.agents)?
+            rebuild_mcp_targets(old, requirement, &manifest.project.targets)?
         } else {
             resolve_mcp(
                 &registry_client,
                 name,
                 requirement,
-                &manifest.project.agents,
+                &manifest.project.targets,
                 &descriptor,
             )?
         };
@@ -173,8 +173,8 @@ pub fn resolve(
         projection_baselines: Vec::new(),
     };
     lock.normalize();
-    lock.projection_baselines = baselines(&lock, &manifest.project.agents)?;
-    lock.projection_input_hash = projection_input_hash(&lock, &manifest.project.agents)?;
+    lock.projection_baselines = baselines(&lock, &manifest.project.targets)?;
+    lock.projection_input_hash = projection_input_hash(&lock, &manifest.project.targets)?;
     lock.normalize();
     lock.validate()?;
     Ok(Resolution {
@@ -454,7 +454,7 @@ fn resolve_mcp(
     client: &RegistryClient,
     name: &str,
     requirement: &McpRequirement,
-    agents: &[Agent],
+    targets: &[Target],
     descriptor: &str,
 ) -> Result<McpServer> {
     let (server_id, registry, version, metadata_sha256, candidate) =
@@ -481,7 +481,7 @@ fn resolve_mcp(
                 candidate,
             )
         } else {
-            let resolution = client.resolve(requirement, agents)?;
+            let resolution = client.resolve(requirement, targets)?;
             (
                 requirement.server.clone().unwrap(),
                 Some(
@@ -495,8 +495,8 @@ fn resolve_mcp(
                 resolution.candidate,
             )
         };
-    let targets =
-        targets_from_candidate(agents, &candidate, requirement.bearer_token_env.as_ref())?;
+    let projections =
+        targets_from_candidate(targets, &candidate, requirement.bearer_token_env.as_ref())?;
     Ok(McpServer {
         name: name.into(),
         registry,
@@ -504,12 +504,12 @@ fn resolve_mcp(
         requirement: descriptor.into(),
         version,
         metadata_sha256,
-        targets,
+        targets: projections,
     })
 }
 
 fn targets_from_candidate(
-    agents: &[Agent],
+    targets: &[Target],
     candidate: &ResolvedCandidate,
     bearer_token_env: Option<&String>,
 ) -> Result<Vec<McpTarget>> {
@@ -518,16 +518,16 @@ fn targets_from_candidate(
             "bearer-token-env can only be used with streamable-http MCP servers",
         ));
     }
-    let mut targets = Vec::new();
-    for agent in agents {
-        if !crate::registry::supports(agent, candidate) {
+    let mut projections = Vec::new();
+    for target in targets {
+        if !crate::registry::supports(target, candidate) {
             return Err(AruError::msg(format!(
-                "MCP candidate transport {} is unsupported by {agent}",
+                "MCP candidate transport {} is unsupported by {target}",
                 candidate.transport
             )));
         }
-        let target = McpTarget {
-            agent: *agent,
+        let projection = McpTarget {
+            target: *target,
             kind: candidate.kind.clone(),
             transport: candidate.transport.clone(),
             command: candidate.command.clone(),
@@ -540,17 +540,17 @@ fn targets_from_candidate(
                 .or_else(|| candidate.bearer_token_env.clone()),
             package: candidate.package.clone(),
         };
-        agent::normalized_entry(&target)?;
-        targets.push(target);
+        target::normalized_entry(&projection)?;
+        projections.push(projection);
     }
-    targets.sort_by_key(|target| target.agent);
-    Ok(targets)
+    projections.sort_by_key(|projection| projection.target);
+    Ok(projections)
 }
 
 fn rebuild_mcp_targets(
     old: &McpServer,
     requirement: &McpRequirement,
-    agents: &[Agent],
+    targets: &[Target],
 ) -> Result<McpServer> {
     let first = old
         .targets
@@ -569,17 +569,17 @@ fn rebuild_mcp_targets(
     };
     let mut rebuilt = old.clone();
     rebuilt.targets =
-        targets_from_candidate(agents, &candidate, requirement.bearer_token_env.as_ref())?;
+        targets_from_candidate(targets, &candidate, requirement.bearer_token_env.as_ref())?;
     Ok(rebuilt)
 }
 
-fn baselines(lock: &Lockfile, agents: &[Agent]) -> Result<Vec<ProjectionBaseline>> {
+fn baselines(lock: &Lockfile, targets: &[Target]) -> Result<Vec<ProjectionBaseline>> {
     let mut output = Vec::new();
     for package in &lock.skill_packages {
         for skill in &package.skills {
-            for agent in agents {
+            for target in targets {
                 output.push(ProjectionBaseline {
-                    agent: *agent,
+                    target: *target,
                     kind: "skill".into(),
                     key: skill.name.clone(),
                     sha256: skill.sha256.clone(),
@@ -588,12 +588,12 @@ fn baselines(lock: &Lockfile, agents: &[Agent]) -> Result<Vec<ProjectionBaseline
         }
     }
     for server in &lock.mcp_servers {
-        for target in &server.targets {
+        for mcp_target in &server.targets {
             output.push(ProjectionBaseline {
-                agent: target.agent,
+                target: mcp_target.target,
                 kind: "mcp".into(),
                 key: server.name.clone(),
-                sha256: agent::entry_digest(target)?,
+                sha256: target::entry_digest(mcp_target)?,
             });
         }
     }
@@ -604,42 +604,43 @@ fn baselines(lock: &Lockfile, agents: &[Agent]) -> Result<Vec<ProjectionBaseline
 #[derive(Serialize)]
 struct ProjectionInput {
     package_identity: String,
-    agents: Vec<Agent>,
+    targets: Vec<Target>,
     capability_schema: u32,
 }
 
-fn projection_input_hash(lock: &Lockfile, agents: &[Agent]) -> Result<String> {
+fn projection_input_hash(lock: &Lockfile, targets: &[Target]) -> Result<String> {
     let mut package_lock = lock.clone();
     package_lock.projection_baselines.clear();
     package_lock.projection_input_hash.clear();
-    let mut agents = agents.to_vec();
-    agents.sort();
+    let mut targets = targets.to_vec();
+    targets.sort();
     canonical_json_digest(&ProjectionInput {
         package_identity: package_lock.package_identity_digest()?,
-        agents,
+        targets,
         capability_schema: ADAPTER_CAPABILITY_SCHEMA,
     })
 }
 
 fn validate_locked_projection(lock: &Lockfile, manifest: &Manifest) -> Result<()> {
-    let agents: BTreeSet<_> = manifest.project.agents.iter().copied().collect();
+    let configured_targets: BTreeSet<_> = manifest.project.targets.iter().copied().collect();
     for server in &lock.mcp_servers {
-        let targets: BTreeSet<_> = server.targets.iter().map(|target| target.agent).collect();
-        if targets != agents {
+        let locked_targets: BTreeSet<_> =
+            server.targets.iter().map(|target| target.target).collect();
+        if locked_targets != configured_targets {
             return Err(AruError::msg(format!(
-                "aru.lock lacks complete per-agent projection selection for MCP {:?}",
+                "aru.lock lacks complete per-target projection selection for MCP {:?}",
                 server.name
             )));
         }
     }
-    let expected_baselines = baselines(lock, &manifest.project.agents)?;
+    let expected_baselines = baselines(lock, &manifest.project.targets)?;
     if lock.projection_baselines != expected_baselines {
         return Err(AruError::msg("aru.lock projection baseline is stale"));
     }
-    let expected = projection_input_hash(lock, &manifest.project.agents)?;
+    let expected = projection_input_hash(lock, &manifest.project.targets)?;
     if lock.projection_input_hash != expected {
         return Err(AruError::msg(
-            "aru.lock is stale for agent projection inputs; run aru sync",
+            "aru.lock is stale for target projection inputs; run aru sync",
         ));
     }
     Ok(())
@@ -723,7 +724,7 @@ mod tests {
         };
         let manifest = Manifest {
             project: crate::manifest::Project {
-                agents: vec![Agent::Codex],
+                targets: vec![Target::Codex],
             },
             skills: BTreeMap::from([(
                 repository.to_string_lossy().into_owned(),
@@ -830,7 +831,7 @@ mod tests {
         };
         let manifest = Manifest {
             project: crate::manifest::Project {
-                agents: vec![Agent::Codex],
+                targets: vec![Target::Codex],
             },
             skills: BTreeMap::from([(
                 repository.to_string_lossy().into_owned(),
@@ -904,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn package_hash_excludes_agents() {
+    fn package_hash_excludes_targets() {
         let source = GitSource {
             identity: "git+https://example.com/a.git".into(),
             fetch: "https://example.com/a.git".into(),
@@ -914,13 +915,13 @@ mod tests {
         sources.insert("source".into(), source);
         let mut manifest = Manifest {
             project: crate::manifest::Project {
-                agents: vec![Agent::Codex],
+                targets: vec![Target::Codex],
             },
             skills: BTreeMap::from([("source".into(), SkillRequirement::default())]),
             mcp: BTreeMap::new(),
         };
         let first = package_input_hash(&manifest, &sources).unwrap();
-        manifest.project.agents.push(Agent::ClaudeCode);
+        manifest.project.targets.push(Target::Claude);
         assert_eq!(first, package_input_hash(&manifest, &sources).unwrap());
 
         manifest.skills.get_mut("source").unwrap().include = vec!["zeta".into(), "alpha".into()];
@@ -930,10 +931,10 @@ mod tests {
     }
 
     #[test]
-    fn projection_hash_sorts_agent_set() {
+    fn projection_hash_sorts_target_set() {
         let lock = Lockfile::empty();
-        let forward = projection_input_hash(&lock, &[Agent::Codex, Agent::ClaudeCode]).unwrap();
-        let reverse = projection_input_hash(&lock, &[Agent::ClaudeCode, Agent::Codex]).unwrap();
+        let forward = projection_input_hash(&lock, &[Target::Codex, Target::Claude]).unwrap();
+        let reverse = projection_input_hash(&lock, &[Target::Claude, Target::Codex]).unwrap();
         assert_eq!(forward, reverse);
     }
 }

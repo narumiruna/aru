@@ -1,4 +1,3 @@
-pub mod agent;
 pub mod app;
 pub mod cache;
 pub mod cli;
@@ -13,6 +12,7 @@ pub mod resolver;
 pub mod skill;
 pub mod source;
 pub mod sync;
+pub mod target;
 pub mod transaction;
 
 pub use app::run;

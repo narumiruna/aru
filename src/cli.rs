@@ -2,10 +2,14 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand};
 
-use crate::manifest::Agent;
+use crate::manifest::Target;
 
 #[derive(Debug, Parser)]
-#[command(name = "aru", version, about = "Agent package and project manager")]
+#[command(
+    name = "aru",
+    version,
+    about = "Project manager for coding-agent skills and MCP servers"
+)]
 pub struct Cli {
     /// Project directory (defaults to the nearest ancestor containing aru.toml).
     #[arg(long, global = true, value_name = "PATH")]
@@ -20,7 +24,7 @@ pub enum Command {
     Init(InitArgs),
     /// Resolve aru.toml and update aru.lock without projecting files.
     Lock(LockArgs),
-    /// Reconcile the lock and all configured agent project paths.
+    /// Reconcile the lock and all configured target project paths.
     Sync(SyncArgs),
     /// Manage Agent Skills packages.
     Skill {
@@ -36,9 +40,9 @@ pub enum Command {
 
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Agent to configure; may be repeated.
-    #[arg(long, value_name = "AGENT", required = true, action = ArgAction::Append)]
-    pub agent: Vec<Agent>,
+    /// Target to configure; may be repeated.
+    #[arg(long, value_name = "TARGET", required = true, action = ArgAction::Append)]
+    pub target: Vec<Target>,
 }
 
 #[derive(Debug, Args)]
@@ -98,7 +102,7 @@ pub struct SkillAddArgs {
     /// Resolve the latest compatible tag or branch head instead of reusing the lock.
     #[arg(short = 'U', long)]
     pub upgrade: bool,
-    /// Update manifest and lock but skip agent project paths.
+    /// Update manifest and lock but skip target project paths.
     #[arg(long)]
     pub no_sync: bool,
     /// Print a deterministic plan without writing.

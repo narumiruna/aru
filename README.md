@@ -3,7 +3,7 @@
 > [!WARNING]
 > **Work in progress (WIP):** `aru` is under active development. Features, behavior, and file formats may change without notice.
 
-`aru` is a project-scoped package manager for coding-agent skills and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-agent projections, and `aru sync` safely reconciles Codex and Claude Code project paths.
+`aru` is a project-scoped package manager for coding-agent skills and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-target projections, and `aru sync` safely reconciles Codex and Claude Code project paths.
 
 ## Install
 
@@ -17,7 +17,7 @@ A system `git` executable is required. Git subprocesses use argument arrays and 
 ## Quick start
 
 ```console
-aru init --agent codex --agent claude-code
+aru init --target codex --target claude
 aru skill add narumiruna/skills
 # Use the searchable menu to select writing-plans, then lock replay is non-interactive.
 aru sync --locked
@@ -52,7 +52,7 @@ aru mcp update context
 aru mcp remove docs
 ```
 
-A Registry candidate must be unique after transport, package-registry, and all-agent capability filtering. aru never chooses the first API array item.
+A Registry candidate must be unique after transport, package-registry, and all-target capability filtering. aru never chooses the first API array item.
 
 ## Offline local example
 
@@ -70,7 +70,7 @@ git -C /tmp/aru-demo-source commit -qm initial
 git -C /tmp/aru-demo-source tag 1.0.0
 
 cd /tmp/aru-demo-project
-aru init --agent codex --agent claude-code
+aru init --target codex --target claude
 aru skill add /tmp/aru-demo-source --skill demo
 aru sync --locked
 aru skill update /tmp/aru-demo-source
@@ -90,8 +90,8 @@ write lockfile
 
 | Path | Commit? | Purpose |
 | --- | --- | --- |
-| `aru.toml` | Yes | Human-maintained requirements, selectors, and agent list |
-| `aru.lock` | Yes | Exact Git commits, content digests, MCP metadata/candidates, per-agent targets, and portable ownership baseline |
+| `aru.toml` | Yes | Human-maintained requirements, selectors, and target list |
+| `aru.lock` | Yes | Exact Git commits, content digests, MCP metadata/candidates, per-target projections, and portable ownership baseline |
 | `.agents/skills/<name>` | Optional | Canonical installed skill bytes; Codex reads this directly |
 | `.claude/skills/<name>` | Optional | Relative link to the canonical skill, or a verified copy where links are unavailable |
 | `.codex/config.toml` | Optional | Codex project MCP entries |
@@ -100,7 +100,7 @@ write lockfile
 | `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
 | `.aru/transaction.toml` | No | Crash-recovery journal, present only during an interrupted operation |
 
-`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated agent paths because teams may choose to commit them. During early development, `aru.toml` is intentionally unversioned and contains no schema field.
+`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated target paths because teams may choose to commit them. During early development, `aru.toml` is intentionally unversioned and contains no schema field.
 
 ### Manifest selection semantics
 
@@ -115,14 +115,14 @@ write lockfile
 
 ### Lock and sync modes
 
-- `aru lock` resolves and writes the lock without changing agent project paths.
+- `aru lock` resolves and writes the lock without changing target project paths.
 - `aru sync` reuses every compatible locked package, fills missing lock/projection data, and reconciles project paths.
-- `aru sync --locked` rejects a missing or stale lock, including incomplete per-agent MCP targets. It never changes the lock or advances a branch.
+- `aru sync --locked` rejects a missing or stale lock, including incomplete per-target MCP projections. It never changes the lock or advances a branch.
 - `--no-sync` on add/remove/update still resolves and transactionally updates `aru.toml` plus `aru.lock`; it only skips projections.
-- `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or agent paths.
+- `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
 - `--force` is destructive takeover of a colliding unmanaged key/path. The operation plan says `force replace`; a later remove does not restore the previous unmanaged value.
 
-Changing only `project.agents` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-agent target selections.
+Changing only `project.targets` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-target projections.
 
 ### Branch sources
 
@@ -136,7 +136,7 @@ aru skill update narumiruna/skills  # move the lock without changing selection
 
 The manifest records `branch = "main"`, while `aru.lock` records `requirement = "branch:main"` and the exact 40-hex commit shown in the selection preview. Normal `aru sync` and `aru sync --locked` keep that SHA. A force-push can make an older locked commit unreachable from a clean checkout; use immutable SemVer tags for published, long-lived, reproducible installations.
 
-## Agent capability matrix
+## Target capability matrix
 
 | Capability | Codex | Claude Code | aru v1 |
 | --- | --- | --- | --- |
@@ -149,7 +149,7 @@ The manifest records `branch = "main"`, while `aru.lock` records `requirement = 
 | Inline secret value | Representable in some host fields | Representable | Rejected |
 | OAuth credential storage | Host-managed | Host-managed | Not managed |
 
-See [`docs/spikes/2026-07-30_mcp-registry-agent-capabilities.md`](docs/spikes/2026-07-30_mcp-registry-agent-capabilities.md) for evidence and fail-closed decisions.
+See [`docs/spikes/2026-07-30_mcp-registry-target-capabilities.md`](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md) for evidence and fail-closed decisions.
 
 ## Safety model and limits
 

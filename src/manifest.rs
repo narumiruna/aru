@@ -10,29 +10,29 @@ pub const MANIFEST_FILE: &str = "aru.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Agent {
+pub enum Target {
     Codex,
-    ClaudeCode,
+    Claude,
 }
 
-impl std::fmt::Display for Agent {
+impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Codex => write!(f, "codex"),
-            Self::ClaudeCode => write!(f, "claude-code"),
+            Self::Claude => write!(f, "claude"),
         }
     }
 }
 
-impl std::str::FromStr for Agent {
+impl std::str::FromStr for Target {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
             "codex" => Ok(Self::Codex),
-            "claude-code" => Ok(Self::ClaudeCode),
+            "claude" => Ok(Self::Claude),
             _ => Err(format!(
-                "unknown agent {value:?}; expected codex or claude-code"
+                "unknown target {value:?}; expected codex or claude"
             )),
         }
     }
@@ -41,7 +41,7 @@ impl std::str::FromStr for Agent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Project {
     #[serde(default)]
-    pub agents: Vec<Agent>,
+    pub targets: Vec<Target>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -199,12 +199,12 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
-        if self.project.agents.is_empty() {
-            return Err(AruError::msg("project.agents must not be empty"));
+        if self.project.targets.is_empty() {
+            return Err(AruError::msg("project.targets must not be empty"));
         }
-        let unique: BTreeSet<_> = self.project.agents.iter().collect();
-        if unique.len() != self.project.agents.len() {
-            return Err(AruError::msg("project.agents contains duplicates"));
+        let unique: BTreeSet<_> = self.project.targets.iter().collect();
+        if unique.len() != self.project.targets.len() {
+            return Err(AruError::msg("project.targets contains duplicates"));
         }
         for (source, requirement) in &self.skills {
             requirement.validate(source)?;
@@ -244,10 +244,10 @@ impl ManifestDocument {
         Ok(this)
     }
 
-    pub fn new(agents: &[Agent]) -> Self {
+    pub fn new(targets: &[Target]) -> Self {
         let mut doc = DocumentMut::new();
         let mut project = Table::new();
-        project["agents"] = Item::Value(agent_array(agents).into());
+        project["targets"] = Item::Value(target_array(targets).into());
         doc["project"] = Item::Table(project);
         doc["skills"] = Item::Table(Table::new());
         doc["mcp"] = Item::Table(Table::new());
@@ -267,8 +267,8 @@ impl ManifestDocument {
         Ok(manifest)
     }
 
-    pub fn set_agents(&mut self, agents: &[Agent]) {
-        self.doc["project"]["agents"] = Item::Value(agent_array(agents).into());
+    pub fn set_targets(&mut self, targets: &[Target]) {
+        self.doc["project"]["targets"] = Item::Value(target_array(targets).into());
     }
 
     pub fn set_skill(&mut self, source: &str, requirement: &SkillRequirement) {
@@ -304,10 +304,10 @@ fn ensure_table(doc: &mut DocumentMut, key: &str) {
     }
 }
 
-fn agent_array(agents: &[Agent]) -> Array {
+fn target_array(targets: &[Target]) -> Array {
     let mut array = Array::new();
-    for agent in agents {
-        array.push(agent.to_string());
+    for target in targets {
+        array.push(target.to_string());
     }
     array
 }
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn mutation_preserves_unrelated_comments() {
-        let text = "# heading\nfuture = 1\n\n[project]\nagents = [\"codex\"] # keep\n\n[skills]\n# package note\n\"owner/repo\" = { include = [\"old\"] }\n\n[custom]\nanswer = 42\n";
+        let text = "# heading\nfuture = 1\n\n[project]\ntargets = [\"codex\"] # keep\n\n[skills]\n# package note\n\"owner/repo\" = { include = [\"old\"] }\n\n[custom]\nanswer = 42\n";
         let doc = text.parse::<DocumentMut>().unwrap();
         let mut document = ManifestDocument {
             path: PathBuf::from("aru.toml"),
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(document.bytes(), fixture.as_bytes());
         assert!(!fixture.contains("schema ="));
         assert!(
-            !String::from_utf8(ManifestDocument::new(&[Agent::Codex]).bytes())
+            !String::from_utf8(ManifestDocument::new(&[Target::Codex]).bytes())
                 .unwrap()
                 .contains("schema =")
         );
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn branch_mutation_preserves_comments_and_reference_kinds_are_exclusive() {
-        let text = "# keep\nfuture = 999\n\n[project]\nagents = [\"codex\"]\n\n[skills]\n";
+        let text = "# keep\nfuture = 999\n\n[project]\ntargets = [\"codex\"]\n\n[skills]\n";
         let mut document = ManifestDocument {
             path: PathBuf::from("aru.toml"),
             doc: text.parse().unwrap(),
@@ -516,7 +516,7 @@ mod tests {
             doc: fixture.parse().unwrap(),
         };
         let manifest = document.manifest().unwrap();
-        assert_eq!(manifest.project.agents.len(), 2);
+        assert_eq!(manifest.project.targets.len(), 2);
         assert_eq!(
             manifest.skills["owner/repository"].paths["writing-plans"],
             "skills/writing-plans"

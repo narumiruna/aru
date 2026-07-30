@@ -6,11 +6,11 @@ use serde_json::{Map, Value, json};
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
 use crate::lockfile::McpTarget;
-use crate::manifest::Agent;
+use crate::manifest::Target;
 
 pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
-    match (target.agent, target.transport.as_str()) {
-        (Agent::Codex, "stdio") => {
+    match (target.target, target.transport.as_str()) {
+        (Target::Codex, "stdio") => {
             let mut map = Map::new();
             map.insert("command".into(), json!(target.command));
             map.insert("args".into(), json!(target.args));
@@ -19,7 +19,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             }
             Ok(Value::Object(map))
         }
-        (Agent::Codex, "streamable-http") => {
+        (Target::Codex, "streamable-http") => {
             let mut map = Map::new();
             map.insert("url".into(), json!(target.url));
             if let Some(env) = &target.bearer_token_env {
@@ -30,7 +30,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             }
             Ok(Value::Object(map))
         }
-        (Agent::ClaudeCode, "stdio") => {
+        (Target::Claude, "stdio") => {
             let mut map = Map::new();
             map.insert("type".into(), json!("stdio"));
             map.insert("command".into(), json!(target.command));
@@ -45,7 +45,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             }
             Ok(Value::Object(map))
         }
-        (Agent::ClaudeCode, "streamable-http") => {
+        (Target::Claude, "streamable-http") => {
             let mut map = Map::new();
             map.insert("type".into(), json!("http"));
             map.insert("url".into(), json!(target.url));
@@ -64,7 +64,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
         }
         (_, transport) => Err(AruError::msg(format!(
             "unsupported MCP transport {transport:?} for {}",
-            target.agent
+            target.target
         ))),
     }
 }

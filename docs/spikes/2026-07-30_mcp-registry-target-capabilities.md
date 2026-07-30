@@ -1,4 +1,4 @@
-# MCP Registry and Agent Capability Spike
+# MCP Registry and Target Capability Spike
 
 Date: 2026-07-30
 
@@ -35,7 +35,7 @@ The local OpenAPI contract additionally establishes:
 
 Fixtures under `tests/fixtures/registry/` cover pagination, active/deprecated and SemVer/non-SemVer records, npm package metadata, remote bearer references, and ambiguous candidates.
 
-## Agent capability observations
+## Target capability observations
 
 | Capability | Codex project `.codex/config.toml` | Claude Code project `.mcp.json` | aru v1 |
 | --- | --- | --- | --- |
@@ -56,11 +56,11 @@ Evidence:
 
 ### Fail-closed boundary
 
-An adapter first renders a pure semantic entry. If any selected agent cannot represent the transport or secret environment reference without embedding a value or invoking a shell, resolution fails before transaction staging. Registry commands and arguments remain arrays; aru never invokes MCP package commands itself.
+An adapter first renders a pure semantic entry. If any selected target cannot represent the transport or secret environment reference without embedding a value or invoking a shell, resolution fails before transaction staging. Registry commands and arguments remain arrays; aru never invokes MCP package commands itself.
 
 ## Implementation consequences
 
 - Capability schema version is locked as `1`; changing this matrix invalidates `projection-input-hash` without invalidating package requirements.
-- Existing package versions remain preferred. Adding an agent only rebuilds per-agent target selections.
+- Existing package versions remain preferred. Adding a target only rebuilds target-specific projections.
 - Registry transport selection is deterministic and independent of response ordering.
 - Tests use fixtures and temporary Git repositories; ordinary tests do not require the live registry.

@@ -13,7 +13,7 @@ use crate::interactive::{
     terminal_selection_mode,
 };
 use crate::lockfile::Lockfile;
-use crate::manifest::{Agent, ManifestDocument, McpRequirement, SkillRequirement, validate_name};
+use crate::manifest::{ManifestDocument, McpRequirement, SkillRequirement, Target, validate_name};
 use crate::resolver::{SkillResolutionHint, canonical_update_skill_targets, inspect_skill_source};
 use crate::sync::{SyncOptions, garbage_collect, prepare};
 use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
@@ -21,7 +21,7 @@ use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Init(args) => init(project_for_init(cli.project)?, args.agent),
+        Command::Init(args) => init(project_for_init(cli.project)?, args.target),
         Command::Lock(args) => {
             let project = discover_project(cli.project)?;
             lock(&project, args)
@@ -49,21 +49,21 @@ pub fn run() -> Result<()> {
     }
 }
 
-fn init(project: PathBuf, mut agents: Vec<Agent>) -> Result<()> {
+fn init(project: PathBuf, mut targets: Vec<Target>) -> Result<()> {
     if project.join(crate::manifest::MANIFEST_FILE).exists() {
         return Err(AruError::msg("aru.toml already exists"));
     }
-    agents.sort();
-    agents.dedup();
-    if agents.is_empty() {
-        return Err(AruError::msg("aru init requires at least one --agent"));
+    targets.sort();
+    targets.dedup();
+    if targets.is_empty() {
+        return Err(AruError::msg("aru init requires at least one --target"));
     }
     let _lock = ProjectLock::acquire(&project)?;
     recover_if_needed(&project)?;
     if project.join(crate::manifest::MANIFEST_FILE).exists() {
         return Err(AruError::msg("aru.toml already exists"));
     }
-    let manifest = ManifestDocument::new(&agents);
+    let manifest = ManifestDocument::new(&targets);
     manifest.manifest()?;
     let mut operations = vec![Operation::file(
         crate::manifest::MANIFEST_FILE,
@@ -86,7 +86,7 @@ fn init(project: PathBuf, mut agents: Vec<Agent>) -> Result<()> {
     apply(&project, operations)?;
     println!(
         "initialized aru project for {}",
-        agents
+        targets
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

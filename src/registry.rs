@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
 use crate::lockfile::LockedMcpPackage;
-use crate::manifest::{Agent, McpRequirement, validate_https_url};
+use crate::manifest::{McpRequirement, Target, validate_https_url};
 
 pub const DEFAULT_REGISTRY: &str = "https://registry.modelcontextprotocol.io";
 pub const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
@@ -167,7 +167,7 @@ impl RegistryClient {
     pub fn resolve(
         &self,
         requirement: &McpRequirement,
-        agents: &[Agent],
+        targets: &[Target],
     ) -> Result<RegistryResolution> {
         let registry = requirement.registry.as_deref().unwrap_or(DEFAULT_REGISTRY);
         validate_https_url(registry, "registry URL")?;
@@ -190,7 +190,7 @@ impl RegistryClient {
                 response.server.version
             )));
         }
-        let candidates = candidates(&response.server, requirement, agents)?;
+        let candidates = candidates(&response.server, requirement, targets)?;
         if candidates.len() != 1 {
             let options = candidates
                 .iter()
@@ -204,7 +204,7 @@ impl RegistryClient {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(AruError::msg(if candidates.is_empty() {
-                "no MCP candidate satisfies the selectors and all agent capabilities".to_owned()
+                "no MCP candidate satisfies the selectors and all target capabilities".to_owned()
             } else {
                 format!(
                     "MCP candidate is ambiguous; choose --transport and/or --package-registry from: {options}"
@@ -341,7 +341,7 @@ fn decode_response<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
 fn candidates(
     server: &ServerDetail,
     requirement: &McpRequirement,
-    agents: &[Agent],
+    targets: &[Target],
 ) -> Result<Vec<ResolvedCandidate>> {
     let mut output = Vec::new();
     for package in &server.packages {
@@ -357,7 +357,7 @@ fn candidates(
             continue;
         }
         if let Ok(candidate) = package_candidate(package, &server.version)
-            && agents.iter().all(|agent| supports(agent, &candidate))
+            && targets.iter().all(|target| supports(target, &candidate))
         {
             output.push(candidate);
         }
@@ -372,7 +372,7 @@ fn candidates(
             continue;
         }
         if let Ok(candidate) = remote_candidate(remote)
-            && agents.iter().all(|agent| supports(agent, &candidate))
+            && targets.iter().all(|target| supports(target, &candidate))
         {
             output.push(candidate);
         }
@@ -470,7 +470,7 @@ fn remote_candidate(remote: &RegistryRemote) -> Result<ResolvedCandidate> {
             env_http_headers.insert(header.name.clone(), variable.to_owned());
         } else {
             return Err(AruError::msg(
-                "header prefix cannot be represented safely by every agent",
+                "header prefix cannot be represented safely by every target",
             ));
         }
     }
@@ -544,10 +544,10 @@ fn append_argument(output: &mut Vec<String>, input: &InputArgument) -> Result<()
     Ok(())
 }
 
-pub fn supports(agent: &Agent, candidate: &ResolvedCandidate) -> bool {
-    match (agent, candidate.transport.as_str()) {
-        (Agent::Codex | Agent::ClaudeCode, "stdio") => candidate.command.is_some(),
-        (Agent::Codex | Agent::ClaudeCode, "streamable-http") => candidate.url.is_some(),
+pub fn supports(target: &Target, candidate: &ResolvedCandidate) -> bool {
+    match (target, candidate.transport.as_str()) {
+        (Target::Codex | Target::Claude, "stdio") => candidate.command.is_some(),
+        (Target::Codex | Target::Claude, "streamable-http") => candidate.url.is_some(),
         _ => false,
     }
 }
@@ -593,7 +593,7 @@ mod tests {
             url: None,
             bearer_token_env: None,
         };
-        let found = candidates(&server, &requirement, &[Agent::Codex]).unwrap();
+        let found = candidates(&server, &requirement, &[Target::Codex]).unwrap();
         assert_eq!(found.len(), 2);
         assert!(
             found[0].package.as_ref().unwrap().identifier
@@ -627,7 +627,7 @@ mod tests {
             bearer_token_env: None,
         };
         assert!(
-            candidates(&server, &requirement, &[Agent::Codex, Agent::ClaudeCode])
+            candidates(&server, &requirement, &[Target::Codex, Target::Claude])
                 .unwrap()
                 .is_empty()
         );
@@ -670,10 +670,10 @@ mod tests {
             url: None,
             bearer_token_env: None,
         };
-        let forward = candidates(&response.server, &requirement, &[Agent::Codex]).unwrap();
+        let forward = candidates(&response.server, &requirement, &[Target::Codex]).unwrap();
         let mut reversed_server = response.server;
         reversed_server.packages.reverse();
-        let reversed = candidates(&reversed_server, &requirement, &[Agent::Codex]).unwrap();
+        let reversed = candidates(&reversed_server, &requirement, &[Target::Codex]).unwrap();
         assert_eq!(forward, reversed);
         assert_eq!(forward.len(), 2);
     }

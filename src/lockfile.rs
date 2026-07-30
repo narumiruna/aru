@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, IoContext, Result};
-use crate::manifest::Agent;
+use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
 pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 1;
@@ -40,7 +40,7 @@ pub struct LockedMcpPackage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub struct McpTarget {
-    pub agent: Agent,
+    pub target: Target,
     pub kind: String,
     pub transport: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,7 +75,7 @@ pub struct McpServer {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub struct ProjectionBaseline {
-    pub agent: Agent,
+    pub target: Target,
     pub kind: String,
     pub key: String,
     pub sha256: String,
@@ -164,9 +164,9 @@ impl Lockfile {
             if !mcp_names.insert(&server.name) {
                 return Err(AruError::msg("aru.lock contains duplicate MCP name"));
             }
-            let mut agents = BTreeSet::new();
+            let mut targets = BTreeSet::new();
             for target in &server.targets {
-                if !agents.insert(target.agent) {
+                if !targets.insert(target.target) {
                     return Err(AruError::msg(format!(
                         "aru.lock contains duplicate target for MCP {:?}",
                         server.name
@@ -188,7 +188,7 @@ impl Lockfile {
         self.mcp_servers
             .sort_by(|left, right| left.name.cmp(&right.name));
         for server in &mut self.mcp_servers {
-            server.targets.sort_by_key(|target| target.agent);
+            server.targets.sort_by_key(|target| target.target);
         }
         self.projection_baselines.sort();
     }
@@ -230,13 +230,13 @@ mod tests {
         left.projection_input_hash = "sha256:b".into();
         left.projection_baselines = vec![
             ProjectionBaseline {
-                agent: Agent::ClaudeCode,
+                target: Target::Claude,
                 kind: "skill".into(),
                 key: "z".into(),
                 sha256: "sha256:z".into(),
             },
             ProjectionBaseline {
-                agent: Agent::Codex,
+                target: Target::Codex,
                 kind: "skill".into(),
                 key: "a".into(),
                 sha256: "sha256:a".into(),

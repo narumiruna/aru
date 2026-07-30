@@ -84,7 +84,7 @@ fn interactive_cancel_keeps_project_files_unchanged() {
     let source = temporary.path().join("source");
     std::fs::create_dir(&project).unwrap();
     repository(&source);
-    init(project.clone(), vec![Agent::Codex]).unwrap();
+    init(project.clone(), vec![Target::Codex]).unwrap();
     let before = std::fs::read(project.join("aru.toml")).unwrap();
     let mut chooser = FakeChooser::default();
 
@@ -109,7 +109,7 @@ fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
     let source = temporary.path().join("source");
     std::fs::create_dir(&project).unwrap();
     repository(&source);
-    init(project.clone(), vec![Agent::Codex]).unwrap();
+    init(project.clone(), vec![Target::Codex]).unwrap();
 
     let mut first = FakeChooser {
         response: Some(vec!["alpha".into()]),
@@ -207,7 +207,7 @@ fn interactive_selection_preserves_or_removes_custom_path_with_its_skill() {
     let source = temporary.path().join("source");
     std::fs::create_dir(&project).unwrap();
     repository(&source);
-    init(project.clone(), vec![Agent::Codex]).unwrap();
+    init(project.clone(), vec![Target::Codex]).unwrap();
     let mut path_args = add_args(&source);
     path_args.path = Some("extras/custom".into());
     path_args.version = None;
@@ -267,7 +267,7 @@ fn interactive_upgrade_previews_and_installs_the_new_release() {
     let source = temporary.path().join("source");
     std::fs::create_dir(&project).unwrap();
     repository(&source);
-    init(project.clone(), vec![Agent::Codex]).unwrap();
+    init(project.clone(), vec![Target::Codex]).unwrap();
 
     let mut initial_args = add_args(&source);
     initial_args.version = None;
@@ -322,7 +322,7 @@ fn interactive_commit_rejects_a_concurrent_manifest_change() {
     let source = temporary.path().join("source");
     std::fs::create_dir(&project).unwrap();
     repository(&source);
-    init(project.clone(), vec![Agent::Codex]).unwrap();
+    init(project.clone(), vec![Target::Codex]).unwrap();
     let manifest_path = project.join("aru.toml");
     let mut chooser = FakeChooser {
         response: Some(vec!["alpha".into()]),

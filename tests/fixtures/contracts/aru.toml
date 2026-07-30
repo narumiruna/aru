@@ -1,6 +1,6 @@
 # User comment must survive targeted edits.
 [project]
-agents = ["codex", "claude-code"]
+targets = ["codex", "claude"]
 
 [skills]
 "owner/repository" = { version = "0.5.0", include = ["writing-plans"], exclude = [

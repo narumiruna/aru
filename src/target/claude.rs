@@ -2,10 +2,10 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::agent::normalized_entry;
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::McpTarget;
+use crate::target::normalized_entry;
 
 pub const CONFIG_PATH: &str = ".mcp.json";
 
@@ -83,7 +83,7 @@ impl ClaudeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::Agent;
+    use crate::manifest::Target;
 
     #[test]
     fn merge_preserves_unrelated_keys() {
@@ -98,7 +98,7 @@ mod tests {
             .set(
                 "managed",
                 &McpTarget {
-                    agent: Agent::ClaudeCode,
+                    target: Target::Claude,
                     kind: "package".into(),
                     transport: "stdio".into(),
                     command: Some("npx".into()),

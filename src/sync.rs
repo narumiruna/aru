@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::agent::{self, claude::ClaudeConfig, codex::CodexConfig};
 use crate::cache::Cache;
 use crate::digest::sha256_bytes;
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::{LOCK_FILE, Lockfile};
-use crate::manifest::{Agent, Manifest};
+use crate::manifest::{Manifest, Target};
 use crate::ownership::{OwnershipAction, STATE_FILE, State, StateEntry, reconcile};
 use crate::resolver::{ResolveOptions, SkillResolutionHint, resolve};
 use crate::skill::canonical_skill_digest;
+use crate::target::{self as target_adapter, claude::ClaudeConfig, codex::CodexConfig};
 use crate::transaction::{Operation, path_digest};
 
 pub struct SyncOptions<'a> {
@@ -114,7 +114,7 @@ fn prepare_projections(
                 project,
                 lock,
                 &state_map,
-                Agent::Codex,
+                Target::Codex,
                 &skill.name,
                 &skill.sha256,
                 source,
@@ -128,7 +128,7 @@ fn prepare_projections(
                 &mut next_state,
                 &mut processed,
             )?;
-            if manifest.project.agents.contains(&Agent::ClaudeCode) {
+            if manifest.project.targets.contains(&Target::Claude) {
                 let destination = PathBuf::from(format!(".claude/skills/{}", skill.name));
                 if supports_project_symlink() {
                     let target = PathBuf::from(format!("../../.agents/skills/{}", skill.name));
@@ -136,7 +136,7 @@ fn prepare_projections(
                         project,
                         lock,
                         &state_map,
-                        Agent::ClaudeCode,
+                        Target::Claude,
                         &skill.name,
                         &skill.sha256,
                         source,
@@ -155,7 +155,7 @@ fn prepare_projections(
                         project,
                         lock,
                         &state_map,
-                        Agent::ClaudeCode,
+                        Target::Claude,
                         &skill.name,
                         &skill.sha256,
                         source,
@@ -247,7 +247,7 @@ fn prepare_skill_entry(
     project: &Path,
     lock: &Lockfile,
     state_map: &BTreeMap<(String, String, String), &StateEntry>,
-    agent: Agent,
+    target: Target,
     name: &str,
     desired_digest: &str,
     source: &Path,
@@ -268,7 +268,7 @@ fn prepare_skill_entry(
         .projection_baselines
         .iter()
         .find(|baseline| {
-            baseline.agent == agent && baseline.kind == "skill" && baseline.key == name
+            baseline.target == target && baseline.kind == "skill" && baseline.key == name
         })
         .or_else(|| {
             lock.projection_baselines
@@ -338,13 +338,13 @@ fn prepare_mcp(
     next_state: &mut Vec<StateEntry>,
     processed: &mut BTreeSet<(String, String, String)>,
 ) -> Result<()> {
-    let needs_codex = manifest.project.agents.contains(&Agent::Codex)
+    let needs_codex = manifest.project.targets.contains(&Target::Codex)
         || state.entries.iter().any(|entry| {
-            entry.kind == "mcp" && entry.destination == crate::agent::codex::CONFIG_PATH
+            entry.kind == "mcp" && entry.destination == crate::target::codex::CONFIG_PATH
         });
-    let needs_claude = manifest.project.agents.contains(&Agent::ClaudeCode)
+    let needs_claude = manifest.project.targets.contains(&Target::Claude)
         || state.entries.iter().any(|entry| {
-            entry.kind == "mcp" && entry.destination == crate::agent::claude::CONFIG_PATH
+            entry.kind == "mcp" && entry.destination == crate::target::claude::CONFIG_PATH
         });
     let mut codex = needs_codex
         .then(|| CodexConfig::load(project))
@@ -357,25 +357,25 @@ fn prepare_mcp(
 
     for server in &lock.mcp_servers {
         for target in &server.targets {
-            let destination = match target.agent {
-                Agent::Codex => crate::agent::codex::CONFIG_PATH,
-                Agent::ClaudeCode => crate::agent::claude::CONFIG_PATH,
+            let destination = match target.target {
+                Target::Codex => crate::target::codex::CONFIG_PATH,
+                Target::Claude => crate::target::claude::CONFIG_PATH,
             };
             let identity = ("mcp".into(), server.name.clone(), destination.into());
             let owned = state_map.get(&identity).copied();
-            let desired = agent::entry_digest(target)?;
+            let desired = target_adapter::entry_digest(target)?;
             let baseline = lock
                 .projection_baselines
                 .iter()
                 .find(|baseline| {
-                    baseline.agent == target.agent
+                    baseline.target == target.target
                         && baseline.kind == "mcp"
                         && baseline.key == server.name
                 })
                 .map(|baseline| baseline.sha256.as_str());
-            let current = match target.agent {
-                Agent::Codex => codex.as_ref().unwrap().digest(&server.name)?,
-                Agent::ClaudeCode => claude.as_ref().unwrap().digest(&server.name)?,
+            let current = match target.target {
+                Target::Codex => codex.as_ref().unwrap().digest(&server.name)?,
+                Target::Claude => claude.as_ref().unwrap().digest(&server.name)?,
             };
             let action = reconcile(
                 &server.name,
@@ -387,12 +387,12 @@ fn prepare_mcp(
             )?;
             match action {
                 OwnershipAction::Create | OwnershipAction::Update => {
-                    match target.agent {
-                        Agent::Codex => {
+                    match target.target {
+                        Target::Codex => {
                             codex.as_mut().unwrap().set(&server.name, target)?;
                             codex_changed = true;
                         }
-                        Agent::ClaudeCode => {
+                        Target::Claude => {
                             claude.as_mut().unwrap().set(&server.name, target)?;
                             claude_changed = true;
                         }
@@ -430,8 +430,8 @@ fn prepare_mcp(
             continue;
         }
         let current = match entry.destination.as_str() {
-            crate::agent::codex::CONFIG_PATH => codex.as_ref().unwrap().digest(&entry.key)?,
-            crate::agent::claude::CONFIG_PATH => claude.as_ref().unwrap().digest(&entry.key)?,
+            crate::target::codex::CONFIG_PATH => codex.as_ref().unwrap().digest(&entry.key)?,
+            crate::target::claude::CONFIG_PATH => claude.as_ref().unwrap().digest(&entry.key)?,
             _ => {
                 next_state.push(entry.clone());
                 processed.insert(identity);
@@ -448,11 +448,11 @@ fn prepare_mcp(
         )? {
             OwnershipAction::Remove => {
                 match entry.destination.as_str() {
-                    crate::agent::codex::CONFIG_PATH => {
+                    crate::target::codex::CONFIG_PATH => {
                         codex.as_mut().unwrap().remove(&entry.key);
                         codex_changed = true;
                     }
-                    crate::agent::claude::CONFIG_PATH => {
+                    crate::target::claude::CONFIG_PATH => {
                         claude.as_mut().unwrap().remove(&entry.key);
                         claude_changed = true;
                     }
@@ -470,13 +470,13 @@ fn prepare_mcp(
 
     if codex_changed {
         operations.push(Operation::file(
-            crate::agent::codex::CONFIG_PATH,
+            crate::target::codex::CONFIG_PATH,
             codex.unwrap().bytes(),
         ));
     }
     if claude_changed {
         operations.push(Operation::file(
-            crate::agent::claude::CONFIG_PATH,
+            crate::target::claude::CONFIG_PATH,
             claude.unwrap().bytes()?,
         ));
     }
