@@ -1,5 +1,8 @@
 # aru
 
+> [!WARNING]
+> **Work in progress (WIP):** `aru` is under active development. Features, behavior, and file formats may change without notice.
+
 `aru` is a project-scoped package manager for coding-agent skills and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-agent projections, and `aru sync` safely reconciles Codex and Claude Code project paths.
 
 ## Install
