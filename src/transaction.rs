@@ -610,8 +610,33 @@ fn relative_string(project: &Path, path: &Path) -> Result<String> {
         .ok_or_else(|| AruError::msg("transaction path is not UTF-8"))
 }
 
+#[cfg(not(test))]
+fn failure_phase(_variable: &str) -> Option<usize> {
+    None
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FAIL_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static TEST_CRASH_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
 fn failure_phase(variable: &str) -> Option<usize> {
-    std::env::var(variable).ok()?.parse().ok()
+    match variable {
+        "ARU_TEST_FAIL_AFTER" => TEST_FAIL_AFTER.get(),
+        "ARU_TEST_CRASH_AFTER" => TEST_CRASH_AFTER.get(),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+fn set_failure_phase(variable: &str, phase: Option<usize>) {
+    match variable {
+        "ARU_TEST_FAIL_AFTER" => TEST_FAIL_AFTER.set(phase),
+        "ARU_TEST_CRASH_AFTER" => TEST_CRASH_AFTER.set(phase),
+        _ => panic!("unknown transaction test failure variable"),
+    }
 }
 
 fn unique_suffix() -> String {
@@ -654,9 +679,6 @@ fn sync_parent(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn failed_post_copy_verification_leaves_no_stage_or_destination() {
@@ -692,14 +714,12 @@ mod tests {
 
     #[test]
     fn failed_phase_rolls_back_all_destinations() {
-        let _serial = ENV_LOCK.lock().unwrap();
         for phase in 1..=3 {
             let project = tempfile::tempdir().unwrap();
             for name in ["a", "b", "c"] {
                 std::fs::write(project.path().join(name), format!("old-{name}")).unwrap();
             }
-            // SAFETY: these serialized tests are the only code reading this test variable.
-            unsafe { std::env::set_var("ARU_TEST_FAIL_AFTER", phase.to_string()) };
+            set_failure_phase("ARU_TEST_FAIL_AFTER", Some(phase));
             let result = apply(
                 project.path(),
                 ["a", "b", "c"]
@@ -707,7 +727,7 @@ mod tests {
                     .map(|name| Operation::file(name, format!("new-{name}").into_bytes()))
                     .collect(),
             );
-            unsafe { std::env::remove_var("ARU_TEST_FAIL_AFTER") };
+            set_failure_phase("ARU_TEST_FAIL_AFTER", None);
             assert!(result.is_err());
             for name in ["a", "b", "c"] {
                 assert_eq!(
@@ -722,7 +742,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn mixed_file_directory_and_symlink_transaction_rolls_back() {
-        let _serial = ENV_LOCK.lock().unwrap();
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("config"), "old-config").unwrap();
         let old_skill = project.path().join("skill");
@@ -737,7 +756,7 @@ mod tests {
         )
         .unwrap();
         let digest = crate::skill::canonical_skill_digest(&source).unwrap();
-        unsafe { std::env::set_var("ARU_TEST_FAIL_AFTER", "3") };
+        set_failure_phase("ARU_TEST_FAIL_AFTER", Some(3));
         let result = apply(
             project.path(),
             vec![
@@ -746,7 +765,7 @@ mod tests {
                 Operation::symlink("link", "new-target"),
             ],
         );
-        unsafe { std::env::remove_var("ARU_TEST_FAIL_AFTER") };
+        set_failure_phase("ARU_TEST_FAIL_AFTER", None);
         assert!(result.is_err());
         assert_eq!(
             std::fs::read(project.path().join("config")).unwrap(),
@@ -764,13 +783,12 @@ mod tests {
 
     #[test]
     fn every_crash_phase_is_recovered_on_next_invocation() {
-        let _serial = ENV_LOCK.lock().unwrap();
         for phase in 1..=3 {
             let project = tempfile::tempdir().unwrap();
             for name in ["a", "b", "c"] {
                 std::fs::write(project.path().join(name), format!("old-{name}")).unwrap();
             }
-            unsafe { std::env::set_var("ARU_TEST_CRASH_AFTER", phase.to_string()) };
+            set_failure_phase("ARU_TEST_CRASH_AFTER", Some(phase));
             let result = apply(
                 project.path(),
                 ["a", "b", "c"]
@@ -778,7 +796,7 @@ mod tests {
                     .map(|name| Operation::file(name, format!("new-{name}").into_bytes()))
                     .collect(),
             );
-            unsafe { std::env::remove_var("ARU_TEST_CRASH_AFTER") };
+            set_failure_phase("ARU_TEST_CRASH_AFTER", None);
             assert!(result.is_err());
             assert!(recover_if_needed(project.path()).unwrap());
             for name in ["a", "b", "c"] {
@@ -792,12 +810,11 @@ mod tests {
 
     #[test]
     fn recovery_stops_on_unknown_manual_content() {
-        let _serial = ENV_LOCK.lock().unwrap();
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("a"), "old").unwrap();
-        unsafe { std::env::set_var("ARU_TEST_CRASH_AFTER", "1") };
+        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
         assert!(apply(project.path(), vec![Operation::file("a", b"new".to_vec())]).is_err());
-        unsafe { std::env::remove_var("ARU_TEST_CRASH_AFTER") };
+        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
         std::fs::write(project.path().join("a"), "manual").unwrap();
         assert!(recover_if_needed(project.path()).is_err());
         assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"manual");
