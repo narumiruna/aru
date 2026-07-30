@@ -1,9 +1,11 @@
-schema = 1
-
 [project]
 agents = ["codex"]
 
 [skills]
-"narumiruna/skills" = { include = ["writing-agents-md", "writing-git-commits", "writing-plans"], exclude = [] }
+"narumiruna/skills" = { include = [
+  "writing-agents-md",
+  "writing-git-commits",
+  "writing-plans"
+], exclude = [] }
 
 [mcp]
