@@ -95,6 +95,9 @@ pub struct SkillAddArgs {
     /// Exact Git commit (7-40 hexadecimal characters).
     #[arg(long)]
     pub rev: Option<String>,
+    /// Resolve the latest compatible tag or branch head instead of reusing the lock.
+    #[arg(short = 'U', long)]
+    pub upgrade: bool,
     /// Update manifest and lock but skip agent project paths.
     #[arg(long)]
     pub no_sync: bool,

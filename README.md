@@ -34,12 +34,13 @@ aru skill add owner/repository                 # interactive menu
 aru skill add owner/repository --all           # non-interactive wildcard
 aru skill add owner/repository -a              # short form
 aru skill add owner/repository --skill review --skill applying-tdd
+aru skill add owner/repository --skill review --upgrade
 aru skill add owner/repository --path extras/review
 aru skill add owner/repository --branch main       # opt in to a moving branch
 aru skill add ssh://git@example.com/team/skills.git --rev 67cd354 --skill review
 ```
 
-`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. Use `--branch main` to explicitly track a moving branch, or `--rev <SHA>` for an immutable commit. `--version`, `--branch`, and `--rev` are mutually exclusive; omitting all three continues to select the latest matching SemVer tag, never the default branch. Source positionals never contain a path selector or reference, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
+`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. Use `--branch main` to explicitly track a moving branch, or `--rev <SHA>` for an immutable commit. `--version`, `--branch`, and `--rev` are mutually exclusive; omitting all three continues to select the latest matching SemVer tag, never the default branch. `--upgrade` / `-U` makes add re-resolve this source instead of reusing its lock: a new source installs normally, an existing SemVer source selects the latest matching tag, a branch selects its current head, and an exact revision remains fixed. Source positionals never contain a path selector or reference, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
 
 Add a Registry package or a direct remote MCP server:
 
@@ -129,7 +130,8 @@ Branch tracking is an explicit development-mode opt-in:
 
 ```console
 aru skill add narumiruna/skills --branch main
-aru skill update narumiruna/skills  # move the lock to the current branch head
+aru skill add narumiruna/skills -U  # select again and move to the current head
+aru skill update narumiruna/skills  # move the lock without changing selection
 ```
 
 The manifest records `branch = "main"`, while `aru.lock` records `requirement = "branch:main"` and the exact 40-hex commit shown in the selection preview. Normal `aru sync` and `aru sync --locked` keep that SHA. A force-push can make an older locked commit unreachable from a clean checkout; use immutable SemVer tags for published, long-lived, reproducible installations.

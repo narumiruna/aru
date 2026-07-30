@@ -158,8 +158,17 @@ fn skill_add_with_mode(
         (snapshot, key, requirement, existing, previous)
     };
 
-    let inspection =
-        inspect_skill_source(project, &key, &requirement, previous.as_ref(), args.dry_run)?;
+    let inspection = inspect_skill_source(
+        project,
+        &key,
+        &requirement,
+        if args.upgrade {
+            None
+        } else {
+            previous.as_ref()
+        },
+        args.dry_run,
+    )?;
     let names = inspection
         .candidates
         .iter()
@@ -214,6 +223,7 @@ fn skill_add_with_mode(
     document.set_skill(&key, &selected_requirement);
     let manifest = document.manifest()?;
     let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
+    let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
     execute_with_skill_hints(
         project,
         &manifest,
@@ -222,7 +232,7 @@ fn skill_add_with_mode(
         false,
         !args.no_sync,
         args.force,
-        BTreeSet::new(),
+        updates,
         BTreeSet::new(),
         &hints,
     )
@@ -266,6 +276,7 @@ fn skill_add_explicit(
     requirement.validate(&key)?;
     document.set_skill(&key, &requirement);
     let manifest = document.manifest()?;
+    let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
     execute(
         project,
         &manifest,
@@ -274,9 +285,22 @@ fn skill_add_explicit(
         false,
         !args.no_sync,
         args.force,
-        BTreeSet::new(),
+        updates,
         BTreeSet::new(),
     )
+}
+
+fn skill_add_update_targets(
+    project: &Path,
+    manifest: &crate::manifest::Manifest,
+    key: &str,
+    upgrade: bool,
+) -> Result<BTreeSet<String>> {
+    if upgrade {
+        canonical_update_skill_targets(project, manifest, &[key.to_owned()])
+    } else {
+        Ok(BTreeSet::new())
+    }
 }
 
 fn skill_add_base_requirement(
@@ -635,297 +659,4 @@ fn project_for_init(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::process::Command;
-
-    use super::*;
-    use crate::interactive::{SkillAddSelectionMode, SkillChooser};
-
-    fn git(repository: &Path, arguments: &[&str]) {
-        assert!(
-            Command::new("git")
-                .current_dir(repository)
-                .args(arguments)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-
-    fn repository(path: &Path) {
-        std::fs::create_dir(path).unwrap();
-        git(path, &["init", "--quiet"]);
-        git(path, &["config", "user.email", "test@example.com"]);
-        git(path, &["config", "user.name", "Test"]);
-        for name in ["alpha", "beta"] {
-            let skill = path.join("skills").join(name);
-            std::fs::create_dir_all(&skill).unwrap();
-            std::fs::write(
-                skill.join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: Test\n---\n# Test\n"),
-            )
-            .unwrap();
-        }
-        let custom = path.join("extras/custom");
-        std::fs::create_dir_all(&custom).unwrap();
-        std::fs::write(
-            custom.join("SKILL.md"),
-            "---\nname: custom\ndescription: Test\n---\n# Test\n",
-        )
-        .unwrap();
-        git(path, &["add", "."]);
-        git(path, &["commit", "--quiet", "-m", "initial"]);
-        git(path, &["tag", "1.0.0"]);
-    }
-
-    #[derive(Default)]
-    struct FakeChooser {
-        response: Option<Vec<String>>,
-        mutate: Option<PathBuf>,
-        seen_defaults: Vec<String>,
-    }
-
-    impl SkillChooser for FakeChooser {
-        fn choose(&mut self, names: &[String], defaults: &[usize]) -> Result<Option<Vec<String>>> {
-            self.seen_defaults = defaults.iter().map(|index| names[*index].clone()).collect();
-            if let Some(path) = &self.mutate {
-                let mut manifest = std::fs::read_to_string(path).unwrap();
-                manifest.push_str("\n# concurrent edit\n");
-                std::fs::write(path, manifest).unwrap();
-            }
-            Ok(self.response.take())
-        }
-    }
-
-    fn add_args(source: &Path) -> SkillAddArgs {
-        SkillAddArgs {
-            source: source.to_string_lossy().into_owned(),
-            all: false,
-            skills: Vec::new(),
-            path: None,
-            version: Some("=1.0.0".into()),
-            branch: None,
-            rev: None,
-            no_sync: false,
-            dry_run: false,
-            force: false,
-        }
-    }
-
-    #[test]
-    fn interactive_cancel_keeps_project_files_unchanged() {
-        let temporary = tempfile::tempdir().unwrap();
-        let project = temporary.path().join("project");
-        let source = temporary.path().join("source");
-        std::fs::create_dir(&project).unwrap();
-        repository(&source);
-        init(project.clone(), vec![Agent::Codex]).unwrap();
-        let before = std::fs::read(project.join("aru.toml")).unwrap();
-        let mut chooser = FakeChooser::default();
-
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut chooser,
-        )
-        .unwrap();
-
-        assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), before);
-        assert!(!project.join("aru.lock").exists());
-        assert!(!project.join(".aru/state.toml").exists());
-        assert!(!project.join(".agents").exists());
-    }
-
-    #[test]
-    fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
-        let temporary = tempfile::tempdir().unwrap();
-        let project = temporary.path().join("project");
-        let source = temporary.path().join("source");
-        std::fs::create_dir(&project).unwrap();
-        repository(&source);
-        init(project.clone(), vec![Agent::Codex]).unwrap();
-
-        let mut first = FakeChooser {
-            response: Some(vec!["alpha".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut first,
-        )
-        .unwrap();
-        assert!(project.join(".agents/skills/alpha").is_dir());
-        assert!(!project.join(".agents/skills/beta").exists());
-
-        let mut replacement = FakeChooser {
-            response: Some(vec!["beta".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut replacement,
-        )
-        .unwrap();
-        assert_eq!(replacement.seen_defaults, ["alpha"]);
-        assert!(!project.join(".agents/skills/alpha").exists());
-        assert!(project.join(".agents/skills/beta").is_dir());
-
-        let mut all_args = add_args(&source);
-        all_args.all = true;
-        skill_add_with_mode(
-            &project,
-            all_args,
-            SkillAddSelectionMode::All,
-            &mut FakeChooser::default(),
-        )
-        .unwrap();
-        let mut preserve = FakeChooser {
-            response: Some(vec!["alpha".into(), "beta".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut preserve,
-        )
-        .unwrap();
-        assert_eq!(preserve.seen_defaults, ["alpha", "beta"]);
-        let manifest = ManifestDocument::load(&project)
-            .unwrap()
-            .manifest()
-            .unwrap();
-        assert!(manifest.skills.values().next().unwrap().is_wildcard());
-
-        skill_remove(
-            &project,
-            SkillRemoveArgs {
-                source: source.to_string_lossy().into_owned(),
-                skills: vec!["alpha".into()],
-                no_sync: false,
-                dry_run: false,
-                force: false,
-            },
-        )
-        .unwrap();
-        let mut narrowed = FakeChooser {
-            response: Some(vec!["beta".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut narrowed,
-        )
-        .unwrap();
-        assert_eq!(narrowed.seen_defaults, ["beta"]);
-        let manifest = ManifestDocument::load(&project)
-            .unwrap()
-            .manifest()
-            .unwrap();
-        let requirement = manifest.skills.values().next().unwrap();
-        assert_eq!(requirement.include, ["beta"]);
-        assert!(requirement.exclude.is_empty());
-        assert!(!requirement.is_wildcard());
-    }
-
-    #[test]
-    fn interactive_selection_preserves_or_removes_custom_path_with_its_skill() {
-        let temporary = tempfile::tempdir().unwrap();
-        let project = temporary.path().join("project");
-        let source = temporary.path().join("source");
-        std::fs::create_dir(&project).unwrap();
-        repository(&source);
-        init(project.clone(), vec![Agent::Codex]).unwrap();
-        let mut path_args = add_args(&source);
-        path_args.path = Some("extras/custom".into());
-        path_args.version = None;
-        skill_add_with_mode(
-            &project,
-            path_args,
-            SkillAddSelectionMode::Explicit,
-            &mut FakeChooser::default(),
-        )
-        .unwrap();
-
-        let mut keep = FakeChooser {
-            response: Some(vec!["custom".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut keep,
-        )
-        .unwrap();
-        assert_eq!(keep.seen_defaults, ["custom"]);
-        let manifest = ManifestDocument::load(&project)
-            .unwrap()
-            .manifest()
-            .unwrap();
-        assert_eq!(
-            manifest.skills.values().next().unwrap().paths["custom"],
-            "extras/custom"
-        );
-
-        let mut remove = FakeChooser {
-            response: Some(vec!["alpha".into()]),
-            ..FakeChooser::default()
-        };
-        skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut remove,
-        )
-        .unwrap();
-        let manifest = ManifestDocument::load(&project)
-            .unwrap()
-            .manifest()
-            .unwrap();
-        let requirement = manifest.skills.values().next().unwrap();
-        assert!(requirement.paths.is_empty());
-        assert_eq!(requirement.include, ["alpha"]);
-    }
-
-    #[test]
-    fn interactive_commit_rejects_a_concurrent_manifest_change() {
-        let temporary = tempfile::tempdir().unwrap();
-        let project = temporary.path().join("project");
-        let source = temporary.path().join("source");
-        std::fs::create_dir(&project).unwrap();
-        repository(&source);
-        init(project.clone(), vec![Agent::Codex]).unwrap();
-        let manifest_path = project.join("aru.toml");
-        let mut chooser = FakeChooser {
-            response: Some(vec!["alpha".into()]),
-            mutate: Some(manifest_path.clone()),
-            ..FakeChooser::default()
-        };
-
-        let error = skill_add_with_mode(
-            &project,
-            add_args(&source),
-            SkillAddSelectionMode::Interactive,
-            &mut chooser,
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(error.contains("changed during interactive skill selection"));
-        assert!(
-            std::fs::read_to_string(manifest_path)
-                .unwrap()
-                .contains("concurrent edit")
-        );
-        assert!(!project.join("aru.lock").exists());
-        assert!(!project.join(".agents").exists());
-    }
-}
+mod tests;

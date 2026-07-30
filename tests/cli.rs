@@ -94,6 +94,7 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
         .stdout(predicate::str::contains("--skill <NAME>"))
         .stdout(predicate::str::contains("--path <PATH>"))
         .stdout(predicate::str::contains("--branch <NAME>"))
+        .stdout(predicate::str::contains("-U, --upgrade"))
         .stdout(predicate::str::contains("--no-sync"));
 
     cargo_bin_cmd!("aru")
@@ -361,6 +362,67 @@ fn terminal_dry_run_prompts_but_writes_nothing() {
 }
 
 #[test]
+fn skill_add_upgrade_installs_new_source_and_refreshes_existing_semver() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha"]);
+    aru(&project)
+        .args(["init", "--agent", "codex"])
+        .assert()
+        .success();
+
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "alpha",
+            "-U",
+        ])
+        .assert()
+        .success();
+    let initial = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(initial.skill_packages[0].version, "1.0.0");
+
+    add_version(&repository, "alpha", "1.1.0");
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "alpha",
+        ])
+        .assert()
+        .success();
+    let conservative = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(conservative.skill_packages[0].version, "1.0.0");
+
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "alpha",
+            "--upgrade",
+        ])
+        .assert()
+        .success();
+    let upgraded = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(upgraded.skill_packages[0].version, "1.1.0");
+}
+
+#[test]
 fn branch_add_stays_pinned_until_named_update_and_locked_replays() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");
@@ -407,13 +469,35 @@ fn branch_add_stays_pinned_until_named_update_and_locked_replays() {
     aru(&project).args(["sync", "--locked"]).assert().success();
 
     aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--branch",
+            "live",
+            "--skill",
+            "alpha",
+            "-U",
+        ])
+        .assert()
+        .success();
+    let upgraded = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(upgraded.skill_packages[0].revision, second_revision);
+    assert_eq!(upgraded.skill_packages[0].requirement, "branch:live");
+
+    add_version(&repository, "alpha", "1.2.0");
+    git(&repository, &["branch", "--force", "live", "HEAD"]);
+    let third_revision = git_output(&repository, &["rev-parse", "HEAD"]);
+    aru(&project)
         .args(["skill", "update", repository.to_str().unwrap()])
         .assert()
         .success();
     let updated = aru::lockfile::Lockfile::load_optional(&project)
         .unwrap()
         .unwrap();
-    assert_eq!(updated.skill_packages[0].revision, second_revision);
+    assert_eq!(updated.skill_packages[0].revision, third_revision);
     assert_eq!(updated.skill_packages[0].requirement, "branch:live");
 }
 
