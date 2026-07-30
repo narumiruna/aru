@@ -25,4 +25,5 @@ debug
 /third_party/reference/
 .aru/
 .agents/
+.claude/
 docs/plans/archived/
