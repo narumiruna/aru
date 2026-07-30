@@ -1,0 +1,24 @@
+{
+  "server": {
+    "name": "io.example/ambiguous",
+    "description": "Two equivalent package candidates",
+    "version": "1.0.0",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@example/first",
+        "version": "1.0.0",
+        "transport": { "type": "stdio" }
+      },
+      {
+        "registryType": "npm",
+        "identifier": "@example/second",
+        "version": "1.0.0",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": { "status": "active" }
+  }
+}

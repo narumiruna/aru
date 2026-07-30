@@ -1,3 +1,6 @@
 fn main() {
-    println!("Hello, world!");
+    if let Err(error) = aru::run() {
+        eprintln!("error: {error}");
+        std::process::exit(1);
+    }
 }

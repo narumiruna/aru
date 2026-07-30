@@ -1,0 +1,30 @@
+{
+  "servers": [
+    {
+      "server": {
+        "name": "io.example/context",
+        "description": "Example",
+        "version": "1.0.0",
+        "packages": [
+          {
+            "registryType": "npm",
+            "identifier": "@example/context-mcp",
+            "version": "1.0.0",
+            "runtimeHint": "npx",
+            "transport": { "type": "stdio" },
+            "environmentVariables": [
+              { "name": "EXAMPLE_TOKEN", "isRequired": true, "isSecret": true }
+            ]
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": {
+          "status": "active",
+          "publishedAt": "2026-01-01T00:00:00Z"
+        }
+      }
+    }
+  ],
+  "metadata": { "count": 1, "nextCursor": "opaque:page/2" }
+}

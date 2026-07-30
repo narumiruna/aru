@@ -1,0 +1,13 @@
+# User comment must survive targeted edits.
+schema = 1
+
+[project]
+agents = ["codex", "claude-code"]
+
+[skills]
+"owner/repository" = { version = "0.5.0", include = ["writing-plans"], exclude = [], paths = { writing-plans = "skills/writing-plans" } }
+
+[mcp.docs]
+transport = "streamable-http"
+url = "https://docs.example.com/mcp"
+bearer-token-env = "DOCS_TOKEN"

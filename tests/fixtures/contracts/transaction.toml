@@ -1,0 +1,10 @@
+version = 1
+phase = "applying"
+
+[[entries]]
+destination = ".agents/skills/demo"
+stage = ".agents/skills/.aru-stage-example-0"
+backup = ".agents/skills/.aru-backup-example-0"
+old-digest = "sha256:old"
+new-digest = "sha256:new"
+applied = true

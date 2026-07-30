@@ -1,0 +1,37 @@
+{
+  "servers": [
+    {
+      "server": {
+        "name": "io.example/context",
+        "description": "Example",
+        "version": "release-2026",
+        "remotes": [
+          {
+            "type": "streamable-http",
+            "url": "https://example.com/mcp",
+            "headers": [
+              { "name": "Authorization", "value": "Bearer {EXAMPLE_TOKEN}", "isSecret": true }
+            ],
+            "variables": {
+              "EXAMPLE_TOKEN": { "isRequired": true, "isSecret": true }
+            }
+          }
+        ]
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": { "status": "active" }
+      }
+    },
+    {
+      "server": {
+        "name": "io.example/context",
+        "description": "Old",
+        "version": "0.9.0"
+      },
+      "_meta": {
+        "io.modelcontextprotocol.registry/official": { "status": "deprecated" }
+      }
+    }
+  ],
+  "metadata": { "count": 2 }
+}

@@ -7,3 +7,23 @@ license = "MIT"
 repository = "https://github.com/narumiruna/aru"
 
 [dependencies]
+clap = { version = "4.5", features = ["derive"] }
+fs2 = "0.4"
+hex = "0.4"
+percent-encoding = "2.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = { version = "1.0", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+tempfile = "3.20"
+thiserror = "2.0"
+toml = "0.9"
+toml_edit = { version = "0.23", features = ["serde"] }
+url = "2.5"
+walkdir = "2.5"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
