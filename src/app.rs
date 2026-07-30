@@ -59,7 +59,7 @@ pub fn run() -> Result<()> {
         Command::Mcp { command } => {
             let project = discover_project(cli.project)?;
             match command {
-                McpCommand::Add(args) => mcp_add(&project, args),
+                McpCommand::Add(args) => mcp_add(&project, *args),
                 McpCommand::Remove(args) => mcp_remove(&project, args),
                 McpCommand::Update(args) => mcp_update(&project, args),
             }
@@ -582,6 +582,11 @@ fn mcp_add(project: &Path, args: McpAddArgs) -> Result<()> {
             "direct MCP URLs require streamable-http transport",
         ));
     }
+    if args.command.is_some() && args.registry.is_some() {
+        return Err(AruError::msg(
+            "direct stdio MCP cannot set registry or package-registry",
+        ));
+    }
     let mut document = ManifestDocument::load(project)?;
     let requirement = McpRequirement {
         registry: args.server.as_ref().map(|_| {
@@ -593,6 +598,8 @@ fn mcp_add(project: &Path, args: McpAddArgs) -> Result<()> {
         transport: args.transport,
         package_registry: args.package_registry,
         url: args.url,
+        command: args.command,
+        args: args.args,
         bearer_token_env: args.bearer_token_env,
     };
     requirement.validate(&args.name)?;

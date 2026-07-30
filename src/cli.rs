@@ -237,8 +237,8 @@ pub struct SkillUpdateArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum McpCommand {
-    /// Add an MCP Registry server or direct remote.
-    Add(McpAddArgs),
+    /// Add an MCP Registry server, direct remote, or direct stdio command.
+    Add(Box<McpAddArgs>),
     /// Remove a named MCP server.
     Remove(McpRemoveArgs),
     /// Upgrade all or selected MCP Registry servers.
@@ -246,7 +246,11 @@ pub enum McpCommand {
 }
 
 #[derive(Debug, Args)]
-#[command(group(ArgGroup::new("source").required(true).args(["server", "url"])))]
+#[command(group(
+    ArgGroup::new("source")
+        .required(true)
+        .args(["server", "url", "command"])
+))]
 pub struct McpAddArgs {
     /// MCP Registry server id.
     pub server: Option<String>,
@@ -266,8 +270,14 @@ pub struct McpAddArgs {
     #[arg(long = "package-registry")]
     pub package_registry: Option<String>,
     /// Direct HTTPS streamable MCP endpoint.
-    #[arg(long, conflicts_with = "server")]
+    #[arg(long)]
     pub url: Option<String>,
+    /// Direct stdio executable; aru records argv but never executes it.
+    #[arg(long, value_name = "COMMAND")]
+    pub command: Option<String>,
+    /// Ordered argument for --command; may be repeated.
+    #[arg(long = "arg", value_name = "ARG", action = ArgAction::Append, requires = "command")]
+    pub args: Vec<String>,
     /// Environment variable containing a bearer token (Codex-only capability).
     #[arg(long = "bearer-token-env")]
     pub bearer_token_env: Option<String>,
