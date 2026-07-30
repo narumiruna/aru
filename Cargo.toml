@@ -2,7 +2,7 @@
 name = "aru"
 version = "0.0.1"
 edition = "2024"
-description = "A project manager for coding-agent skills and MCP servers, written in Rust."
+description = "A project manager for coding-agent instructions, skills, and MCP servers, written in Rust."
 repository = "https://github.com/narumiruna/aru"
 license = "MIT"
 include = [
@@ -14,12 +14,15 @@ include = [
   "/docs/spikes/**",
   "/src/**",
   "/tests/cli.rs",
+  "/tests/instruction_cli.rs",
   "/tests/target_cli.rs",
+  "/tests/fixtures/**",
 ]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 fs2 = "0.4"
+globset = "0.4.16"
 hex = "0.4"
 inquire = { version = "0.9.4", default-features = false, features = [
   "crossterm",

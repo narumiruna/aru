@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::cache::Cache;
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
+use crate::instruction::{self, DiscoveredInstruction};
 use crate::lockfile::{
     ADAPTER_CAPABILITY_SCHEMA, LockedSkill, Lockfile, McpServer, McpTarget, ProjectionBaseline,
     SkillPackage,
@@ -20,6 +21,7 @@ use crate::target;
 pub struct Resolution {
     pub lock: Lockfile,
     pub skill_sources: BTreeMap<String, PathBuf>,
+    pub instructions: Vec<DiscoveredInstruction>,
 }
 
 pub struct ResolveOptions<'a> {
@@ -63,6 +65,19 @@ pub fn resolve(
     options: ResolveOptions<'_>,
 ) -> Result<Resolution> {
     let sources = canonical_sources(project, manifest)?;
+    let instructions = instruction::discovery::discover(project, manifest)?;
+    let skill_targets = target::skill_targets(&manifest.project.targets);
+    let mcp_targets = target::mcp_targets(&manifest.project.targets);
+    if !manifest.skills.is_empty() && skill_targets.is_empty() {
+        return Err(AruError::msg(
+            "no configured target supports Agent Skills projections",
+        ));
+    }
+    if !manifest.mcp.is_empty() && mcp_targets.is_empty() {
+        return Err(AruError::msg(
+            "no configured target supports MCP projections",
+        ));
+    }
     let package_input_hash = package_input_hash(manifest, &sources)?;
     let cache = if options.dry_run {
         Cache::ephemeral()?
@@ -80,11 +95,13 @@ pub fn resolve(
                 "aru.lock is stale for package inputs; run aru lock or aru sync",
             ));
         }
-        validate_locked_projection(&lock, manifest)?;
+        instruction::lock::validate_locked_sources(&lock.instruction_sources, &instructions)?;
+        validate_locked_projection(&lock, manifest, &instructions)?;
         let skill_sources = materialize_locked(&cache, manifest, &sources, &lock)?;
         return Ok(Resolution {
             lock,
             skill_sources,
+            instructions,
         });
     }
 
@@ -151,13 +168,13 @@ pub fn resolve(
             !options.update_mcp.contains(name) && server.requirement == descriptor
         });
         let server = if let Some(old) = reusable {
-            rebuild_mcp_targets(old, requirement, &manifest.project.targets)?
+            rebuild_mcp_targets(old, requirement, &mcp_targets)?
         } else {
             resolve_mcp(
                 &registry_client,
                 name,
                 requirement,
-                &manifest.project.targets,
+                &mcp_targets,
                 &descriptor,
             )?
         };
@@ -168,18 +185,20 @@ pub fn resolve(
         version: 1,
         package_input_hash,
         projection_input_hash: String::new(),
+        instruction_sources: instruction::lock::locked_sources(&instructions),
         skill_packages,
         mcp_servers,
         projection_baselines: Vec::new(),
     };
     lock.normalize();
-    lock.projection_baselines = baselines(&lock, &manifest.project.targets)?;
+    lock.projection_baselines = baselines(&lock, &manifest.project.targets, &instructions)?;
     lock.projection_input_hash = projection_input_hash(&lock, &manifest.project.targets)?;
     lock.normalize();
     lock.validate()?;
     Ok(Resolution {
         lock,
         skill_sources,
+        instructions,
     })
 }
 
@@ -573,11 +592,16 @@ fn rebuild_mcp_targets(
     Ok(rebuilt)
 }
 
-fn baselines(lock: &Lockfile, targets: &[Target]) -> Result<Vec<ProjectionBaseline>> {
+fn baselines(
+    lock: &Lockfile,
+    targets: &[Target],
+    instructions: &[DiscoveredInstruction],
+) -> Result<Vec<ProjectionBaseline>> {
     let mut output = Vec::new();
+    let skill_targets = target::skill_targets(targets);
     for package in &lock.skill_packages {
         for skill in &package.skills {
-            for target in targets {
+            for target in &skill_targets {
                 output.push(ProjectionBaseline {
                     target: *target,
                     kind: "skill".into(),
@@ -597,13 +621,14 @@ fn baselines(lock: &Lockfile, targets: &[Target]) -> Result<Vec<ProjectionBaseli
             });
         }
     }
+    output.extend(instruction::lock::baselines(instructions)?);
     output.sort();
     Ok(output)
 }
 
 #[derive(Serialize)]
 struct ProjectionInput {
-    package_identity: String,
+    lock_identity: String,
     targets: Vec<Target>,
     capability_schema: u32,
 }
@@ -615,14 +640,20 @@ fn projection_input_hash(lock: &Lockfile, targets: &[Target]) -> Result<String> 
     let mut targets = targets.to_vec();
     targets.sort();
     canonical_json_digest(&ProjectionInput {
-        package_identity: package_lock.package_identity_digest()?,
+        lock_identity: package_lock.lock_identity_digest()?,
         targets,
         capability_schema: ADAPTER_CAPABILITY_SCHEMA,
     })
 }
 
-fn validate_locked_projection(lock: &Lockfile, manifest: &Manifest) -> Result<()> {
-    let configured_targets: BTreeSet<_> = manifest.project.targets.iter().copied().collect();
+fn validate_locked_projection(
+    lock: &Lockfile,
+    manifest: &Manifest,
+    instructions: &[DiscoveredInstruction],
+) -> Result<()> {
+    let configured_targets: BTreeSet<_> = target::mcp_targets(&manifest.project.targets)
+        .into_iter()
+        .collect();
     for server in &lock.mcp_servers {
         let locked_targets: BTreeSet<_> =
             server.targets.iter().map(|target| target.target).collect();
@@ -633,7 +664,7 @@ fn validate_locked_projection(lock: &Lockfile, manifest: &Manifest) -> Result<()
             )));
         }
     }
-    let expected_baselines = baselines(lock, &manifest.project.targets)?;
+    let expected_baselines = baselines(lock, &manifest.project.targets, instructions)?;
     if lock.projection_baselines != expected_baselines {
         return Err(AruError::msg("aru.lock projection baseline is stale"));
     }
@@ -726,6 +757,7 @@ mod tests {
             project: crate::manifest::Project {
                 targets: vec![Target::Codex],
             },
+            instructions: crate::manifest::Instructions::default(),
             skills: BTreeMap::from([(
                 repository.to_string_lossy().into_owned(),
                 requirement.clone(),
@@ -833,6 +865,7 @@ mod tests {
             project: crate::manifest::Project {
                 targets: vec![Target::Codex],
             },
+            instructions: crate::manifest::Instructions::default(),
             skills: BTreeMap::from([(
                 repository.to_string_lossy().into_owned(),
                 requirement.clone(),
@@ -917,6 +950,7 @@ mod tests {
             project: crate::manifest::Project {
                 targets: vec![Target::Codex],
             },
+            instructions: crate::manifest::Instructions::default(),
             skills: BTreeMap::from([("source".into(), SkillRequirement::default())]),
             mcp: BTreeMap::new(),
         };

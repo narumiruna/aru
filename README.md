@@ -3,7 +3,7 @@
 > [!WARNING]
 > **Work in progress (WIP):** `aru` is under active development. Features, behavior, and file formats may change without notice.
 
-`aru` is a project-scoped package manager for coding-agent skills and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-target projections, and `aru sync` safely reconciles Codex and Claude Code project paths.
+`aru` is a project-scoped manager for coding-agent instructions, skills, and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-target projections, and `aru sync` safely reconciles Codex, Claude Code, GitHub Copilot, OpenCode, and pi project paths according to each target's implemented capabilities.
 
 ## Install
 
@@ -17,13 +17,17 @@ A system `git` executable is required. Git subprocesses use argument arrays and 
 ## Quick start
 
 ```console
-aru init --target codex --target claude
+aru init --target codex --target claude --target copilot
+aru instruction init --dry-run
+aru instruction init --merge
 aru skill add narumiruna/skills
 # Use the searchable menu to select writing-plans, then lock replay is non-interactive.
 aru sync --locked
 aru skill update narumiruna/skills
 aru skill remove narumiruna/skills --skill writing-plans
 ```
+
+`aru instruction init` discovers existing root and nested `AGENTS.md` files, records their exact paths without moving or editing them, and projects configured non-native targets. Use `--dry-run` to inspect the complete transaction. An existing unmanaged `CLAUDE.md` or `.github/copilot-instructions.md` collides by default; `--merge` preserves its content and adds source-specific aru blocks, while `--force` explicitly replaces unmanaged destination content; the two flags are mutually exclusive. Once established, ordinary `aru sync` changes only owned blocks or files.
 
 In an interactive terminal, omitting selectors opens a searchable multi-select menu. Type to filter, use ↑/↓ to move, Space to toggle, →/← to select all/none, Enter to confirm, or Esc to cancel without changing project files. At least one skill must be selected.
 
@@ -52,7 +56,7 @@ aru mcp update context
 aru mcp remove docs
 ```
 
-A Registry candidate must be unique after transport, package-registry, and all-target capability filtering. aru never chooses the first API array item.
+A Registry candidate must be unique after transport, package-registry, and filtering against every configured target with an implemented MCP adapter. aru never chooses the first API array item.
 
 ## Offline local example
 
@@ -86,6 +90,28 @@ lock skill demo 1.0.0 sha256:…
 write lockfile
 ```
 
+## Manage instructions
+
+Existing `AGENTS.md` files are canonical, user-owned sources:
+
+```toml
+[[instructions.sources]]
+files = ["AGENTS.md", "src/**/AGENTS.md"]
+exclude = ["target/**", "third_party/**"]
+scope = "source-directory"
+
+[[instructions.sources]]
+files = ["docs/instructions/rust.md"]
+apply-to = ["**/*.rs"]
+targets = ["claude", "copilot"]
+```
+
+`scope = "source-directory"` requires matched files to be named `AGENTS.md`; each file applies to its own directory tree. `apply-to` declares exact repository-relative globs and must target only adapters that can preserve them. Source `targets` default to the complete project target set and, when specified, must be a subset of it. Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+
+Codex, pi, and OpenCode consume directory-scoped `AGENTS.md` directly, so aru writes no duplicate file for them. Claude receives sibling `CLAUDE.md` import blocks and `.claude/rules/aru/**` path rules. Copilot receives a root `.github/copilot-instructions.md` block and path-specific `.github/instructions/aru/**. Unsupported scope/target combinations fail before any write rather than broadening scope.
+
+`aru lock` records source and projection digests without writing target paths. `aru sync --locked` rejects changed source content or stale target projections. Removing a source or target removes only digest-matching aru-owned blocks/files; drifted or unowned output is preserved for review.
+
 ## Manage targets
 
 Targets are the persistent set of coding-agent project layouts that aru reconciles. List the set declared in `aru.toml`, extend or reduce it, or replace it exactly:
@@ -99,14 +125,19 @@ aru target set codex claude
 
 `add` performs a set union, `remove` performs a set subtraction, and `set` replaces the complete set atomically. At least one target must remain, so use `aru target set claude` to switch a Codex-only project without an intermediate two-target sync. Repeating an already configured target is safe. Unknown or unconfigured removal arguments fail before writes.
 
-Target mutations resolve the complete result before atomically updating `aru.toml`, `aru.lock`, local ownership state, and owned project paths. They preserve locked package versions and accept `--dry-run`; `add` and `set` accept `--force` for explicit takeover of new-target collisions. `--no-sync` updates only manifest and lock intent, prints that target paths are pending, and requires a later `aru sync`. If local ownership state is missing and deferral would lose the information needed for a Claude copy/symlink conversion, aru rejects `--no-sync` and asks you to apply the target change directly.
+Target mutations resolve the complete result before atomically updating `aru.toml`, `aru.lock`, local ownership state, and owned project paths. They preserve locked package versions and accept `--dry-run`; `add` and `set` accept `--merge` for instruction blocks and `--force` for explicit takeover of new-target collisions. `--no-sync` updates only manifest and lock intent, prints that target paths are pending, and requires a later `aru sync`. If local ownership state is missing and deferral would lose the information needed for a Claude copy/symlink conversion, aru rejects `--no-sync` and asks you to apply the target change directly.
 
 ## Project files
 
 | Path | Commit? | Purpose |
 | --- | --- | --- |
-| `aru.toml` | Yes | Human-maintained requirements, selectors, and target list |
-| `aru.lock` | Yes | Exact Git commits, content digests, MCP metadata/candidates, per-target projections, and portable ownership baseline |
+| `aru.toml` | Yes | Human-maintained instruction sources, package requirements, selectors, and target list |
+| `aru.lock` | Yes | Instruction source digests, exact Git commits, MCP metadata/candidates, per-target projections, and portable ownership baseline |
+| `AGENTS.md`, `**/AGENTS.md` | Yes | User-owned canonical directory-scoped instruction sources; aru never edits or removes them |
+| `CLAUDE.md`, `**/CLAUDE.md` | Optional | Claude imports managed as source-specific marker blocks |
+| `.claude/rules/aru/**` | Optional | Aru-owned Claude path-specific instruction projections |
+| `.github/copilot-instructions.md` | Optional | Copilot root instructions with source-specific marker blocks |
+| `.github/instructions/aru/**` | Optional | Aru-owned Copilot path-specific instruction projections |
 | `.agents/skills/<name>` | Optional | Codex project skill projection |
 | `.claude/skills/<name>` | Optional | Claude project skill projection: a relative link to `.agents` when both targets are selected and links are available, otherwise a verified copy |
 | `.codex/config.toml` | Optional | Codex project MCP entries |
@@ -119,6 +150,8 @@ Target mutations resolve the complete result before atomically updating `aru.tom
 
 ### Manifest selection semantics
 
+- Each `instructions.sources` declaration has non-empty `files`, optional `exclude` and `targets`, and exactly one of `scope = "source-directory"` or `apply-to`.
+- Discovery is deterministic and bounded. Unsafe, escaping, symlinked, non-UTF-8, oversized, duplicate, generated-output, or reserved-marker sources fail before writes.
 - `include = ["*"]` tracks every valid current and future export; only `--all` / `-a` creates new wildcard intent. `exclude` records per-skill removals.
 - Interactive selection writes an explicit snapshot, even when every visible item is selected. Reopening the menu preselects current explicit entries and replaces that source's complete explicit selection on confirmation.
 - Reopening an unchanged wildcard preselects all exports and preserves wildcard intent if all remain selected; deselecting any export converts it to an explicit snapshot.
@@ -130,9 +163,9 @@ Target mutations resolve the complete result before atomically updating `aru.tom
 
 ### Lock and sync modes
 
-- `aru lock` resolves and writes the lock without changing target project paths.
+- `aru lock` resolves instructions and packages and writes the lock without changing target project paths.
 - `aru sync` reuses every compatible locked package, fills missing lock/projection data, and reconciles project paths.
-- `aru sync --locked` rejects a missing or stale lock, including incomplete per-target MCP projections. It never changes the lock or advances a branch.
+- `aru sync --locked` rejects a missing or stale lock, including changed instruction sources and incomplete per-target projections. It never changes the lock or advances a branch.
 - `--no-sync` on add/remove/update still resolves and transactionally updates `aru.toml` plus `aru.lock`; it only skips projections.
 - `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
 - `--force` is destructive takeover of a colliding unmanaged key/path. The operation plan says `force replace`; a later remove does not restore the previous unmanaged value.
@@ -153,22 +186,21 @@ The manifest records `branch = "main"`, while `aru.lock` records `requirement = 
 
 ## Target capability matrix
 
-| Capability | Codex | Claude Code | aru v1 |
-| --- | --- | --- | --- |
-| Project skills | `.agents/skills/` | `.claude/skills/` | Yes |
-| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | Yes |
-| Streamable HTTP | `url` | `type: http`, `url` | Yes |
-| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | Yes |
-| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | Yes |
-| SSE | No distinct current transport | Deprecated support | No |
-| Inline secret value | Representable in some host fields | Representable | Rejected |
-| OAuth credential storage | Host-managed | Host-managed | Not managed |
+| Capability | Codex | Claude Code | Copilot | pi | OpenCode |
+| --- | --- | --- | --- | --- | --- |
+| Directory `AGENTS.md` | Native | Sibling import | Materialized root/path rule | Native | Native |
+| Explicit instruction globs | No | `.claude/rules/aru/**` | `.github/instructions/aru/**` | No | No |
+| Project skills | `.agents/skills/` | `.claude/skills/` | Not implemented | Not implemented | Not implemented |
+| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | Not implemented | Not implemented | Not implemented |
+| Streamable HTTP MCP | `url` | `type: http`, `url` | Not implemented | Not implemented | Not implemented |
+| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | Not implemented | Not implemented | Not implemented |
+| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | Not implemented | Not implemented | Not implemented |
 
 See [`docs/spikes/2026-07-30_mcp-registry-target-capabilities.md`](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md) for evidence and fail-closed decisions.
 
 ## Safety model and limits
 
-aru treats downloaded skills and Registry metadata as untrusted:
+aru treats discovered instruction/skill content and Registry metadata as untrusted:
 
 - conventional discovery scans only the source root and `skills/**/SKILL.md`, with maximum depth 6, 2,000 directories, and 20,000 entries;
 - `SKILL.md` is limited to 1 MiB; each selected regular file to 10 MiB; each skill tree to 100 MiB;
@@ -178,7 +210,7 @@ aru treats downloaded skills and Registry metadata as untrusted:
 - malformed, oversized, truncated, cyclic, ambiguous, inactive, or unsupported metadata fails before writes;
 - MCP command and argument data stays in arrays and is never shell-expanded;
 - aru stores only secret environment variable names/placeholders. It does not read secret values;
-- existing unmanaged skills/MCP entries collide by default. Owned entries that differ from their last-applied semantic digest report drift and are preserved;
+- existing unmanaged instruction destinations and skill/MCP entries collide by default. `--merge` is limited to preserving unmanaged Markdown around instruction blocks; owned entries that differ from their last-applied semantic digest report drift and are preserved;
 - only aru-owned server keys are merged or removed. Unrelated TOML comments/keys and JSON entries survive. Invalid existing config fails closed.
 
 ## Transactions, ownership, and recovery

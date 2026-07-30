@@ -721,6 +721,43 @@ mod tests {
     }
 
     #[test]
+    fn failed_instruction_transaction_restores_outputs_without_touching_sources() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join(".aru")).unwrap();
+        std::fs::write(project.path().join("AGENTS.md"), "# User source\n").unwrap();
+        std::fs::write(project.path().join("CLAUDE.md"), "old projection\n").unwrap();
+        std::fs::write(project.path().join("aru.lock"), "old lock\n").unwrap();
+        std::fs::write(project.path().join(".aru/state.toml"), "old state\n").unwrap();
+        set_failure_phase("ARU_TEST_FAIL_AFTER", Some(2));
+        let result = apply(
+            project.path(),
+            vec![
+                Operation::file("CLAUDE.md", b"new projection\n".to_vec()),
+                Operation::file("aru.lock", b"new lock\n".to_vec()),
+                Operation::file(".aru/state.toml", b"new state\n".to_vec()),
+            ],
+        );
+        set_failure_phase("ARU_TEST_FAIL_AFTER", None);
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(project.path().join("AGENTS.md")).unwrap(),
+            b"# User source\n"
+        );
+        assert_eq!(
+            std::fs::read(project.path().join("CLAUDE.md")).unwrap(),
+            b"old projection\n"
+        );
+        assert_eq!(
+            std::fs::read(project.path().join("aru.lock")).unwrap(),
+            b"old lock\n"
+        );
+        assert_eq!(
+            std::fs::read(project.path().join(".aru/state.toml")).unwrap(),
+            b"old state\n"
+        );
+    }
+
+    #[test]
     fn failed_phase_rolls_back_all_destinations() {
         for phase in 1..=3 {
             let project = tempfile::tempdir().unwrap();

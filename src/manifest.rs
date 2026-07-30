@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::error::{AruError, IoContext, Result};
 
@@ -13,6 +13,9 @@ pub const MANIFEST_FILE: &str = "aru.toml";
 pub enum Target {
     Codex,
     Claude,
+    Copilot,
+    Opencode,
+    Pi,
 }
 
 impl std::fmt::Display for Target {
@@ -20,6 +23,9 @@ impl std::fmt::Display for Target {
         match self {
             Self::Codex => write!(f, "codex"),
             Self::Claude => write!(f, "claude"),
+            Self::Copilot => write!(f, "copilot"),
+            Self::Pi => write!(f, "pi"),
+            Self::Opencode => write!(f, "opencode"),
         }
     }
 }
@@ -31,8 +37,11 @@ impl std::str::FromStr for Target {
         match value {
             "codex" => Ok(Self::Codex),
             "claude" => Ok(Self::Claude),
+            "copilot" => Ok(Self::Copilot),
+            "pi" => Ok(Self::Pi),
+            "opencode" => Ok(Self::Opencode),
             _ => Err(format!(
-                "unknown target {value:?}; expected codex or claude"
+                "unknown target {value:?}; expected codex, claude, copilot, opencode, or pi"
             )),
         }
     }
@@ -42,6 +51,67 @@ impl std::str::FromStr for Target {
 pub struct Project {
     #[serde(default)]
     pub targets: Vec<Target>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum InstructionSourceScope {
+    SourceDirectory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct InstructionSource {
+    pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<InstructionSourceScope>,
+    #[serde(default, rename = "apply-to", skip_serializing_if = "Vec::is_empty")]
+    pub apply_to: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<Target>,
+}
+
+impl InstructionSource {
+    pub fn validate(&self, project_targets: &[Target]) -> Result<()> {
+        if self.files.is_empty() {
+            return Err(AruError::msg("instruction source files must not be empty"));
+        }
+        if self.scope.is_some() == !self.apply_to.is_empty() {
+            return Err(AruError::msg(
+                "instruction source must set exactly one of scope or apply-to",
+            ));
+        }
+        for pattern in self
+            .files
+            .iter()
+            .chain(self.exclude.iter())
+            .chain(self.apply_to.iter())
+        {
+            validate_portable_pattern(pattern)?;
+        }
+        let unique: BTreeSet<_> = self.targets.iter().collect();
+        if unique.len() != self.targets.len() {
+            return Err(AruError::msg(
+                "instruction source targets contains duplicates",
+            ));
+        }
+        for target in &self.targets {
+            if !project_targets.contains(target) {
+                return Err(AruError::msg(format!(
+                    "instruction source target {target:?} is not declared in project.targets"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Instructions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<InstructionSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -192,6 +262,8 @@ impl McpRequirement {
 pub struct Manifest {
     pub project: Project,
     #[serde(default)]
+    pub instructions: Instructions,
+    #[serde(default)]
     pub skills: BTreeMap<String, SkillRequirement>,
     #[serde(default)]
     pub mcp: BTreeMap<String, McpRequirement>,
@@ -205,6 +277,9 @@ impl Manifest {
         let unique: BTreeSet<_> = self.project.targets.iter().collect();
         if unique.len() != self.project.targets.len() {
             return Err(AruError::msg("project.targets contains duplicates"));
+        }
+        for source in &self.instructions.sources {
+            source.validate(&self.project.targets)?;
         }
         for (source, requirement) in &self.skills {
             requirement.validate(source)?;
@@ -232,7 +307,7 @@ impl ManifestDocument {
                 path.display()
             ))
         })?;
-        for key in ["project", "skills", "mcp"] {
+        for key in ["project", "instructions", "skills", "mcp"] {
             if doc.get(key).is_some_and(|item| !item.is_table()) {
                 return Err(AruError::msg(format!(
                     "{key} must use a TOML table so aru can edit it without losing unrelated content"
@@ -249,6 +324,7 @@ impl ManifestDocument {
         let mut project = Table::new();
         project["targets"] = Item::Value(target_array(targets).into());
         doc["project"] = Item::Table(project);
+        doc["instructions"] = Item::Table(Table::new());
         doc["skills"] = Item::Table(Table::new());
         doc["mcp"] = Item::Table(Table::new());
         Self {
@@ -276,6 +352,31 @@ impl ManifestDocument {
             *value.decor_mut() = decor;
         }
         self.doc["project"]["targets"] = Item::Value(value);
+    }
+
+    pub fn set_instruction_sources(&mut self, sources: &[InstructionSource]) {
+        ensure_table(&mut self.doc, "instructions");
+        let mut array = ArrayOfTables::new();
+        for source in sources {
+            let mut table = Table::new();
+            table["files"] = Item::Value(string_array(&source.files).into());
+            if !source.exclude.is_empty() {
+                table["exclude"] = Item::Value(string_array(&source.exclude).into());
+            }
+            if let Some(scope) = source.scope {
+                table["scope"] = toml_edit::value(match scope {
+                    InstructionSourceScope::SourceDirectory => "source-directory",
+                });
+            }
+            if !source.apply_to.is_empty() {
+                table["apply-to"] = Item::Value(string_array(&source.apply_to).into());
+            }
+            if !source.targets.is_empty() {
+                table["targets"] = Item::Value(target_array(&source.targets).into());
+            }
+            array.push(table);
+        }
+        self.doc["instructions"]["sources"] = Item::ArrayOfTables(array);
     }
 
     pub fn set_skill(&mut self, source: &str, requirement: &SkillRequirement) {
@@ -366,6 +467,26 @@ fn string_array(values: &[String]) -> Array {
         array.push(value.as_str());
     }
     array
+}
+
+fn validate_portable_pattern(pattern: &str) -> Result<()> {
+    let valid = !pattern.is_empty()
+        && !pattern.starts_with('/')
+        && !pattern.contains('\\')
+        && !pattern.chars().any(char::is_control)
+        && pattern
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..");
+    if valid {
+        globset::Glob::new(pattern).map_err(|error| {
+            AruError::msg(format!("invalid instruction glob {pattern:?}: {error}"))
+        })?;
+        Ok(())
+    } else {
+        Err(AruError::msg(format!(
+            "invalid instruction path/glob {pattern:?}; use a portable project-relative pattern"
+        )))
+    }
 }
 
 pub fn validate_branch_name(name: &str) -> Result<()> {
@@ -529,6 +650,88 @@ mod tests {
             ..SkillRequirement::default()
         };
         assert!(invalid.validate("owner/repo").is_err());
+    }
+
+    #[test]
+    fn instruction_sources_parse_and_validate_scope_and_targets() {
+        let text = r#"
+[project]
+targets = ["codex", "claude", "copilot", "pi", "opencode"]
+
+[[instructions.sources]]
+files = ["AGENTS.md", "src/**/AGENTS.md"]
+exclude = ["target/**"]
+scope = "source-directory"
+
+[[instructions.sources]]
+files = ["docs/rust.md"]
+apply-to = ["**/*.rs"]
+targets = ["claude", "copilot"]
+"#;
+        let document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+        let manifest = document.manifest().unwrap();
+        assert_eq!(manifest.instructions.sources.len(), 2);
+        assert_eq!(
+            manifest.instructions.sources[1].targets,
+            [Target::Claude, Target::Copilot]
+        );
+        assert_eq!(document.bytes(), text.as_bytes());
+    }
+
+    #[test]
+    fn instruction_source_rejects_ambiguous_scope_and_undeclared_target() {
+        let source = InstructionSource {
+            files: vec!["AGENTS.md".into()],
+            exclude: Vec::new(),
+            scope: Some(InstructionSourceScope::SourceDirectory),
+            apply_to: vec!["**/*.rs".into()],
+            targets: Vec::new(),
+        };
+        assert!(
+            source
+                .validate(&[Target::Codex, Target::Claude])
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one")
+        );
+        let source = InstructionSource {
+            scope: None,
+            apply_to: vec!["**/*.rs".into()],
+            targets: vec![Target::Copilot],
+            ..source
+        };
+        assert!(
+            source
+                .validate(&[Target::Claude])
+                .unwrap_err()
+                .to_string()
+                .contains("not declared")
+        );
+    }
+
+    #[test]
+    fn instruction_mutation_preserves_unrelated_manifest_content() {
+        let text = "# keep\n[project]\ntargets = [\"claude\"]\n\n[instructions]\n# replace only sources\n\n[custom]\nanswer = 42\n";
+        let mut document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+        document.set_instruction_sources(&[InstructionSource {
+            files: vec!["AGENTS.md".into()],
+            exclude: Vec::new(),
+            scope: Some(InstructionSourceScope::SourceDirectory),
+            apply_to: Vec::new(),
+            targets: Vec::new(),
+        }]);
+        let output = String::from_utf8(document.bytes()).unwrap();
+        assert!(output.starts_with("# keep"));
+        assert!(output.contains("# replace only sources"));
+        assert!(output.contains("[custom]\nanswer = 42"));
+        assert!(output.contains("files = [\"AGENTS.md\"]"));
+        assert!(document.manifest().is_ok());
     }
 
     #[test]

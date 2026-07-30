@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::cache::Cache;
 use crate::digest::sha256_bytes;
 use crate::error::{AruError, IoContext, Result};
+use crate::instruction;
 use crate::lockfile::{LOCK_FILE, Lockfile};
 use crate::manifest::{Manifest, Target};
 use crate::ownership::{OwnershipAction, STATE_FILE, State, StateEntry, reconcile};
@@ -18,6 +19,7 @@ pub struct SyncOptions<'a> {
     pub dry_run: bool,
     pub project_projections: bool,
     pub force: bool,
+    pub merge_instructions: bool,
     pub manifest_bytes: Option<Vec<u8>>,
     pub update_skills: &'a BTreeSet<String>,
     pub update_mcp: &'a BTreeSet<String>,
@@ -59,6 +61,8 @@ pub fn prepare(
             &resolution.lock,
             options.previous,
             &resolution.skill_sources,
+            &resolution.instructions,
+            options.merge_instructions,
             options.force,
             &mut operations,
             &mut plan,
@@ -74,6 +78,13 @@ pub fn prepare(
             &state_map,
             &mut warnings,
         );
+        instruction::sync::warn_unowned_removed(
+            project,
+            options.previous,
+            &resolution.lock,
+            &state_map,
+            &mut warnings,
+        )?;
         validate_deferred_skill_layout(project, options.previous, &resolution.lock, &state_map)?;
     }
 
@@ -115,6 +126,8 @@ fn prepare_projections(
     lock: &Lockfile,
     previous: Option<&Lockfile>,
     skill_sources: &BTreeMap<String, PathBuf>,
+    instructions: &[instruction::DiscoveredInstruction],
+    merge_instructions: bool,
     force: bool,
     operations: &mut Vec<Operation>,
     plan: &mut Vec<String>,
@@ -122,7 +135,7 @@ fn prepare_projections(
 ) -> Result<()> {
     let state = State::load(project)?;
     let state_map = state.by_identity();
-    let lock_identity = lock.package_identity_digest()?;
+    let lock_identity = lock.lock_identity_digest()?;
     let mut next_state = Vec::new();
     let mut processed = BTreeSet::new();
 
@@ -221,6 +234,23 @@ fn prepare_projections(
             processed.insert(identity);
         }
     }
+
+    instruction::sync::prepare(
+        project,
+        instructions,
+        lock,
+        previous,
+        &state,
+        &state_map,
+        merge_instructions,
+        force,
+        &lock_identity,
+        operations,
+        plan,
+        warnings,
+        &mut next_state,
+        &mut processed,
+    )?;
 
     prepare_mcp(
         project,
@@ -480,6 +510,12 @@ fn prepare_mcp(
             let destination = match target.target {
                 Target::Codex => crate::target::codex::CONFIG_PATH,
                 Target::Claude => crate::target::claude::CONFIG_PATH,
+                Target::Copilot | Target::Pi | Target::Opencode => {
+                    return Err(AruError::msg(format!(
+                        "internal error: MCP projection reached instruction-only target {}",
+                        target.target
+                    )));
+                }
             };
             let identity = ("mcp".into(), server.name.clone(), destination.into());
             let owned = state_map.get(&identity).copied();
@@ -496,6 +532,7 @@ fn prepare_mcp(
             let current = match target.target {
                 Target::Codex => codex.as_ref().unwrap().digest(&server.name)?,
                 Target::Claude => claude.as_ref().unwrap().digest(&server.name)?,
+                Target::Copilot | Target::Pi | Target::Opencode => unreachable!(),
             };
             let action = reconcile(
                 &server.name,
@@ -516,6 +553,7 @@ fn prepare_mcp(
                             claude.as_mut().unwrap().set(&server.name, target)?;
                             claude_changed = true;
                         }
+                        Target::Copilot | Target::Pi | Target::Opencode => unreachable!(),
                     }
                     let verb = if action == OwnershipAction::Create {
                         "create"
@@ -657,6 +695,41 @@ fn push_file_if_changed(
 
 fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
     let mut plan = Vec::new();
+    let previous_instructions: BTreeMap<_, _> = previous
+        .into_iter()
+        .flat_map(|lock| &lock.instruction_sources)
+        .map(|source| (source.source.as_str(), source))
+        .collect();
+    for source in &next.instruction_sources {
+        match previous_instructions.get(source.source.as_str()) {
+            None => plan.push(format!(
+                "lock instruction {} {}",
+                source.source, source.sha256
+            )),
+            Some(previous) if *previous != source && previous.sha256 == source.sha256 => {
+                plan.push(format!(
+                    "refresh instruction {} projection intent",
+                    source.source
+                ));
+            }
+            Some(previous) if *previous != source => plan.push(format!(
+                "lock instruction {} {} -> {}",
+                source.source, previous.sha256, source.sha256
+            )),
+            _ => {}
+        }
+    }
+    let next_instruction_sources = next
+        .instruction_sources
+        .iter()
+        .map(|source| source.source.as_str())
+        .collect::<BTreeSet<_>>();
+    for source in previous_instructions
+        .keys()
+        .filter(|source| !next_instruction_sources.contains(**source))
+    {
+        plan.push(format!("unlock removed instruction {source}"));
+    }
     let previous_skills: BTreeMap<_, _> = previous
         .into_iter()
         .flat_map(|lock| &lock.skill_packages)
