@@ -25,3 +25,7 @@ args = ["--with", "mcp<2", "yfmcp@0.12.2"]
 command = "npx"
 args = ["-y", "firecrawl-mcp@3.23.0"]
 env-vars = ["FIRECRAWL_API_KEY"]
+
+[mcp.context7]
+url = "https://mcp.context7.com/mcp"
+bearer-token-env = "CONTEXT7_API_KEY"
