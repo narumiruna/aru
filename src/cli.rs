@@ -33,6 +33,13 @@ pub enum TreeFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "aru",
@@ -109,6 +116,8 @@ pub enum Command {
     Info(InfoArgs),
     /// Print versioned machine-readable project metadata.
     Metadata(MetadataArgs),
+    /// Generate a shell completion script.
+    GenerateShellCompletion(GenerateShellCompletionArgs),
     /// Build a verified deterministic native-package archive.
     Package(PackageArchiveArgs),
     /// Manage project instructions.
@@ -164,6 +173,13 @@ pub struct MetadataArgs {
     /// Include only direct package dependencies.
     #[arg(long)]
     pub no_deps: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct GenerateShellCompletionArgs {
+    /// Shell to generate completions for.
+    #[arg(value_enum)]
+    pub shell: CompletionShell,
 }
 
 #[derive(Debug, Args)]

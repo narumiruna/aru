@@ -5,6 +5,7 @@ mod instruction;
 mod mcp;
 mod package_archive;
 mod package_dependency;
+mod shell_completion;
 mod skill;
 
 use std::collections::BTreeSet;
@@ -115,6 +116,7 @@ pub fn run() -> Result<()> {
             let project = discover_project(project_option)?;
             inspection::metadata(&project, args)
         }
+        Command::GenerateShellCompletion(args) => shell_completion::generate(args),
         Command::Package(args) => {
             let package = package_for_archive(project_option)?;
             package_archive::run(&package, args, policy)
