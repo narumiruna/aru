@@ -278,7 +278,7 @@ fn dependency_target_contraction_preserves_unowned_paths_after_state_loss() {
 #[test]
 fn invalid_dependency_targets_fail_before_fetch_or_write() {
     let temporary = tempfile::tempdir().unwrap();
-    for (index, targets) in [vec!["copilot"], vec!["codex", "codex"], vec!["claude"]]
+    for (index, targets) in [vec!["codex", "codex"], vec!["claude"]]
         .into_iter()
         .enumerate()
     {

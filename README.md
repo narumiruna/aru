@@ -13,8 +13,8 @@ Declare what your project needs in `aru.toml`, pin the exact result in `aru.lock
 | --- | --- | --- |
 | Native packages | Git repositories with a package-mode `aru.toml` | Composed instructions, skills, trusted MCP, and package dependencies |
 | Instructions | Existing `AGENTS.md` files or configured Markdown sources | Native use, Claude imports/rules, or Copilot instructions |
-| Agent Skills | Git repositories | Codex and Claude project skill directories |
-| MCP servers | Registry packages, HTTPS endpoints, or stdio argv | Codex and Claude MCP configuration |
+| Agent Skills | Git repositories | Native project skill directories for every supported target |
+| MCP servers | Registry packages, HTTPS endpoints, or stdio argv | Codex, Claude, Copilot CLI, and OpenCode MCP configuration |
 
 Aru is designed to be reproducible and fail closed: it validates the complete operation before writing, does not execute configured MCP commands, and preserves drifted or unowned content for review.
 
@@ -319,6 +319,8 @@ aru skill remove owner/repository        # remove the source
 
 `skill list` writes deterministic tab-separated `name`, locked version, and canonical source records to stdout. Repeat `--target` to narrow a skill source to configured, skill-capable targets. Omit it to use every compatible project target.
 
+Skills project to each target's native project directory: `.agents/skills/` for Codex, `.claude/skills/` for Claude, `.github/skills/` for Copilot, `.pi/skills/` for pi, and `.opencode/skills/` for OpenCode. On Unix, when Codex receives the same skill, the other native paths link to the canonical `.agents` copy; platforms without project symlinks receive verified copies.
+
 Ordinary `aru sync` and `aru sync --locked` keep a branch's locked commit. Run `skill update` or add with `--upgrade` to move it. Because force-pushes can make old commits unreachable, prefer immutable SemVer tags for published, long-lived configurations.
 
 <a id="manage-mcp-servers"></a>
@@ -381,6 +383,8 @@ aru mcp remove docs
 ```
 
 `mcp list` writes deterministic tab-separated name, source type, and transport records to stdout. `mcp update [name]` unlocks only selected Registry packages. Direct URLs and direct stdio commands do not have Registry versions to upgrade.
+
+Project MCP is supported for Codex, Claude, Copilot CLI, and OpenCode. pi intentionally has no built-in MCP and is rejected as an MCP dependency target. Copilot uses the shared repository file `.github/mcp.json`; aru does not emit VS Code's incompatible `.vscode/mcp.json` or modify GitHub.com repository settings. OpenCode's `opencode.json` is edited as JSONC so unrelated settings, comments, and formatting survive.
 
 <a id="manage-targets"></a>
 
@@ -516,8 +520,13 @@ The result is a dependency inventory, not a vulnerability, license, provenance, 
 | `.github/instructions/aru/**` | Optional | Aru-owned Copilot path-specific instruction projections |
 | `.agents/skills/<name>` | Optional | Codex project skill projection |
 | `.claude/skills/<name>` | Optional | Claude skill link to `.agents`, when possible, or a verified copy |
+| `.github/skills/<name>` | Optional | Copilot skill link to `.agents`, when possible, or a verified copy |
+| `.pi/skills/<name>` | Optional | pi skill link to `.agents`, when possible, or a verified copy |
+| `.opencode/skills/<name>` | Optional | OpenCode skill link to `.agents`, when possible, or a verified copy |
 | `.codex/config.toml` | Optional | Codex project MCP entries |
 | `.mcp.json` | Optional | Claude Code project MCP entries |
+| `.github/mcp.json` | Optional | GitHub Copilot CLI project MCP entries |
+| `opencode.json` | Optional | OpenCode project config with managed MCP entries |
 | `.aru/cache/` | No | Immutable, content-addressed Git checkouts |
 | `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
 | `.aru/transaction.toml` | No | Crash-recovery journal, present only during an interrupted operation |
@@ -530,17 +539,17 @@ For byte-level details about persisted data, see [`docs/formats.md`](docs/format
 
 ## 🤖 Target capabilities
 
-| Capability | Codex | Claude Code | Copilot | pi | OpenCode |
+| Capability | Codex | Claude Code | Copilot CLI | pi | OpenCode |
 | --- | --- | --- | --- | --- | --- |
 | Directory `AGENTS.md` | Native | Sibling import | Materialized root/path rule | Native | Native |
 | Explicit instruction globs | Not supported | `.claude/rules/aru/**` | `.github/instructions/aru/**` | Not supported | Not supported |
-| Project skills | `.agents/skills/` | `.claude/skills/` | Not implemented | Not implemented | Not implemented |
-| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | Not implemented | Not implemented | Not implemented |
-| Streamable HTTP MCP | `url` | `type: http`, `url` | Not implemented | Not implemented | Not implemented |
-| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | Not implemented | Not implemented | Not implemented |
-| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | Not implemented | Not implemented | Not implemented |
+| Project skills | `.agents/skills/` | `.claude/skills/` | `.github/skills/` | `.pi/skills/` | `.opencode/skills/` |
+| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | `type: stdio`, `mcpServers`, `${ENV}` | Not built in | `type: local`, command array, `{env:ENV}` |
+| Streamable HTTP MCP | `url` | `type: http`, `url` | `type: http`, `mcpServers` | Not built in | `type: remote`, `url` |
+| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | `Authorization: Bearer ${ENV}` | Not built in | `Authorization: Bearer {env:ENV}` |
+| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | `${ENV}` header value | Not built in | `{env:ENV}` header value |
 
-Aru rejects configurations that a selected target cannot represent rather than silently broadening or dropping behavior. See the [target capability evidence and fail-closed decisions](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md).
+Aru rejects configurations that a selected target cannot represent rather than silently broadening or dropping behavior. Copilot MCP support is scoped to Copilot CLI's `.github/mcp.json`; VS Code's `.vscode/mcp.json` and GitHub.com MCP settings are separate contracts. See the [original Codex/Claude MCP evidence](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md) and [additional target capability evidence](docs/spikes/2026-07-31_additional-target-capabilities.md).
 
 <a id="safety-and-recovery"></a>
 
@@ -564,7 +573,7 @@ Aru treats instruction content, skill content, and Registry metadata as untruste
 - Unmanaged instruction destinations and skill or MCP entries collide by default.
 - `--merge` preserves unmanaged Markdown only around aru-owned instruction blocks.
 - Drifted owned entries are preserved and reported instead of overwritten.
-- Only aru-owned server keys are merged or removed. Unrelated TOML comments, TOML keys, and JSON entries survive.
+- Only aru-owned server keys are merged or removed. Unrelated TOML comments, TOML keys, JSON entries, and OpenCode JSONC comments survive.
 - Invalid existing configuration fails closed.
 
 ### Atomic transactions

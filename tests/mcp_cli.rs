@@ -9,12 +9,18 @@ fn aru(project: &Path) -> assert_cmd::Command {
     command
 }
 
-fn init(project: &Path) {
+fn init_targets(project: &Path, targets: &[&str]) {
     std::fs::create_dir(project).unwrap();
-    aru(project)
-        .args(["init", "--target", "codex", "--target", "claude"])
-        .assert()
-        .success();
+    let mut command = aru(project);
+    command.arg("init");
+    for target in targets {
+        command.args(["--target", target]);
+    }
+    command.assert().success();
+}
+
+fn init(project: &Path) {
+    init_targets(project, &["codex", "claude"]);
 }
 
 #[test]
@@ -123,6 +129,163 @@ fn direct_stdio_command_is_locked_projected_and_replayed() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Project is synchronized."));
+}
+
+#[test]
+fn copilot_and_opencode_project_mcp_preserve_user_config_and_replay_locked() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    init_targets(&project, &["copilot", "opencode"]);
+    std::fs::create_dir(project.join(".github")).unwrap();
+    std::fs::write(
+        project.join(".github/mcp.json"),
+        r#"{"custom":{"keep":true},"mcpServers":{"unmanaged":{"command":"keep"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("opencode.json"),
+        r#"{
+  // preserve this comment
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "unmanaged": { "type": "local", "command": ["keep"] },
+  },
+}
+"#,
+    )
+    .unwrap();
+
+    aru(&project)
+        .args([
+            "mcp",
+            "add",
+            "--command",
+            "uvx",
+            "--arg",
+            "demo-mcp@1.0.0",
+            "--name",
+            "demo",
+        ])
+        .assert()
+        .success();
+    aru(&project)
+        .args([
+            "mcp",
+            "add",
+            "--url",
+            "https://example.com/mcp",
+            "--name",
+            "docs",
+            "--bearer-token-env",
+            "DOCS_MCP_TOKEN",
+        ])
+        .assert()
+        .success();
+
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    for server in &lock.mcp_servers {
+        assert_eq!(
+            server
+                .targets
+                .iter()
+                .map(|target| target.target)
+                .collect::<Vec<_>>(),
+            [
+                aru::manifest::Target::Copilot,
+                aru::manifest::Target::Opencode,
+            ]
+        );
+    }
+
+    let copilot: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join(".github/mcp.json")).unwrap()).unwrap();
+    assert_eq!(copilot["custom"]["keep"], true);
+    assert_eq!(copilot["mcpServers"]["unmanaged"]["command"], "keep");
+    assert_eq!(copilot["mcpServers"]["demo"]["type"], "stdio");
+    assert_eq!(copilot["mcpServers"]["demo"]["command"], "uvx");
+    assert_eq!(
+        copilot["mcpServers"]["demo"]["args"],
+        serde_json::json!(["demo-mcp@1.0.0"])
+    );
+    assert_eq!(
+        copilot["mcpServers"]["demo"]["tools"],
+        serde_json::json!(["*"])
+    );
+    assert_eq!(copilot["mcpServers"]["docs"]["type"], "http");
+    assert_eq!(
+        copilot["mcpServers"]["docs"]["headers"]["Authorization"],
+        "Bearer ${DOCS_MCP_TOKEN}"
+    );
+
+    let opencode = std::fs::read_to_string(project.join("opencode.json")).unwrap();
+    assert!(opencode.contains("// preserve this comment"));
+    assert!(opencode.contains("\"unmanaged\""));
+    assert!(opencode.contains("\"type\": \"local\""));
+    assert!(opencode.contains("\"command\": ["));
+    assert!(opencode.contains("\"uvx\""));
+    assert!(opencode.contains("\"demo-mcp@1.0.0\""));
+    assert!(opencode.contains("\"type\": \"remote\""));
+    assert!(opencode.contains("Bearer {env:DOCS_MCP_TOKEN}"));
+    assert!(opencode.contains("\"oauth\": false"));
+
+    std::fs::remove_file(project.join(".github/mcp.json")).unwrap();
+    std::fs::remove_file(project.join("opencode.json")).unwrap();
+    std::fs::remove_file(project.join(".aru/state.toml")).unwrap();
+    aru(&project).args(["sync", "--locked"]).assert().success();
+    assert!(project.join(".github/mcp.json").is_file());
+    assert!(project.join("opencode.json").is_file());
+    aru(&project).arg("audit").assert().success();
+}
+
+#[test]
+fn pi_rejects_mcp_before_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    init_targets(&project, &["pi"]);
+    let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+
+    aru(&project)
+        .args([
+            "mcp",
+            "add",
+            "--url",
+            "https://example.com/mcp",
+            "--name",
+            "docs",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no configured target supports MCP projections",
+        ));
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".pi/mcp.json").exists());
+}
+
+#[test]
+fn invalid_opencode_config_fails_before_project_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    init_targets(&project, &["opencode"]);
+    std::fs::write(project.join("opencode.json"), "{ invalid").unwrap();
+    let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+
+    aru(&project)
+        .args(["mcp", "add", "--command", "uvx", "--name", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid JSONC in opencode.json"));
+
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert_eq!(
+        std::fs::read(project.join("opencode.json")).unwrap(),
+        b"{ invalid"
+    );
+    assert!(!project.join("aru.lock").exists());
 }
 
 #[test]

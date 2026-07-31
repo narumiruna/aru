@@ -230,6 +230,56 @@ fn target_dry_run_and_no_sync_make_pending_projection_state_explicit() {
 }
 
 #[test]
+fn all_targets_project_skills_to_native_paths_and_replay_locked() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_skill_repository(&repository);
+    init(&project, &["codex", "claude", "copilot", "pi", "opencode"]);
+
+    add_demo_skill(&project, &repository);
+
+    for destination in [
+        ".agents/skills/demo",
+        ".claude/skills/demo",
+        ".github/skills/demo",
+        ".pi/skills/demo",
+        ".opencode/skills/demo",
+    ] {
+        assert!(project.join(destination).exists(), "missing {destination}");
+    }
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        lock.skill_packages[0].targets,
+        [
+            aru::manifest::Target::Codex,
+            aru::manifest::Target::Claude,
+            aru::manifest::Target::Copilot,
+            aru::manifest::Target::Opencode,
+            aru::manifest::Target::Pi,
+        ]
+    );
+
+    for directory in [".agents", ".claude", ".github", ".pi", ".opencode"] {
+        std::fs::remove_dir_all(project.join(directory)).unwrap();
+    }
+    std::fs::remove_file(project.join(".aru/state.toml")).unwrap();
+    aru(&project).args(["sync", "--locked"]).assert().success();
+    for destination in [
+        ".agents/skills/demo",
+        ".claude/skills/demo",
+        ".github/skills/demo",
+        ".pi/skills/demo",
+        ".opencode/skills/demo",
+    ] {
+        assert!(project.join(destination).exists(), "missing {destination}");
+    }
+}
+
+#[test]
 fn target_skill_projection_matches_the_exact_set_across_layout_transitions() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

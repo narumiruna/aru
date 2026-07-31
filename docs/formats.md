@@ -42,9 +42,9 @@ Each `instructions.sources` entry has non-empty project-relative `files`, option
 
 Source `targets` default to the complete project target set and otherwise must be a duplicate-free subset. Discovery always excludes `.git/**` and `.aru/**`; onboarding also skips common build/vendor roots and writes the exact files it found. Unsafe/absolute patterns, parent traversal, duplicate matches, symlinks, non-regular files, non-UTF-8 paths/content, files larger than 1 MiB, generated output paths, and reserved aru marker text fail before writes.
 
-Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target.
+Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target. All current targets support skills through their native project directories.
 
-An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
+An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets: Codex, Claude, Copilot, or OpenCode. pi has no built-in MCP and is rejected. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
 
 `package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes project targets, dependency targets, and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
 
@@ -120,6 +120,20 @@ Every source owns only its marker block. Bytes outside blocks are unmanaged and 
 
 Generated path-specific files are wholly aru-owned. Removing a source or target removes a file/block only when local state proves its current semantic digest equals the last applied digest. Missing state can adopt an exact committed baseline but never authorizes historical deletion. Unknown or drifted content is preserved and reported.
 
+## Skill and MCP projections
+
+| Target | Project skill destination | Project MCP destination |
+| --- | --- | --- |
+| Codex | `.agents/skills/<name>` | `.codex/config.toml` |
+| Claude Code | `.claude/skills/<name>` | `.mcp.json` |
+| GitHub Copilot CLI | `.github/skills/<name>` | `.github/mcp.json` |
+| pi | `.pi/skills/<name>` | Rejected; no built-in MCP |
+| OpenCode | `.opencode/skills/<name>` | `opencode.json` |
+
+When the same skill selects Codex and another target on a platform with project symlink support, the other target-native path links to the canonical `.agents/skills/<name>` copy. Otherwise each destination is a verified copy with the same semantic digest and an independent ownership entry.
+
+Copilot MCP uses the `mcpServers` project format, `stdio` / `http` transport names, `${ENV}` references, and `tools = ["*"]`. This contract targets Copilot CLI; `.vscode/mcp.json` and GitHub.com repository MCP settings are not projections. OpenCode MCP uses `mcp` entries with `local` command arrays or `remote` URLs, `{env:ENV}` references, and `enabled = true`. Header-authenticated OpenCode remotes set `oauth = false` to avoid an unintended OAuth flow. `opencode.json` is parsed and edited as JSONC; unrelated keys, MCP entries, comments, trailing commas, and surrounding formatting survive.
+
 ## `aru.lock`
 
 `version = 3`. Version 3 adds the native aru package graph and managed package-instruction identity; version 2 introduced explicit effective targets on skill packages. Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, source SHA-256, and whether aru must project package-owned native content. `aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
@@ -130,7 +144,7 @@ Each `skill-package` locks a normalized source, original requirement descriptor,
 
 `projection-input-hash` covers complete lock identity, sorted project targets, and adapter capability schema. `projection-baseline` contains only currently desired semantic instruction, skill, and MCP entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
 
-Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when the same skill package effectively selects Codex and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Codex MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name user-level entry. Instruction-only targets are filtered out before skill/MCP resolution. A declared skill or MCP requirement with no capable effective target fails explicitly.
+Skill and MCP destinations follow the table above. Codex and OpenCode MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name higher-precedence entry. Targets without a requested capability are filtered out before dependency resolution; a declared requirement with no capable effective target fails explicitly.
 
 The canonical skill digest byte stream is:
 

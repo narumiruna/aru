@@ -206,7 +206,7 @@ fn prepare_projections(
         if entry.kind == "skill" && !processed.contains(&identity) {
             let destination = PathBuf::from(&entry.destination);
             let expected_link =
-                (entry.mode == "symlink").then(|| skill_adapter::claude_link_target(&entry.key));
+                (entry.mode == "symlink").then(|| skill_adapter::shared_link_target(&entry.key));
             let current = observe_skill(project, &destination, expected_link.as_deref())?;
             match reconcile(
                 &entry.key,
@@ -414,7 +414,7 @@ fn prepare_skill_entry(
         .or(previous_mode)
         .unwrap_or(mode.as_str());
     let observed_link =
-        (observed_mode == "symlink").then(|| skill_adapter::claude_link_target(name));
+        (observed_mode == "symlink").then(|| skill_adapter::shared_link_target(name));
     let current = observe_skill(project, &destination, observed_link.as_deref())?;
     let mut action = reconcile(
         name,

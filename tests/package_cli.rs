@@ -498,11 +498,11 @@ fn invalid_package_sources_fail_before_project_writes() {
 }
 
 #[test]
-fn package_skill_capability_and_duplicate_export_fail_before_package_intent_writes() {
+fn package_skill_uses_selected_native_target_and_duplicate_export_fails() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("package");
     let duplicate_project = temporary.path().join("duplicate-project");
-    let incapable_project = temporary.path().join("incapable-project");
+    let copilot_project = temporary.path().join("copilot-project");
     init_git(&repository);
     write_package(
         &repository,
@@ -515,18 +515,20 @@ fn package_skill_capability_and_duplicate_export_fail_before_package_intent_writ
     );
     commit_version(&repository, "1.0.0");
 
-    init_project(&incapable_project, &["codex", "copilot"]);
-    let before = std::fs::read(incapable_project.join("aru.toml")).unwrap();
-    aru(&incapable_project)
+    init_project(&copilot_project, &["codex", "copilot"]);
+    aru(&copilot_project)
         .args(["add", repository.to_str().unwrap(), "--target", "copilot"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("exports skills unsupported"));
+        .success();
+    assert!(copilot_project.join(".github/skills/demo").is_dir());
+    assert!(!copilot_project.join(".agents/skills/demo").exists());
+    let lock = aru::lockfile::Lockfile::load_optional(&copilot_project)
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        std::fs::read(incapable_project.join("aru.toml")).unwrap(),
-        before
+        lock.skill_packages[0].targets,
+        [aru::manifest::Target::Copilot]
     );
-    assert!(!incapable_project.join("aru.lock").exists());
 
     init_project(&duplicate_project, &["codex"]);
     aru(&duplicate_project)
