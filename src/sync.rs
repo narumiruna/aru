@@ -16,6 +16,8 @@ use crate::transaction::{Operation, path_digest};
 pub struct SyncOptions<'a> {
     pub previous: Option<&'a Lockfile>,
     pub locked: bool,
+    pub offline: bool,
+    pub materialize_skills: bool,
     pub dry_run: bool,
     pub project_projections: bool,
     pub force: bool,
@@ -30,6 +32,7 @@ pub struct SyncResult {
     pub lock: Lockfile,
     pub operations: Vec<Operation>,
     pub plan: Vec<String>,
+    pub details: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -44,6 +47,8 @@ pub fn prepare(
         ResolveOptions {
             previous: options.previous,
             locked: options.locked,
+            offline: options.offline,
+            materialize_skills: options.materialize_skills,
             update_skills: options.update_skills,
             update_mcp: options.update_mcp,
             dry_run: options.dry_run,
@@ -111,10 +116,12 @@ pub fn prepare(
     plan.sort();
     warnings.sort();
     warnings.dedup();
+    let details = lock_details(&resolution.lock);
     Ok(SyncResult {
         lock: resolution.lock,
         operations,
         plan,
+        details,
         warnings,
     })
 }
@@ -702,20 +709,17 @@ fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
         .collect();
     for source in &next.instruction_sources {
         match previous_instructions.get(source.source.as_str()) {
-            None => plan.push(format!(
-                "lock instruction {} {}",
-                source.source, source.sha256
-            )),
+            None => plan.push(format!("lock instruction {}", source.source)),
             Some(previous) if *previous != source && previous.sha256 == source.sha256 => {
                 plan.push(format!(
                     "refresh instruction {} projection intent",
                     source.source
                 ));
             }
-            Some(previous) if *previous != source => plan.push(format!(
-                "lock instruction {} {} -> {}",
-                source.source, previous.sha256, source.sha256
-            )),
+            Some(previous) if *previous != source => {
+                let _ = previous;
+                plan.push(format!("lock instruction {}", source.source));
+            }
             _ => {}
         }
     }
@@ -745,16 +749,13 @@ fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
     for package in &next.skill_packages {
         for skill in &package.skills {
             match previous_skills.get(skill.name.as_str()) {
-                None => plan.push(format!(
-                    "lock skill {} {} {} from {}",
-                    skill.name, package.version, skill.sha256, package.source
-                )),
+                None => plan.push(format!("lock skill {} {}", skill.name, package.version)),
                 Some((version, digest))
                     if *version != package.version || *digest != skill.sha256 =>
                 {
                     plan.push(format!(
-                        "lock skill {} {} -> {} {} from {}",
-                        skill.name, version, package.version, skill.sha256, package.source
+                        "lock skill {} {} -> {}",
+                        skill.name, version, package.version
                     ));
                 }
                 _ => {}
@@ -788,6 +789,29 @@ fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
         }
     }
     plan
+}
+
+fn lock_details(lock: &Lockfile) -> Vec<String> {
+    let mut details = Vec::new();
+    for source in &lock.instruction_sources {
+        details.push(format!("instruction {} {}", source.source, source.sha256));
+    }
+    for package in &lock.skill_packages {
+        for skill in &package.skills {
+            details.push(format!(
+                "skill {} {} {} {} from {}",
+                skill.name, package.version, package.revision, skill.sha256, package.source
+            ));
+        }
+    }
+    for server in &lock.mcp_servers {
+        details.push(format!(
+            "MCP {} {} {}",
+            server.name, server.version, server.metadata_sha256
+        ));
+    }
+    details.sort();
+    details
 }
 
 fn state_identity(entry: &StateEntry) -> (String, String, String) {

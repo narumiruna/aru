@@ -17,6 +17,12 @@ pub struct GitSource {
     pub repository_name: String,
 }
 
+impl GitSource {
+    pub fn is_local(&self) -> bool {
+        self.identity.starts_with("git+file:")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitResolution {
     pub version: String,
@@ -549,6 +555,7 @@ mod tests {
         git(&repository, &["init", "--quiet"]);
         git(&repository, &["config", "user.email", "test@example.com"]);
         git(&repository, &["config", "user.name", "Test"]);
+        git(&repository, &["config", "commit.gpgsign", "false"]);
         std::fs::write(repository.join("file"), "first").unwrap();
         git(&repository, &["add", "."]);
         git(&repository, &["commit", "--quiet", "-m", "first"]);
@@ -614,6 +621,7 @@ mod tests {
             vec!["init", "--quiet"],
             vec!["config", "user.email", "git@example.com"],
             vec!["config", "user.name", "git test"],
+            vec!["config", "commit.gpgsign", "false"],
         ] {
             assert!(
                 Command::new("git")

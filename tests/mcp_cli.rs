@@ -18,6 +18,41 @@ fn init(project: &Path) {
 }
 
 #[test]
+fn mcp_add_help_groups_sources_and_describes_apply_options() {
+    cargo_bin_cmd!("aru")
+        .args(["mcp", "add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Source Options:"))
+        .stdout(predicate::str::contains("Registry Options:"))
+        .stdout(predicate::str::contains("Apply Options:"))
+        .stdout(predicate::str::contains(
+            "Environment variable containing a bearer token",
+        ))
+        .stdout(predicate::str::contains("Codex-only").not())
+        .stdout(predicate::str::contains(
+            "Update manifest and lock but skip target project paths",
+        ));
+}
+
+#[test]
+fn mcp_list_does_not_invent_an_unresolved_registry_transport() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path();
+    std::fs::write(
+        project.join("aru.toml"),
+        "[project]\ntargets = [\"codex\"]\n\n[mcp.docs]\nregistry = \"https://registry.example\"\nserver = \"io.example/docs\"\n",
+    )
+    .unwrap();
+
+    aru(project)
+        .args(["mcp", "list"])
+        .assert()
+        .success()
+        .stdout("docs\tregistry\tunresolved\n");
+}
+
+#[test]
 fn direct_stdio_command_is_locked_projected_and_replayed() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
@@ -78,12 +113,16 @@ fn direct_stdio_command_is_locked_projected_and_replayed() {
     );
 
     aru(&project)
+        .args(["mcp", "list"])
+        .assert()
+        .success()
+        .stdout("yfinance\tstdio\tstdio\n");
+
+    aru(&project)
         .args(["sync", "--locked"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "aru project is already synchronized",
-        ));
+        .stderr(predicate::str::contains("Project is synchronized."));
 }
 
 #[test]

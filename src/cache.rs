@@ -32,6 +32,15 @@ impl Cache {
     }
 
     pub fn checkout(&self, source: &GitSource, revision: &str) -> Result<PathBuf> {
+        self.checkout_with_policy(source, revision, false)
+    }
+
+    pub fn checkout_with_policy(
+        &self,
+        source: &GitSource,
+        revision: &str,
+        offline: bool,
+    ) -> Result<PathBuf> {
         let source_hash = source_hash(&source.identity);
         let source_root = self.root.join("git").join(&source_hash);
         std::fs::create_dir_all(&source_root).at(&source_root)?;
@@ -46,6 +55,12 @@ impl Cache {
         let content = shard.join("content");
         if marker.is_file() && content.is_dir() {
             return Ok(content);
+        }
+        if offline && !source.is_local() {
+            return Err(AruError::msg(format!(
+                "offline mode cannot fetch uncached Git source {} at {revision}",
+                source.identity
+            )));
         }
         if shard.exists() {
             remove_any(&shard)?;
@@ -209,6 +224,7 @@ mod tests {
         git(&repository, &["init", "--quiet"]);
         git(&repository, &["config", "user.email", "cache@example.com"]);
         git(&repository, &["config", "user.name", "cache test"]);
+        git(&repository, &["config", "commit.gpgsign", "false"]);
         std::fs::write(repository.join("file"), "content").unwrap();
         git(&repository, &["add", "file"]);
         git(&repository, &["commit", "--quiet", "-m", "initial"]);

@@ -7,6 +7,7 @@ pub mod instruction;
 pub mod interactive;
 pub mod lockfile;
 pub mod manifest;
+pub mod output;
 pub mod ownership;
 pub mod registry;
 pub mod resolver;

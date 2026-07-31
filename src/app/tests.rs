@@ -19,6 +19,7 @@ fn repository(path: &Path) {
     git(path, &["init", "--quiet"]);
     git(path, &["config", "user.email", "test@example.com"]);
     git(path, &["config", "user.name", "Test"]);
+    git(path, &["config", "commit.gpgsign", "false"]);
     for name in ["alpha", "beta"] {
         let skill = path.join("skills").join(name);
         std::fs::create_dir_all(&skill).unwrap();
@@ -174,8 +175,8 @@ fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
             skills: vec!["alpha".into()],
             no_sync: false,
             dry_run: false,
-            force: false,
         },
+        ExecutionPolicy::default(),
     )
     .unwrap();
     let mut narrowed = FakeChooser {

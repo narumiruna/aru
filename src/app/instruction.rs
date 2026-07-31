@@ -1,19 +1,23 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::cli::InstructionInitArgs;
+use crate::cli::{InstructionAddArgs, InstructionRemoveArgs};
 use crate::error::{AruError, Result};
 use crate::instruction::discovery::discover_agents;
 use crate::manifest::{InstructionSource, InstructionSourceScope, ManifestDocument};
 
-pub(super) fn init(project: &Path, args: InstructionInitArgs) -> Result<()> {
+pub(super) fn add(
+    project: &Path,
+    args: InstructionAddArgs,
+    policy: super::ExecutionPolicy,
+) -> Result<()> {
     let _guard = super::begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let mut discovered = discover_agents(project)?;
     if discovered.is_empty() {
         return Err(AruError::msg(
-            "no AGENTS.md files found; create one before running aru instruction init",
+            "no AGENTS.md files found; create one before running aru instruction add --discover",
         ));
     }
     let already_declared = crate::instruction::discovery::discover(project, &manifest)?
@@ -53,11 +57,69 @@ pub(super) fn init(project: &Path, args: InstructionInitArgs) -> Result<()> {
         &manifest,
         Some(document.bytes()),
         args.dry_run,
-        false,
-        true,
+        policy,
+        !args.no_sync,
         args.merge,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
     )
+}
+
+pub(super) fn remove(
+    project: &Path,
+    args: InstructionRemoveArgs,
+    policy: super::ExecutionPolicy,
+) -> Result<()> {
+    let _guard = super::begin(project, args.dry_run)?;
+    let mut document = ManifestDocument::load(project)?;
+    let manifest = document.manifest()?;
+    let requested = args.files.into_iter().collect::<BTreeSet<_>>();
+    let declared = manifest
+        .instructions
+        .sources
+        .iter()
+        .flat_map(|source| source.files.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = requested.iter().find(|file| !declared.contains(*file)) {
+        return Err(AruError::msg(format!(
+            "instruction source file selector {missing:?} is not declared"
+        )));
+    }
+
+    let mut sources = manifest.instructions.sources;
+    for source in &mut sources {
+        source.files.retain(|file| !requested.contains(file));
+    }
+    sources.retain(|source| !source.files.is_empty());
+    document.set_instruction_sources(&sources);
+    let manifest = document.manifest()?;
+    super::execute(
+        project,
+        &manifest,
+        Some(document.bytes()),
+        args.dry_run,
+        policy,
+        !args.no_sync,
+        false,
+        false,
+        BTreeSet::new(),
+        BTreeSet::new(),
+    )
+}
+
+pub(super) fn list(project: &Path) -> Result<()> {
+    let manifest = ManifestDocument::load(project)?.manifest()?;
+    let mut files = manifest
+        .instructions
+        .sources
+        .into_iter()
+        .flat_map(|source| source.files)
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    for file in files {
+        println!("{file}");
+    }
+    Ok(())
 }

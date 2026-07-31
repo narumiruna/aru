@@ -1,4 +1,5 @@
 mod instruction;
+mod mcp;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -6,9 +7,9 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use crate::cli::{
-    Cli, Command, InstructionCommand, LockArgs, McpAddArgs, McpCommand, McpRemoveArgs,
-    McpUpdateArgs, SkillAddArgs, SkillCommand, SkillRemoveArgs, SkillUpdateArgs, SyncArgs,
-    TargetAddArgs, TargetCommand, TargetRemoveArgs, TargetSetArgs,
+    Cli, Command, InstructionCommand, LockArgs, McpCommand, SkillAddArgs, SkillCommand,
+    SkillRemoveArgs, SkillUpdateArgs, SyncArgs, TargetAddArgs, TargetCommand, TargetRemoveArgs,
+    TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
@@ -16,58 +17,95 @@ use crate::interactive::{
     terminal_selection_mode,
 };
 use crate::lockfile::Lockfile;
-use crate::manifest::{ManifestDocument, McpRequirement, SkillRequirement, Target, validate_name};
+use crate::manifest::{ManifestDocument, SkillRequirement, Target, validate_name};
+use crate::output::Output;
 use crate::resolver::{SkillResolutionHint, canonical_update_skill_targets, inspect_skill_source};
 use crate::sync::{SyncOptions, SyncResult, garbage_collect, prepare};
 use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
 
+#[derive(Debug, Clone, Copy)]
+struct ExecutionPolicy {
+    locked: bool,
+    offline: bool,
+    output: Output,
+}
+
+impl Default for ExecutionPolicy {
+    fn default() -> Self {
+        Self {
+            locked: false,
+            offline: false,
+            output: Output::new(false, 0, crate::cli::ColorChoice::Never, true),
+        }
+    }
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let project_option = cli.project;
+    let policy = ExecutionPolicy {
+        locked: cli.locked || cli.frozen,
+        offline: cli.offline || cli.frozen,
+        output: Output::new(cli.quiet, cli.verbose, cli.color, cli.no_progress),
+    };
     match cli.command {
-        Command::Init(args) => init(project_for_init(cli.project)?, args.target),
+        Command::Init(args) => init_with_output(
+            project_for_init(project_option, args.path)?,
+            args.target,
+            policy.output,
+        ),
         Command::Lock(args) => {
-            let project = discover_project(cli.project)?;
-            lock(&project, args)
+            let project = discover_project(project_option)?;
+            lock(&project, args, policy)
         }
         Command::Sync(args) => {
-            let project = discover_project(cli.project)?;
-            sync(&project, args)
+            let project = discover_project(project_option)?;
+            sync(&project, args, policy)
         }
         Command::Instruction { command } => {
-            let project = discover_project(cli.project)?;
+            let project = discover_project(project_option)?;
             match command {
-                InstructionCommand::Init(args) => instruction::init(&project, args),
+                InstructionCommand::Add(args) => instruction::add(&project, args, policy),
+                InstructionCommand::Remove(args) => instruction::remove(&project, args, policy),
+                InstructionCommand::List => instruction::list(&project),
             }
         }
         Command::Target { command } => {
-            let project = discover_project(cli.project)?;
+            let project = discover_project(project_option)?;
             match command {
-                TargetCommand::Add(args) => target_add(&project, args),
-                TargetCommand::Remove(args) => target_remove(&project, args),
-                TargetCommand::Set(args) => target_set(&project, args),
+                TargetCommand::Add(args) => target_add(&project, args, policy),
+                TargetCommand::Remove(args) => target_remove(&project, args, policy),
+                TargetCommand::Set(args) => target_set(&project, args, policy),
                 TargetCommand::List => target_list(&project),
             }
         }
         Command::Skill { command } => {
-            let project = discover_project(cli.project)?;
+            let project = discover_project(project_option)?;
             match command {
-                SkillCommand::Add(args) => skill_add(&project, args),
-                SkillCommand::Remove(args) => skill_remove(&project, args),
-                SkillCommand::Update(args) => skill_update(&project, args),
+                SkillCommand::Add(args) => skill_add(&project, args, policy),
+                SkillCommand::Remove(args) => skill_remove(&project, args, policy),
+                SkillCommand::Update(args) => skill_update(&project, args, policy),
+                SkillCommand::List => skill_list(&project),
             }
         }
         Command::Mcp { command } => {
-            let project = discover_project(cli.project)?;
+            let project = discover_project(project_option)?;
             match command {
-                McpCommand::Add(args) => mcp_add(&project, *args),
-                McpCommand::Remove(args) => mcp_remove(&project, args),
-                McpCommand::Update(args) => mcp_update(&project, args),
+                McpCommand::Add(args) => mcp::add(&project, *args, policy),
+                McpCommand::Remove(args) => mcp::remove(&project, args, policy),
+                McpCommand::Update(args) => mcp::update(&project, args, policy),
+                McpCommand::List => mcp::list(&project),
             }
         }
     }
 }
 
-fn init(project: PathBuf, mut targets: Vec<Target>) -> Result<()> {
+#[cfg(test)]
+fn init(project: PathBuf, targets: Vec<Target>) -> Result<()> {
+    init_with_output(project, targets, ExecutionPolicy::default().output)
+}
+
+fn init_with_output(project: PathBuf, mut targets: Vec<Target>, output: Output) -> Result<()> {
     if project.join(crate::manifest::MANIFEST_FILE).exists() {
         return Err(AruError::msg("aru.toml already exists"));
     }
@@ -102,27 +140,31 @@ fn init(project: PathBuf, mut targets: Vec<Target>) -> Result<()> {
         operations.push(Operation::file(".gitignore", updated.into_bytes()));
     }
     apply(&project, operations)?;
-    println!(
-        "initialized aru project for {}",
+    output.completion(&format!(
+        "Initialized aru project for {}.",
         targets
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")
-    );
+    ));
     Ok(())
 }
 
-fn lock(project: &Path, args: LockArgs) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+fn lock(project: &Path, args: LockArgs, policy: ExecutionPolicy) -> Result<()> {
+    let dry_run = args.dry_run || args.check;
+    let _guard = begin(project, dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
+    if args.check {
+        return check_execution(project, &manifest, false, policy.output);
+    }
     execute(
         project,
         &manifest,
         None,
-        args.dry_run,
-        false,
+        dry_run,
+        policy,
         false,
         false,
         false,
@@ -131,22 +173,70 @@ fn lock(project: &Path, args: LockArgs) -> Result<()> {
     )
 }
 
-fn sync(project: &Path, args: SyncArgs) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+fn sync(project: &Path, args: SyncArgs, policy: ExecutionPolicy) -> Result<()> {
+    let dry_run = args.dry_run || args.check;
+    let _guard = begin(project, dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
+    if args.check {
+        return check_execution(project, &manifest, true, policy.output);
+    }
     execute(
         project,
         &manifest,
         None,
-        args.dry_run,
-        args.locked,
+        dry_run,
+        policy,
         true,
         args.merge,
         args.force,
         BTreeSet::new(),
         BTreeSet::new(),
     )
+}
+
+fn check_execution(
+    project: &Path,
+    manifest: &crate::manifest::Manifest,
+    project_projections: bool,
+    output: Output,
+) -> Result<()> {
+    let previous = Lockfile::load_optional(project)?;
+    let update_skills = BTreeSet::new();
+    let update_mcp = BTreeSet::new();
+    let skill_hints = BTreeMap::new();
+    let prepared = prepare(
+        project,
+        manifest,
+        SyncOptions {
+            previous: previous.as_ref(),
+            locked: true,
+            offline: true,
+            materialize_skills: false,
+            dry_run: true,
+            project_projections,
+            force: false,
+            merge_instructions: false,
+            manifest_bytes: None,
+            update_skills: &update_skills,
+            update_mcp: &update_mcp,
+            skill_hints: &skill_hints,
+        },
+    )?;
+    if !prepared.operations.is_empty() || (project_projections && !prepared.warnings.is_empty()) {
+        let message = if project_projections {
+            "project is not synchronized; run `aru sync`"
+        } else {
+            "aru.lock is not up to date; run `aru lock`"
+        };
+        return Err(AruError::msg(message));
+    }
+    if project_projections {
+        output.completion("Project is synchronized.");
+    } else {
+        output.completion("Lockfile is up to date.");
+    }
+    Ok(())
 }
 
 fn target_list(project: &Path) -> Result<()> {
@@ -159,7 +249,7 @@ fn target_list(project: &Path) -> Result<()> {
     Ok(())
 }
 
-fn target_add(project: &Path, args: TargetAddArgs) -> Result<()> {
+fn target_add(project: &Path, args: TargetAddArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
@@ -175,10 +265,11 @@ fn target_add(project: &Path, args: TargetAddArgs) -> Result<()> {
         args.dry_run,
         args.merge,
         args.force,
+        policy,
     )
 }
 
-fn target_remove(project: &Path, args: TargetRemoveArgs) -> Result<()> {
+fn target_remove(project: &Path, args: TargetRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
@@ -210,10 +301,11 @@ fn target_remove(project: &Path, args: TargetRemoveArgs) -> Result<()> {
         args.dry_run,
         false,
         false,
+        policy,
     )
 }
 
-fn target_set(project: &Path, args: TargetSetArgs) -> Result<()> {
+fn target_set(project: &Path, args: TargetSetArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
@@ -231,6 +323,7 @@ fn target_set(project: &Path, args: TargetSetArgs) -> Result<()> {
         args.dry_run,
         args.merge,
         args.force,
+        policy,
     )
 }
 
@@ -244,6 +337,7 @@ fn apply_target_change(
     dry_run: bool,
     merge_instructions: bool,
     force: bool,
+    policy: ExecutionPolicy,
 ) -> Result<()> {
     document.set_targets(&targets);
     let manifest = document.manifest()?;
@@ -269,6 +363,7 @@ fn apply_target_change(
         force,
         target_plan,
         &targets,
+        policy,
     )
 }
 
@@ -277,20 +372,31 @@ fn normalize_targets(targets: &mut Vec<Target>) {
     targets.dedup();
 }
 
-fn skill_add(project: &Path, args: SkillAddArgs) -> Result<()> {
+fn skill_add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
-    skill_add_with_mode(project, args, mode, &mut chooser)
+    skill_add_with_policy(project, args, mode, &mut chooser, policy)
 }
 
+#[cfg(test)]
 fn skill_add_with_mode(
     project: &Path,
     args: SkillAddArgs,
     mode: SkillAddSelectionMode,
     chooser: &mut dyn SkillChooser,
 ) -> Result<()> {
+    skill_add_with_policy(project, args, mode, chooser, ExecutionPolicy::default())
+}
+
+fn skill_add_with_policy(
+    project: &Path,
+    args: SkillAddArgs,
+    mode: SkillAddSelectionMode,
+    chooser: &mut dyn SkillChooser,
+    policy: ExecutionPolicy,
+) -> Result<()> {
     if mode != SkillAddSelectionMode::Interactive {
-        return skill_add_explicit(project, &args, mode);
+        return skill_add_explicit(project, &args, mode, policy);
     }
 
     let (snapshot, key, requirement, existing, previous) = {
@@ -306,6 +412,7 @@ fn skill_add_with_mode(
         (snapshot, key, requirement, existing, previous)
     };
 
+    policy.output.progress(&format!("skill source {key}"));
     let inspection = inspect_skill_source(
         project,
         &key,
@@ -316,6 +423,7 @@ fn skill_add_with_mode(
             previous.as_ref()
         },
         args.dry_run,
+        policy.offline,
     )?;
     let names = inspection
         .candidates
@@ -332,7 +440,9 @@ fn skill_add_with_mode(
         Some(requirement) => requirement.include.clone(),
     };
     let Some(selected) = choose_skills(chooser, &names, &current)? else {
-        println!("skill selection canceled");
+        policy
+            .output
+            .completion("Skill selection canceled; no files were changed.");
         return Ok(());
     };
 
@@ -377,7 +487,7 @@ fn skill_add_with_mode(
         &manifest,
         Some(document.bytes()),
         args.dry_run,
-        false,
+        policy,
         !args.no_sync,
         false,
         args.force,
@@ -391,6 +501,7 @@ fn skill_add_explicit(
     project: &Path,
     args: &SkillAddArgs,
     mode: SkillAddSelectionMode,
+    policy: ExecutionPolicy,
 ) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
@@ -431,7 +542,7 @@ fn skill_add_explicit(
         &manifest,
         Some(document.bytes()),
         args.dry_run,
-        false,
+        policy,
         !args.no_sync,
         false,
         args.force,
@@ -496,7 +607,7 @@ impl ProjectSnapshot {
     }
 }
 
-fn skill_remove(project: &Path, args: SkillRemoveArgs) -> Result<()> {
+fn skill_remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
@@ -534,16 +645,37 @@ fn skill_remove(project: &Path, args: SkillRemoveArgs) -> Result<()> {
         &manifest,
         Some(document.bytes()),
         args.dry_run,
-        false,
+        policy,
         !args.no_sync,
         false,
-        args.force,
+        false,
         BTreeSet::new(),
         BTreeSet::new(),
     )
 }
 
-fn skill_update(project: &Path, args: SkillUpdateArgs) -> Result<()> {
+fn skill_list(project: &Path) -> Result<()> {
+    let manifest = ManifestDocument::load(project)?.manifest()?;
+    let lock = Lockfile::load_optional(project)?;
+    let mut listed_sources = BTreeSet::new();
+    if let Some(lock) = lock {
+        for package in lock.skill_packages {
+            listed_sources.insert(package.source.clone());
+            for skill in package.skills {
+                println!("{}\t{}\t{}", skill.name, package.version, package.source);
+            }
+        }
+    }
+    for source in manifest.skills.keys() {
+        let canonical = crate::source::git::canonicalize(project, source)?;
+        if !listed_sources.contains(&canonical.identity) {
+            println!("-\tunlocked\t{source}");
+        }
+    }
+    Ok(())
+}
+
+fn skill_update(project: &Path, args: SkillUpdateArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
@@ -553,123 +685,12 @@ fn skill_update(project: &Path, args: SkillUpdateArgs) -> Result<()> {
         &manifest,
         None,
         args.dry_run,
-        false,
+        policy,
         !args.no_sync,
         false,
         args.force,
         updates,
         BTreeSet::new(),
-    )
-}
-
-fn mcp_add(project: &Path, args: McpAddArgs) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    validate_name(&args.name, "MCP name")?;
-    if let Some(transport) = &args.transport
-        && !matches!(transport.as_str(), "stdio" | "streamable-http")
-    {
-        return Err(AruError::msg(
-            "MCP transport must be stdio or streamable-http",
-        ));
-    }
-    if args.url.is_some()
-        && args
-            .transport
-            .as_deref()
-            .is_some_and(|value| value != "streamable-http")
-    {
-        return Err(AruError::msg(
-            "direct MCP URLs require streamable-http transport",
-        ));
-    }
-    if args.command.is_some() && args.registry.is_some() {
-        return Err(AruError::msg(
-            "direct stdio MCP cannot set registry or package-registry",
-        ));
-    }
-    let mut document = ManifestDocument::load(project)?;
-    let requirement = McpRequirement {
-        registry: args.server.as_ref().map(|_| {
-            args.registry
-                .unwrap_or_else(|| crate::registry::DEFAULT_REGISTRY.into())
-        }),
-        server: args.server,
-        version: args.version,
-        transport: args.transport,
-        package_registry: args.package_registry,
-        url: args.url,
-        command: args.command,
-        args: args.args,
-        bearer_token_env: args.bearer_token_env,
-    };
-    requirement.validate(&args.name)?;
-    document.set_mcp(&args.name, &requirement);
-    let manifest = document.manifest()?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        false,
-        !args.no_sync,
-        false,
-        args.force,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
-}
-
-fn mcp_remove(project: &Path, args: McpRemoveArgs) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    let mut document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    if !manifest.mcp.contains_key(&args.name) {
-        return Err(AruError::msg(format!(
-            "MCP {:?} is not declared",
-            args.name
-        )));
-    }
-    document.remove_mcp(&args.name);
-    let manifest = document.manifest()?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        false,
-        !args.no_sync,
-        false,
-        args.force,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
-}
-
-fn mcp_update(project: &Path, args: McpUpdateArgs) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    let document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    let updates: BTreeSet<String> = if args.names.is_empty() {
-        manifest.mcp.keys().cloned().collect()
-    } else {
-        for name in &args.names {
-            if !manifest.mcp.contains_key(name) {
-                return Err(AruError::msg(format!("MCP {name:?} is not declared")));
-            }
-        }
-        args.names.into_iter().collect()
-    };
-    execute(
-        project,
-        &manifest,
-        None,
-        args.dry_run,
-        false,
-        !args.no_sync,
-        false,
-        args.force,
-        BTreeSet::new(),
-        updates,
     )
 }
 
@@ -679,7 +700,7 @@ fn execute(
     manifest: &crate::manifest::Manifest,
     manifest_bytes: Option<Vec<u8>>,
     dry_run: bool,
-    locked: bool,
+    policy: ExecutionPolicy,
     project_projections: bool,
     merge_instructions: bool,
     force: bool,
@@ -691,7 +712,7 @@ fn execute(
         manifest,
         manifest_bytes,
         dry_run,
-        locked,
+        policy,
         project_projections,
         merge_instructions,
         force,
@@ -707,7 +728,7 @@ fn execute_with_skill_hints(
     manifest: &crate::manifest::Manifest,
     manifest_bytes: Option<Vec<u8>>,
     dry_run: bool,
-    locked: bool,
+    policy: ExecutionPolicy,
     project_projections: bool,
     merge_instructions: bool,
     force: bool,
@@ -716,12 +737,17 @@ fn execute_with_skill_hints(
     skill_hints: &BTreeMap<String, SkillResolutionHint>,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
+    let deferred = !project_projections
+        && (manifest_bytes.is_some() || !update_skills.is_empty() || !update_mcp.is_empty());
+    policy.output.progress("project state");
     let prepared = prepare(
         project,
         manifest,
         SyncOptions {
             previous: previous.as_ref(),
-            locked,
+            locked: policy.locked,
+            offline: policy.offline,
+            materialize_skills: true,
             dry_run,
             project_projections,
             force,
@@ -732,7 +758,26 @@ fn execute_with_skill_hints(
             skill_hints,
         },
     )?;
-    finish_execution(project, prepared, dry_run, None)
+    let changed_completion = if deferred {
+        "Target paths were not changed; run `aru sync` to apply."
+    } else if project_projections {
+        "Project synchronized."
+    } else {
+        "Lockfile updated."
+    };
+    let unchanged_completion = if project_projections {
+        "Project is synchronized."
+    } else {
+        "Lockfile is up to date."
+    };
+    finish_execution(
+        project,
+        prepared,
+        dry_run,
+        changed_completion,
+        unchanged_completion,
+        policy.output,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -746,6 +791,7 @@ fn execute_target_change(
     force: bool,
     target_plan: Vec<String>,
     targets: &[Target],
+    policy: ExecutionPolicy,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
     let update_skills = BTreeSet::new();
@@ -756,7 +802,9 @@ fn execute_target_change(
         manifest,
         SyncOptions {
             previous: previous.as_ref(),
-            locked: false,
+            locked: policy.locked,
+            offline: policy.offline,
+            materialize_skills: true,
             dry_run,
             project_projections,
             force,
@@ -775,44 +823,68 @@ fn execute_target_change(
         .collect::<Vec<_>>()
         .join(", ");
     let completion = if project_projections {
-        format!("targets synchronized: {configured}")
+        format!("Targets synchronized: {configured}.")
     } else {
-        "target paths were not changed (--no-sync); run `aru sync` to apply".into()
+        "Target paths were not changed; run `aru sync` to apply.".into()
     };
-    finish_execution(project, prepared, dry_run, Some(completion))
+    finish_execution(
+        project,
+        prepared,
+        dry_run,
+        &completion,
+        "Project is synchronized.",
+        policy.output,
+    )
 }
 
 fn finish_execution(
     project: &Path,
     prepared: SyncResult,
     dry_run: bool,
-    completion: Option<String>,
+    changed_completion: &str,
+    unchanged_completion: &str,
+    output: Output,
 ) -> Result<()> {
     for warning in &prepared.warnings {
-        eprintln!("warning: {warning}");
+        output.warning(warning);
     }
     if dry_run {
-        if prepared.plan.is_empty() {
-            println!("dry-run: no changes");
-        } else {
-            for item in &prepared.plan {
-                println!("dry-run: {item}");
-            }
+        for item in &prepared.plan {
+            output.plan(item, true);
         }
+        for detail in &prepared.details {
+            output.detail(detail);
+        }
+        if output.verbose() > 1 {
+            output.detail(&format!(
+                "projection input {}",
+                prepared.lock.projection_input_hash
+            ));
+        }
+        output.completion("Dry run complete; no files were changed.");
         return Ok(());
     }
     let changed = !prepared.operations.is_empty();
-    if !changed {
-        println!("aru project is already synchronized");
-    } else {
-        for item in &prepared.plan {
-            println!("{item}");
-        }
+    if changed {
         apply(project, prepared.operations)?;
     }
     garbage_collect(project, &prepared.lock)?;
-    if changed && let Some(completion) = completion {
-        println!("{completion}");
+    if changed {
+        for item in &prepared.plan {
+            output.plan(item, false);
+        }
+        for detail in &prepared.details {
+            output.detail(detail);
+        }
+        if output.verbose() > 1 {
+            output.detail(&format!(
+                "projection input {}",
+                prepared.lock.projection_input_hash
+            ));
+        }
+        output.completion(changed_completion);
+    } else {
+        output.completion(unchanged_completion);
     }
     Ok(())
 }
@@ -878,8 +950,15 @@ fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
     ))
 }
 
-fn project_for_init(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    let path = explicit.unwrap_or(std::env::current_dir().at(".")?);
+fn project_for_init(explicit: Option<PathBuf>, positional: Option<PathBuf>) -> Result<PathBuf> {
+    if explicit.is_some() && positional.is_some() {
+        return Err(AruError::msg(
+            "project path was provided both positionally and with --project",
+        ));
+    }
+    let path = positional
+        .or(explicit)
+        .unwrap_or(std::env::current_dir().at(".")?);
     let path = path.canonicalize().at(&path)?;
     if !path.is_dir() {
         return Err(AruError::msg("project path is not a directory"));
