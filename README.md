@@ -1,11 +1,42 @@
 # aru
 
+`aru` keeps coding-agent instructions, Agent Skills, and MCP servers consistent across a project.
+
 > [!WARNING]
-> **Work in progress (WIP):** `aru` is under active development. Features, behavior, and file formats may change without notice.
+> **Work in progress:** `aru` is under active development. Features, behavior, and file formats may change without notice.
 
-`aru` is a project-scoped manager for coding-agent instructions, skills, and MCP servers. `aru.toml` records intent, `aru.lock` pins exact source content and per-target projections, and `aru sync` safely reconciles Codex, Claude Code, GitHub Copilot, OpenCode, and pi project paths according to each target's implemented capabilities.
+Declare what your project needs in `aru.toml`, pin the exact result in `aru.lock`, then use `aru sync` to safely reconcile each agent's project files.
 
-## Install
+## ✨ At a glance
+
+| Resource | Source of truth | Target result |
+| --- | --- | --- |
+| Instructions | Existing `AGENTS.md` files or configured Markdown sources | Native use, Claude imports/rules, or Copilot instructions |
+| Agent Skills | Git repositories | Codex and Claude project skill directories |
+| MCP servers | Registry packages, HTTPS endpoints, or stdio argv | Codex and Claude MCP configuration |
+
+Aru is designed to be reproducible and fail closed: it validates the complete operation before writing, does not execute configured MCP commands, and preserves drifted or unowned content for review.
+
+## 🧭 Contents
+
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Manage instructions](#manage-instructions)
+- [Manage skills](#manage-skills)
+- [Manage MCP servers](#manage-mcp-servers)
+- [Manage targets](#manage-targets)
+- [Lock and sync](#lock-and-sync)
+- [Project files](#project-files)
+- [Target capabilities](#target-capabilities)
+- [Safety and recovery](#safety-and-recovery)
+- [Offline demo](#offline-demo)
+- [Development](#development)
+
+<a id="install"></a>
+
+## 📦 Install
+
+You need a Rust toolchain to install aru and a system `git` executable to use it.
 
 Install the latest release from [crates.io](https://crates.io/crates/aru):
 
@@ -13,69 +44,378 @@ Install the latest release from [crates.io](https://crates.io/crates/aru):
 cargo install aru
 ```
 
-Or install from the current source checkout:
+Or install from a source checkout:
 
 ```console
 cargo install --path .
 ```
 
-Then verify the installation:
+Verify the installation:
 
 ```console
 aru --help
 ```
 
-A system `git` executable is required. Git subprocesses use argument arrays and existing SSH or credential-helper configuration; aru never invokes a shell.
+Aru passes Git arguments directly and uses your existing SSH or credential-helper configuration. It never invokes a shell for Git operations.
 
-## Quick start
+<a id="quick-start"></a>
+
+## 🚀 Quick start
+
+### 1. Initialize a project
+
+Run this from the project root:
 
 ```console
 aru init --target codex --target claude --target copilot
+```
+
+This creates the project manifest and configures the initial target set. Supported target names are `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+
+### 2. Adopt existing instructions
+
+Preview discovery before changing project files:
+
+```console
 aru instruction init --dry-run
-aru instruction init --merge
+```
+
+Then apply it:
+
+```console
+aru instruction init
+```
+
+If an unmanaged `CLAUDE.md` or `.github/copilot-instructions.md` already exists, aru reports a collision. Choose one explicit strategy:
+
+```console
+aru instruction init --merge  # preserve existing Markdown and add aru-owned blocks
+aru instruction init --force  # replace colliding unmanaged instruction output
+```
+
+> [!CAUTION]
+> `--force` is destructive takeover. Use it only when aru should replace the colliding unmanaged key or path. A later remove will not restore the old content.
+
+### 3. Add a skill
+
+```console
 aru skill add narumiruna/skills
-# Use the searchable menu to select writing-plans, then lock replay is non-interactive.
+```
+
+In an interactive terminal, aru opens a searchable multi-select menu:
+
+| Input | Action |
+| --- | --- |
+| Type | Filter the list |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Move through results |
+| <kbd>Space</kbd> | Toggle an item |
+| <kbd>→</kbd> / <kbd>←</kbd> | Select all / none |
+| <kbd>Enter</kbd> | Confirm |
+| <kbd>Esc</kbd> | Cancel without changing project files |
+
+Verify that the committed lock can be replayed without re-resolution:
+
+```console
 aru sync --locked
-aru skill update narumiruna/skills
-aru skill remove narumiruna/skills --skill writing-plans
 ```
 
-`aru instruction init` discovers existing root and nested `AGENTS.md` files, records their exact paths without moving or editing them, and projects configured non-native targets. Use `--dry-run` to inspect the complete transaction. An existing unmanaged `CLAUDE.md` or `.github/copilot-instructions.md` collides by default; `--merge` preserves its content and adds source-specific aru blocks, while `--force` explicitly replaces unmanaged destination content; the two flags are mutually exclusive. Once established, ordinary `aru sync` changes only owned blocks or files.
+You now have:
 
-In an interactive terminal, omitting selectors opens a searchable multi-select menu. Type to filter, use ↑/↓ to move, Space to toggle, →/← to select all/none, Enter to confirm, or Esc to cancel without changing project files. At least one skill must be selected.
+- **`aru.toml`** — human-maintained project intent
+- **`aru.lock`** — exact, reproducible resolutions and projections
+- **Target files** — reconciled instructions, skills, and MCP configuration
 
-Use `--all` / `-a` to track every current and future export without a prompt. Use repeatable `--skill` for explicit automation, or `--path` only for a non-standard repository layout:
+<a id="manage-instructions"></a>
+
+## 📝 Manage instructions
+
+Existing `AGENTS.md` files remain canonical and user-owned. Aru records their paths without moving, editing, or removing them.
+
+Configure instruction sources in `aru.toml`:
+
+```toml
+[[instructions.sources]]
+files = ["AGENTS.md", "src/**/AGENTS.md"]
+exclude = ["target/**", "third_party/**"]
+scope = "source-directory"
+
+[[instructions.sources]]
+files = ["docs/instructions/rust.md"]
+apply-to = ["**/*.rs"]
+targets = ["claude", "copilot"]
+```
+
+Each source uses exactly one scoping model:
+
+- `scope = "source-directory"` requires matched files named `AGENTS.md`. Each file applies to its own directory tree.
+- `apply-to` declares exact, repository-relative globs for targets that can preserve path-specific rules.
+
+The optional `targets` list defaults to all project targets and must be a subset of them. All patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+
+Aru projects instructions according to target capabilities:
+
+- **Codex, pi, and OpenCode** consume directory-scoped `AGENTS.md` files directly, so aru does not duplicate them.
+- **Claude Code** receives sibling `CLAUDE.md` import blocks and path rules under `.claude/rules/aru/`.
+- **GitHub Copilot** receives a root `.github/copilot-instructions.md` block and path-specific files under `.github/instructions/aru/`.
+
+Unsupported scope and target combinations fail before any write. Removing a source or target removes only digest-matching, aru-owned output; drifted or unowned content is preserved for review.
+
+<a id="manage-skills"></a>
+
+## 🧩 Manage skills
+
+### Select exports
+
+Use one selection mode per `skill add` command:
 
 ```console
-aru skill add owner/repository                 # interactive menu
-aru skill add owner/repository --all           # non-interactive wildcard
-aru skill add owner/repository -a              # short form
-aru skill add owner/repository --skill review --skill applying-tdd
+aru skill add owner/repository                    # interactive selection
+aru skill add owner/repository --all              # every current and future export
+aru skill add owner/repository -a                 # short form of --all
+aru skill add owner/repository --skill review \
+  --skill applying-tdd                            # explicit, repeatable names
+aru skill add owner/repository --path extras/review # non-standard layout
+```
+
+In a pipe, redirected shell, or CI runner, a bare `skill add` fails before fetching. Pass `--all`, `--skill`, or `--path` explicitly. At least one skill must be selected.
+
+Selection behavior is deliberate:
+
+- `--all` stores wildcard intent and tracks valid exports added by future versions.
+- Interactive selection stores an explicit snapshot, even when every visible export is selected.
+- Reopening a wildcard preserves it when all exports remain selected; deselecting one converts it to an explicit snapshot.
+- Repeated `--skill` selections are additive.
+- Removing the final explicit skill removes the package.
+- A `--path` selection remains in `aru.toml` until explicitly removed.
+
+### Pin a source revision
+
+```console
+aru skill add owner/repository --version 0.5.0
+aru skill add owner/repository --version '=0.5.0'
+aru skill add owner/repository --branch main
+aru skill add ssh://git@example.com/team/skills.git \
+  --rev 67cd354 --skill review
+```
+
+| Option | Resolution behavior |
+| --- | --- |
+| No reference option | Latest matching SemVer tag; never the default branch |
+| `--version 0.5.0` | Cargo caret semantics: `^0.5.0` |
+| `--version '=0.5.0'` | Exact tag |
+| `--branch main` | Current branch head, pinned to an exact commit in `aru.lock` |
+| `--rev <SHA>` | Immutable 7–40 character commit |
+
+`--version`, `--branch`, and `--rev` are mutually exclusive. Source arguments contain neither a path selector nor a reference, so SCP-like `git@host:path` sources remain unambiguous. Equivalent canonical Git sources do not create duplicate packages.
+
+Use `--upgrade` / `-U` during add to re-resolve an existing source instead of reusing its lock:
+
+```console
 aru skill add owner/repository --skill review --upgrade
-aru skill add owner/repository --path extras/review
-aru skill add owner/repository --branch main       # opt in to a moving branch
-aru skill add ssh://git@example.com/team/skills.git --rev 67cd354 --skill review
 ```
 
-`--version 0.5.0` has Cargo caret semantics (`^0.5.0`); use `--version =0.5.0` for an exact tag. Use `--branch main` to explicitly track a moving branch, or `--rev <SHA>` for an immutable commit. `--version`, `--branch`, and `--rev` are mutually exclusive; omitting all three continues to select the latest matching SemVer tag, never the default branch. `--upgrade` / `-U` makes add re-resolve this source instead of reusing its lock: a new source installs normally, an existing SemVer source selects the latest matching tag, a branch selects its current head, and an exact revision remains fixed. Source positionals never contain a path selector or reference, so SCP-like `git@host:path` remains unambiguous. In a pipe, redirected shell, or CI runner, bare add fails before fetching; pass `--all`, `--skill`, or `--path` explicitly.
+A new source installs normally. An existing SemVer source selects the latest matching tag, a branch selects its current head, and an exact revision remains fixed.
 
-Add a Registry package, direct remote, or direct stdio MCP server:
+### Update or remove
 
 ```console
-aru mcp add io.example/context --name context --transport stdio --package-registry npm
-aru mcp add --url https://docs.example.com/mcp --name docs \
+aru skill update                         # update all eligible sources
+aru skill update owner/repository        # update one source
+aru skill remove owner/repository --skill review
+aru skill remove owner/repository        # remove the source
+```
+
+Ordinary `aru sync` and `aru sync --locked` keep a branch's locked commit. Run `skill update` or add with `--upgrade` to move it. Because force-pushes can make old commits unreachable, prefer immutable SemVer tags for published, long-lived configurations.
+
+<a id="manage-mcp-servers"></a>
+
+## 🔌 Manage MCP servers
+
+Aru accepts three MCP source types.
+
+### Registry package
+
+```console
+aru mcp add io.example/context \
+  --name context \
+  --transport stdio \
+  --package-registry npm
+```
+
+A Registry candidate must be unique after transport, package-registry, and configured-target capability filtering. Aru never chooses the first API result when multiple candidates remain.
+
+### Direct HTTPS endpoint
+
+```console
+aru mcp add \
+  --url https://docs.example.com/mcp \
+  --name docs \
   --bearer-token-env DOCS_MCP_TOKEN
-aru mcp add --command uvx --arg=--with --arg 'mcp<2' \
-  --arg yfmcp@0.12.2 --name yfinance
+```
+
+Aru stores only the environment variable name or placeholder, never its secret value.
+
+### Direct stdio command
+
+```console
+aru mcp add \
+  --command uvx \
+  --arg=--with \
+  --arg 'mcp<2' \
+  --arg yfmcp@0.12.2 \
+  --name yfinance
+```
+
+Aru stores the executable and each repeated `--arg` as an ordered argv array. Use `--arg=--flag` when an argument begins with `-`. Aru projects these commands but never executes them during add, lock, or sync.
+
+Pin package versions explicitly in argv. The example constrains the unbounded MCP SDK dependency because `yfmcp` 0.12.2 uses the 1.x API.
+
+Update or remove servers by project-local name:
+
+```console
 aru mcp update context
 aru mcp remove docs
 ```
 
-A Registry candidate must be unique after transport, package-registry, and filtering against every configured target with an implemented MCP adapter. aru never chooses the first API array item. Direct stdio intent stores the executable and each repeated `--arg` as an ordered argv array; use `--arg=--flag` for an argument beginning with `-`. aru never executes these commands during add, lock, or sync, and package versions should be pinned explicitly in argv. The yfinance example also constrains its unbounded MCP SDK dependency below 2 because `yfmcp` 0.12.2 uses the 1.x API.
+`mcp update [name]` unlocks only selected Registry packages. Direct URLs and direct stdio commands do not have Registry versions to upgrade.
 
-## Offline local example
+<a id="manage-targets"></a>
 
-The following example exercises init, add, lock replay, update, and remove without an external network:
+## 🎯 Manage targets
+
+Targets are the coding-agent project layouts that aru reconciles.
+
+```console
+aru target list
+aru target add claude
+aru target remove codex
+aru target set codex claude
+```
+
+- `add` performs a set union.
+- `remove` performs a set subtraction.
+- `set` replaces the complete set atomically.
+- Repeating an already configured target is safe.
+- Unknown targets and unconfigured removal arguments fail before writes.
+
+At least one target must remain. To switch a Codex-only project to Claude, run `aru target set claude` instead of trying to remove the only target first.
+
+Target mutations resolve the complete result before atomically updating `aru.toml`, `aru.lock`, ownership state, and owned project paths. They preserve locked package versions and support `--dry-run`. `target add` and `target set` also support `--merge` and `--force` for new-target instruction collisions.
+
+Use `--no-sync` to update only manifest and lock intent, then run `aru sync` later. If local ownership state is missing and deferral would lose information required for a Claude copy/symlink conversion, aru rejects `--no-sync` and asks you to apply the change directly.
+
+<a id="lock-and-sync"></a>
+
+## 🔒 Lock and sync
+
+| Command | Behavior |
+| --- | --- |
+| `aru lock` | Resolve instructions and packages; update `aru.lock` without changing target paths |
+| `aru sync` | Reuse compatible locked packages, fill missing lock data, and reconcile target paths |
+| `aru sync --locked` | Require a complete, current lock; never change it or advance a branch |
+| `aru sync --dry-run` | Print the deterministic plan without changing project files, lock, cache, or target paths |
+
+`--dry-run` may read Git or HTTP sources through temporary storage. It does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
+
+`--no-sync` on add, remove, or update still resolves and transactionally updates `aru.toml` and `aru.lock`; it skips only target projections.
+
+Changing `project.targets` by hand does not unlock package versions, but it invalidates the projection hash. A locked sync will fail until a normal sync updates per-target projections. Prefer `aru target add`, `remove`, or `set` so all related state changes in one transaction.
+
+<a id="project-files"></a>
+
+## 📂 Project files
+
+| Path | Commit? | Purpose |
+| --- | --- | --- |
+| `aru.toml` | Yes | Human-maintained sources, package requirements, selectors, and targets |
+| `aru.lock` | Yes | Exact Git commits, MCP metadata, source digests, projections, and portable ownership baseline |
+| `AGENTS.md`, `**/AGENTS.md` | Yes | User-owned, directory-scoped instruction sources |
+| `CLAUDE.md`, `**/CLAUDE.md` | Optional | Claude imports managed as source-specific marker blocks |
+| `.claude/rules/aru/**` | Optional | Aru-owned Claude path-specific instruction projections |
+| `.github/copilot-instructions.md` | Optional | Copilot root instructions with source-specific marker blocks |
+| `.github/instructions/aru/**` | Optional | Aru-owned Copilot path-specific instruction projections |
+| `.agents/skills/<name>` | Optional | Codex project skill projection |
+| `.claude/skills/<name>` | Optional | Claude skill link to `.agents`, when possible, or a verified copy |
+| `.codex/config.toml` | Optional | Codex project MCP entries |
+| `.mcp.json` | Optional | Claude Code project MCP entries |
+| `.aru/cache/` | No | Immutable, content-addressed Git checkouts |
+| `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
+| `.aru/transaction.toml` | No | Crash-recovery journal, present only during an interrupted operation |
+
+`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated target paths, because each team can decide whether to commit them. During early development, `aru.toml` is intentionally unversioned and has no schema field.
+
+For byte-level details about persisted data, see [`docs/formats.md`](docs/formats.md).
+
+<a id="target-capabilities"></a>
+
+## 🤖 Target capabilities
+
+| Capability | Codex | Claude Code | Copilot | pi | OpenCode |
+| --- | --- | --- | --- | --- | --- |
+| Directory `AGENTS.md` | Native | Sibling import | Materialized root/path rule | Native | Native |
+| Explicit instruction globs | Not supported | `.claude/rules/aru/**` | `.github/instructions/aru/**` | Not supported | Not supported |
+| Project skills | `.agents/skills/` | `.claude/skills/` | Not implemented | Not implemented | Not implemented |
+| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | Not implemented | Not implemented | Not implemented |
+| Streamable HTTP MCP | `url` | `type: http`, `url` | Not implemented | Not implemented | Not implemented |
+| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | Not implemented | Not implemented | Not implemented |
+| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | Not implemented | Not implemented | Not implemented |
+
+Aru rejects configurations that a selected target cannot represent rather than silently broadening or dropping behavior. See the [target capability evidence and fail-closed decisions](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md).
+
+<a id="safety-and-recovery"></a>
+
+## 🛡️ Safety and recovery
+
+### Bounded, portable inputs
+
+Aru treats instruction content, skill content, and Registry metadata as untrusted.
+
+- Conventional discovery scans only the source root and `skills/**/SKILL.md`, up to depth 6, 2,000 directories, and 20,000 entries.
+- `SKILL.md` is limited to 1 MiB, each selected regular file to 10 MiB, and each skill tree to 100 MiB.
+- Symlinks, devices, sockets, FIFOs, non-UTF-8 paths, case-folding collisions, Windows reserved names, and escaping selectors are rejected.
+- Digests include a format version, portable path, executable marker, byte length, and raw bytes for every sorted regular file.
+- Registry requests require HTTPS without URL userinfo. They use 10-second connect and 30-second total timeouts, at most three redirects, 10 MiB bodies, 100 pages, and 10,000 records.
+- Malformed, oversized, truncated, cyclic, ambiguous, inactive, or unsupported metadata fails before writes.
+
+### Ownership protection
+
+- MCP commands and arguments remain argv arrays. Aru never shell-expands or executes direct stdio commands.
+- Aru stores only secret environment variable names or placeholders. It never reads secret values.
+- Unmanaged instruction destinations and skill or MCP entries collide by default.
+- `--merge` preserves unmanaged Markdown only around aru-owned instruction blocks.
+- Drifted owned entries are preserved and reported instead of overwritten.
+- Only aru-owned server keys are merged or removed. Unrelated TOML comments, TOML keys, and JSON entries survive.
+- Invalid existing configuration fails closed.
+
+### Atomic transactions
+
+Every mutating command:
+
+1. takes `.aru/operation.lock`;
+2. rereads project inputs and validates the complete operation;
+3. stages each destination beside its final path;
+4. writes a durable journal;
+5. performs fixed-order atomic replacements with sibling backups.
+
+A normal apply error immediately rolls back.
+
+After a process kill or power loss, run any mutating command again:
+
+```console
+aru sync
+```
+
+Before doing new work, aru reads `.aru/transaction.toml` and digest-gates a deterministic rollback to the complete old state. A dry run refuses to proceed while recovery is pending.
+
+If a destination or backup contains unknown manual changes, recovery stops and preserves both the content and journal. Copy the affected project file and `.aru/transaction.toml` before manual repair. Do not delete backups until you understand whether each digest represents the old or new state.
+
+If `.aru/state.toml` is lost, `aru sync --locked` adopts only entries whose semantic digests exactly match the committed `projection-baseline`. A different same-name entry remains an unmanaged collision. Baselines never authorize deletion of unknown historical orphans.
+
+<a id="offline-demo"></a>
+
+## 🧪 Offline demo
+
+This example exercises initialization, add, locked replay, update, and remove without network access:
 
 ```console
 mkdir -p /tmp/aru-demo-source/skills/demo /tmp/aru-demo-project
@@ -96,7 +436,7 @@ aru skill update /tmp/aru-demo-source
 aru skill remove /tmp/aru-demo-source
 ```
 
-Representative output contains deterministic operations such as:
+Representative output is deterministic:
 
 ```text
 create skill demo (.agents/skills/demo)
@@ -105,149 +445,18 @@ lock skill demo 1.0.0 sha256:…
 write lockfile
 ```
 
-## Manage instructions
+<a id="development"></a>
 
-Existing `AGENTS.md` files are canonical, user-owned sources:
+## 🛠️ Development
 
-```toml
-[[instructions.sources]]
-files = ["AGENTS.md", "src/**/AGENTS.md"]
-exclude = ["target/**", "third_party/**"]
-scope = "source-directory"
-
-[[instructions.sources]]
-files = ["docs/instructions/rust.md"]
-apply-to = ["**/*.rs"]
-targets = ["claude", "copilot"]
-```
-
-`scope = "source-directory"` requires matched files to be named `AGENTS.md`; each file applies to its own directory tree. `apply-to` declares exact repository-relative globs and must target only adapters that can preserve them. Source `targets` default to the complete project target set and, when specified, must be a subset of it. Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
-
-Codex, pi, and OpenCode consume directory-scoped `AGENTS.md` directly, so aru writes no duplicate file for them. Claude receives sibling `CLAUDE.md` import blocks and `.claude/rules/aru/**` path rules. Copilot receives a root `.github/copilot-instructions.md` block and path-specific `.github/instructions/aru/**. Unsupported scope/target combinations fail before any write rather than broadening scope.
-
-`aru lock` records source and projection digests without writing target paths. `aru sync --locked` rejects changed source content or stale target projections. Removing a source or target removes only digest-matching aru-owned blocks/files; drifted or unowned output is preserved for review.
-
-## Manage targets
-
-Targets are the persistent set of coding-agent project layouts that aru reconciles. List the set declared in `aru.toml`, extend or reduce it, or replace it exactly:
+Run the CI-equivalent checks:
 
 ```console
-aru target list
-aru target add claude
-aru target remove codex
-aru target set codex claude
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo test --locked --all-targets --all-features
 ```
 
-`add` performs a set union, `remove` performs a set subtraction, and `set` replaces the complete set atomically. At least one target must remain, so use `aru target set claude` to switch a Codex-only project without an intermediate two-target sync. Repeating an already configured target is safe. Unknown or unconfigured removal arguments fail before writes.
+Tests use temporary Git repositories, local Registry fixtures, and Unix PTYs (`expectrl`) for the real `inquire` keyboard flow. Live network access is reserved for an explicit, ignored public Git smoke test.
 
-Target mutations resolve the complete result before atomically updating `aru.toml`, `aru.lock`, local ownership state, and owned project paths. They preserve locked package versions and accept `--dry-run`; `add` and `set` accept `--merge` for instruction blocks and `--force` for explicit takeover of new-target collisions. `--no-sync` updates only manifest and lock intent, prints that target paths are pending, and requires a later `aru sync`. If local ownership state is missing and deferral would lose the information needed for a Claude copy/symlink conversion, aru rejects `--no-sync` and asks you to apply the target change directly.
-
-## Project files
-
-| Path | Commit? | Purpose |
-| --- | --- | --- |
-| `aru.toml` | Yes | Human-maintained instruction sources, package requirements, selectors, and target list |
-| `aru.lock` | Yes | Instruction source digests, exact Git commits, MCP metadata/candidates, per-target projections, and portable ownership baseline |
-| `AGENTS.md`, `**/AGENTS.md` | Yes | User-owned canonical directory-scoped instruction sources; aru never edits or removes them |
-| `CLAUDE.md`, `**/CLAUDE.md` | Optional | Claude imports managed as source-specific marker blocks |
-| `.claude/rules/aru/**` | Optional | Aru-owned Claude path-specific instruction projections |
-| `.github/copilot-instructions.md` | Optional | Copilot root instructions with source-specific marker blocks |
-| `.github/instructions/aru/**` | Optional | Aru-owned Copilot path-specific instruction projections |
-| `.agents/skills/<name>` | Optional | Codex project skill projection |
-| `.claude/skills/<name>` | Optional | Claude project skill projection: a relative link to `.agents` when both targets are selected and links are available, otherwise a verified copy |
-| `.codex/config.toml` | Optional | Codex project MCP entries |
-| `.mcp.json` | Optional | Claude Code project MCP entries |
-| `.aru/cache/` | No | Immutable, content-addressed Git checkouts |
-| `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
-| `.aru/transaction.toml` | No | Crash-recovery journal, present only during an interrupted operation |
-
-`aru init` adds `.aru/` to `.gitignore`. It does not ignore generated target paths because teams may choose to commit them. During early development, `aru.toml` is intentionally unversioned and contains no schema field.
-
-### Manifest selection semantics
-
-- Each `instructions.sources` declaration has non-empty `files`, optional `exclude` and `targets`, and exactly one of `scope = "source-directory"` or `apply-to`.
-- Discovery is deterministic and bounded. Unsafe, escaping, symlinked, non-UTF-8, oversized, duplicate, generated-output, or reserved-marker sources fail before writes.
-- `include = ["*"]` tracks every valid current and future export; only `--all` / `-a` creates new wildcard intent. `exclude` records per-skill removals.
-- Interactive selection writes an explicit snapshot, even when every visible item is selected. Reopening the menu preselects current explicit entries and replaces that source's complete explicit selection on confirmation.
-- Reopening an unchanged wildcard preselects all exports and preserves wildcard intent if all remain selected; deselecting any export converts it to an explicit snapshot.
-- Explicit `--skill` additions remain additive. Removing the final explicit name removes the package.
-- A `--path` selection always persists `paths.<name>` in `aru.toml` until explicitly removed.
-- Equivalent canonical Git sources do not create duplicate packages.
-- Registry versions, Git tags, branches, and revisions stay locked to exact identities during ordinary sync. `skill update [source]` re-resolves only selected tag/branch sources; `mcp update [name]` unlocks only selected MCP packages.
-- Direct MCP URLs have no upgradable version.
-
-### Lock and sync modes
-
-- `aru lock` resolves instructions and packages and writes the lock without changing target project paths.
-- `aru sync` reuses every compatible locked package, fills missing lock/projection data, and reconciles project paths.
-- `aru sync --locked` rejects a missing or stale lock, including changed instruction sources and incomplete per-target projections. It never changes the lock or advances a branch.
-- `--no-sync` on add/remove/update still resolves and transactionally updates `aru.toml` plus `aru.lock`; it only skips projections.
-- `--dry-run` may read Git or HTTP sources through a temporary cache, but does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
-- `--force` is destructive takeover of a colliding unmanaged key/path. The operation plan says `force replace`; a later remove does not restore the previous unmanaged value.
-
-Changing only `project.targets` does not unlock package versions. It does invalidate the projection hash, so `--locked` fails until a normal sync adds or removes per-target projections. Prefer `aru target add`, `remove`, or `set` so the manifest, lock, ownership state, and target paths change in one transaction.
-
-### Branch sources
-
-Branch tracking is an explicit development-mode opt-in:
-
-```console
-aru skill add narumiruna/skills --branch main
-aru skill add narumiruna/skills -U  # select again and move to the current head
-aru skill update narumiruna/skills  # move the lock without changing selection
-```
-
-The manifest records `branch = "main"`, while `aru.lock` records `requirement = "branch:main"` and the exact 40-hex commit shown in the selection preview. Normal `aru sync` and `aru sync --locked` keep that SHA. A force-push can make an older locked commit unreachable from a clean checkout; use immutable SemVer tags for published, long-lived, reproducible installations.
-
-## Target capability matrix
-
-| Capability | Codex | Claude Code | Copilot | pi | OpenCode |
-| --- | --- | --- | --- | --- | --- |
-| Directory `AGENTS.md` | Native | Sibling import | Materialized root/path rule | Native | Native |
-| Explicit instruction globs | No | `.claude/rules/aru/**` | `.github/instructions/aru/**` | No | No |
-| Project skills | `.agents/skills/` | `.claude/skills/` | Not implemented | Not implemented | Not implemented |
-| stdio MCP | `command`, `args`, `env_vars` | `type: stdio`, `command`, `args`, `${ENV}` | Not implemented | Not implemented | Not implemented |
-| Streamable HTTP MCP | `url` | `type: http`, `url` | Not implemented | Not implemented | Not implemented |
-| Bearer environment reference | `bearer_token_env_var` | `Authorization: Bearer ${ENV}` | Not implemented | Not implemented | Not implemented |
-| Environment-backed HTTP headers | `env_http_headers` | `${ENV}` header value | Not implemented | Not implemented | Not implemented |
-
-See [`docs/spikes/2026-07-30_mcp-registry-target-capabilities.md`](docs/spikes/2026-07-30_mcp-registry-target-capabilities.md) for evidence and fail-closed decisions.
-
-## Safety model and limits
-
-aru treats discovered instruction/skill content and Registry metadata as untrusted:
-
-- conventional discovery scans only the source root and `skills/**/SKILL.md`, with maximum depth 6, 2,000 directories, and 20,000 entries;
-- `SKILL.md` is limited to 1 MiB; each selected regular file to 10 MiB; each skill tree to 100 MiB;
-- source symlinks, devices, sockets, FIFOs, non-UTF-8 paths, case-folding collisions, Windows reserved names, and escaping selectors are rejected;
-- the canonical digest includes a format version, delimited portable path, executable marker, length, and raw bytes for every sorted regular file;
-- Registry requests use HTTPS without URL userinfo, 10-second connect/30-second total timeouts, at most three redirects, 10 MiB bodies, 100 pages, and 10,000 records;
-- malformed, oversized, truncated, cyclic, ambiguous, inactive, or unsupported metadata fails before writes;
-- MCP command and argument data stays in arrays and is never shell-expanded; direct stdio commands are projected but never executed by aru;
-- aru stores only secret environment variable names/placeholders. It does not read secret values;
-- existing unmanaged instruction destinations and skill/MCP entries collide by default. `--merge` is limited to preserving unmanaged Markdown around instruction blocks; owned entries that differ from their last-applied semantic digest report drift and are preserved;
-- only aru-owned server keys are merged or removed. Unrelated TOML comments/keys and JSON entries survive. Invalid existing config fails closed.
-
-## Transactions, ownership, and recovery
-
-Every mutating command takes `.aru/operation.lock`, rereads project inputs, validates the complete operation, stages each destination beside its final path, and writes a durable journal before fixed-order atomic replacements. Existing destinations are sibling backups. A normal apply error immediately rolls back.
-
-After a process kill or power loss, run any mutating aru command again:
-
-```console
-aru sync
-```
-
-Before doing new work, aru checks `.aru/transaction.toml` and digest-gates a deterministic rollback to the complete old state. A dry run refuses to proceed while recovery is pending. If a destination or backup has unknown/manual content, recovery stops, preserves that content and the journal, and reports the path rather than guessing. Copy the affected project file and `.aru/transaction.toml` before manual repair; do not delete backups until their old/new digest role is understood.
-
-If `.aru/state.toml` is lost, `aru sync --locked` adopts only current entries whose semantic digests exactly match the committed `projection-baseline`. A different same-name entry is an unmanaged collision. Baselines never authorize deletion of unknown historical orphans.
-
-## Development
-
-```console
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-```
-
-Tests use temporary Git repositories, local Registry fixtures, and Unix PTYs (`expectrl`) for the real `inquire` keyboard flow. Live network is reserved for an explicit public Git smoke test.
+Release maintainers should follow [`docs/releasing.md`](docs/releasing.md). Aru is available under the [MIT License](LICENSE).

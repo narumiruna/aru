@@ -400,7 +400,6 @@ impl ManifestDocument {
     }
 
     pub fn set_instruction_sources(&mut self, sources: &[InstructionSource]) {
-        ensure_table(&mut self.doc, "instructions");
         let mut array = ArrayOfTables::new();
         for source in sources {
             let mut table = Table::new();
@@ -421,27 +420,26 @@ impl ManifestDocument {
             }
             array.push(table);
         }
-        self.doc["instructions"]["sources"] = Item::ArrayOfTables(array);
+        table_mut_or_insert(&mut self.doc, "instructions")["sources"] = Item::ArrayOfTables(array);
     }
 
     pub fn set_skill(&mut self, source: &str, requirement: &SkillRequirement) {
-        ensure_table(&mut self.doc, "skills");
-        self.doc["skills"][source] = Item::Value(skill_inline(requirement).into());
+        table_mut_or_insert(&mut self.doc, "skills")[source] =
+            Item::Value(skill_inline(requirement).into());
     }
 
     pub fn remove_skill(&mut self, source: &str) {
-        if let Some(table) = self.doc["skills"].as_table_mut() {
+        if let Some(table) = existing_table_mut(&mut self.doc, "skills") {
             table.remove(source);
         }
     }
 
     pub fn set_mcp(&mut self, name: &str, requirement: &McpRequirement) {
-        ensure_table(&mut self.doc, "mcp");
-        self.doc["mcp"][name] = Item::Table(mcp_table(requirement));
+        table_mut_or_insert(&mut self.doc, "mcp")[name] = Item::Table(mcp_table(requirement));
     }
 
     pub fn remove_mcp(&mut self, name: &str) {
-        if let Some(table) = self.doc["mcp"].as_table_mut() {
+        if let Some(table) = existing_table_mut(&mut self.doc, "mcp") {
             table.remove(name);
         }
     }
@@ -451,10 +449,15 @@ impl ManifestDocument {
     }
 }
 
-fn ensure_table(doc: &mut DocumentMut, key: &str) {
-    if !doc[key].is_table() {
+fn table_mut_or_insert<'a>(doc: &'a mut DocumentMut, key: &str) -> &'a mut Table {
+    if doc.get(key).is_none() {
         doc[key] = Item::Table(Table::new());
     }
+    existing_table_mut(doc, key).expect("ManifestDocument optional sections are TOML tables")
+}
+
+fn existing_table_mut<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut Table> {
+    doc.get_mut(key).and_then(Item::as_table_mut)
 }
 
 fn target_array(targets: &[Target]) -> Array {
@@ -635,6 +638,81 @@ mod tests {
         assert!(output.contains("# package note"));
         assert!(output.contains("[custom]\nanswer = 42"));
         assert!(output.contains("include = [\"new\"]"));
+    }
+
+    #[test]
+    fn optional_tables_are_created_only_when_mutated() {
+        let text =
+            "# keep\nfuture = 1\n\n[project]\ntargets = [\"codex\"]\n\n[custom]\nanswer = 42\n";
+        let document = || ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+
+        let mut instructions = document();
+        instructions.set_instruction_sources(&[InstructionSource {
+            files: vec!["AGENTS.md".into()],
+            exclude: Vec::new(),
+            scope: Some(InstructionSourceScope::SourceDirectory),
+            apply_to: Vec::new(),
+            targets: Vec::new(),
+        }]);
+        let instructions_output = String::from_utf8(instructions.bytes()).unwrap();
+        assert!(instructions_output.contains("[[instructions.sources]]"));
+        assert!(!instructions_output.contains("[skills]"));
+        assert!(!instructions_output.contains("[mcp]"));
+        assert!(instructions_output.contains("[custom]\nanswer = 42"));
+        assert_eq!(
+            instructions.manifest().unwrap().instructions.sources.len(),
+            1
+        );
+
+        let mut skills = document();
+        skills.set_skill("owner/repo", &SkillRequirement::default());
+        let skills_output = String::from_utf8(skills.bytes()).unwrap();
+        assert!(skills_output.contains("[skills]"));
+        assert!(!skills_output.contains("[instructions]"));
+        assert!(!skills_output.contains("[mcp]"));
+        assert!(skills_output.contains("[custom]\nanswer = 42"));
+        assert_eq!(skills.manifest().unwrap().skills.len(), 1);
+
+        let mut mcp = document();
+        mcp.set_mcp(
+            "demo",
+            &McpRequirement {
+                registry: None,
+                server: None,
+                version: None,
+                transport: None,
+                package_registry: None,
+                url: None,
+                command: Some("demo-mcp".into()),
+                args: Vec::new(),
+                bearer_token_env: None,
+            },
+        );
+        let mcp_output = String::from_utf8(mcp.bytes()).unwrap();
+        assert!(mcp_output.contains("[mcp.demo]"));
+        assert!(!mcp_output.contains("[instructions]"));
+        assert!(!mcp_output.contains("[skills]"));
+        assert!(mcp_output.contains("[custom]\nanswer = 42"));
+        assert_eq!(mcp.manifest().unwrap().mcp.len(), 1);
+    }
+
+    #[test]
+    fn removing_from_absent_optional_tables_is_a_noop() {
+        let text =
+            "# keep\nfuture = 1\n\n[project]\ntargets = [\"codex\"]\n\n[custom]\nanswer = 42\n";
+        let mut document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+
+        document.remove_skill("missing");
+        document.remove_mcp("missing");
+
+        assert_eq!(document.bytes(), text.as_bytes());
+        assert!(document.manifest().is_ok());
     }
 
     #[test]
