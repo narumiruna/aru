@@ -1,0 +1,54 @@
+name: Installer scripts
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unix:
+    name: Unix installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Test shell installer
+        run: bash tests/installers/install-sh.sh
+
+      - name: Install the latest release through curl
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          ARU_INSTALL_DIR: ${{ runner.temp }}/aru-bin
+        run: |
+          curl -LsSf "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh" | sh
+          "$ARU_INSTALL_DIR/aru" --version
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Test PowerShell installer
+        shell: powershell
+        run: .\tests\installers\install-ps1.ps1
+
+      - name: Install the latest release through PowerShell
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          $env:ARU_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "aru-bin"
+          Invoke-RestMethod "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/install.ps1" | Invoke-Expression
+          & (Join-Path $env:ARU_INSTALL_DIR "aru.exe") --version

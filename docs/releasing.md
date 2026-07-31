@@ -5,9 +5,10 @@ A version release starts from the `Bump version` GitHub Actions workflow. Choose
 The tag independently triggers:
 
 - `Release` (`.github/workflows/release.yml`), which publishes GitHub archives and `SHA256SUMS`;
-- `Publish` (`.github/workflows/publish.yml`), which publishes the crate to crates.io.
+- `Publish` (`.github/workflows/publish.yml`), which publishes the crate to crates.io;
+- `Installer scripts` (`.github/workflows/installers.yml`), which runs isolated Unix and Windows installer tests. A manual run additionally installs the latest published release through the hosted scripts.
 
-Both workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`. A failed workflow can be rerun independently.
+The Release and Publish workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`. A failed workflow can be rerun independently.
 
 ## One-time repository configuration
 

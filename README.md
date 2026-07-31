@@ -41,9 +41,24 @@ Aru is designed to be reproducible and fail closed: it validates the complete op
 
 ## 📦 Install
 
-You need a Rust toolchain to install aru and a system `git` executable to use it.
+You need a system `git` executable to use aru. The standalone installers download a prebuilt, checksum-verified binary and do not require Rust.
 
-Install the latest release from [crates.io](https://crates.io/crates/aru):
+On macOS or Linux, install the latest release into `~/.local/bin/aru` with either curl or wget:
+
+```console
+curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
+```
+
+On 64-bit Windows, install into `~/.local/bin/aru.exe` with Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/install.ps1 | iex"
+```
+
+The installers currently support x86-64 Linux, Intel and Apple Silicon macOS, and x86-64 Windows. Set `ARU_VERSION` to install a specific stable version or `ARU_INSTALL_DIR` to choose another directory. If the destination is not already on `PATH`, the installer prints the path to add.
+
+Alternatively, install the latest release from [crates.io](https://crates.io/crates/aru) with a Rust toolchain:
 
 ```console
 cargo install aru
