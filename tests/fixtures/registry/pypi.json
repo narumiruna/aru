@@ -1,0 +1,35 @@
+{
+  "server": {
+    "name": "io.example/weather",
+    "description": "PyPI and npm candidates",
+    "version": "0.5.0",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "weather-mcp",
+        "version": "0.5.0",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      },
+      {
+        "registryType": "pypi",
+        "identifier": "weather-mcp-server",
+        "version": "0.5.0",
+        "runtimeHint": "uvx",
+        "transport": { "type": "stdio" },
+        "runtimeArguments": [
+          { "type": "named", "name": "--python", "value": "3.12" }
+        ],
+        "packageArguments": [
+          { "type": "named", "name": "--region", "value": "us" }
+        ],
+        "environmentVariables": [
+          { "name": "WEATHER_API_KEY", "isRequired": true, "isSecret": true }
+        ]
+      }
+    ]
+  },
+  "_meta": {
+    "io.modelcontextprotocol.registry/official": { "status": "active" }
+  }
+}

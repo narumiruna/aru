@@ -37,6 +37,9 @@ fn mcp_add_help_groups_sources_and_describes_apply_options() {
         ))
         .stdout(predicate::str::contains("--env-var <NAME>"))
         .stdout(predicate::str::contains("--header-env <HEADER=ENV>"))
+        .stdout(predicate::str::contains(
+            "npm or PyPI with an explicit uvx hint",
+        ))
         .stdout(predicate::str::contains("Codex-only").not())
         .stdout(predicate::str::contains(
             "Update manifest and lock but skip target project paths",

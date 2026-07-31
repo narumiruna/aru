@@ -190,28 +190,7 @@ impl RegistryClient {
                 response.server.version
             )));
         }
-        let candidates = candidates(&response.server, requirement, targets)?;
-        if candidates.len() != 1 {
-            let options = candidates
-                .iter()
-                .map(|candidate| {
-                    if let Some(package) = &candidate.package {
-                        format!("{}/{}", candidate.transport, package.registry)
-                    } else {
-                        candidate.transport.clone()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(AruError::msg(if candidates.is_empty() {
-                "no MCP candidate satisfies the selectors and all target capabilities".to_owned()
-            } else {
-                format!(
-                    "MCP candidate is ambiguous; choose --transport and/or --package-registry from: {options}"
-                )
-            }));
-        }
-        let candidate = candidates.into_iter().next().unwrap();
+        let candidate = unique_candidate(candidates(&response.server, requirement, targets)?)?;
         let metadata_sha256 = canonical_json_digest(&serde_json::json!({
             "server": response.server.name,
             "version": response.server.version,
@@ -338,6 +317,30 @@ fn decode_response<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
         .map_err(|error| AruError::msg(format!("registry JSON/schema decode failed: {error}")))
 }
 
+fn unique_candidate(mut candidates: Vec<ResolvedCandidate>) -> Result<ResolvedCandidate> {
+    if candidates.len() == 1 {
+        return Ok(candidates.pop().unwrap());
+    }
+    let options = candidates
+        .iter()
+        .map(|candidate| {
+            if let Some(package) = &candidate.package {
+                format!("{}/{}", candidate.transport, package.registry)
+            } else {
+                candidate.transport.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AruError::msg(if candidates.is_empty() {
+        "no MCP candidate satisfies the selectors and all target capabilities".to_owned()
+    } else {
+        format!(
+            "MCP candidate is ambiguous; choose --transport and/or --package-registry from: {options}"
+        )
+    }))
+}
+
 fn candidates(
     server: &ServerDetail,
     requirement: &McpRequirement,
@@ -387,8 +390,8 @@ fn candidates(
 }
 
 fn package_candidate(package: &RegistryPackage, server_version: &str) -> Result<ResolvedCandidate> {
-    if package.transport.kind != "stdio" || package.registry_type != "npm" {
-        return Err(AruError::msg("unsupported registry package runtime"));
+    if package.transport.kind != "stdio" {
+        return Err(AruError::msg("unsupported registry package transport"));
     }
     let mut env_vars = Vec::new();
     for input in &package.environment_variables {
@@ -403,18 +406,20 @@ fn package_candidate(package: &RegistryPackage, server_version: &str) -> Result<
     }
     env_vars.sort();
     env_vars.dedup();
-    let runtime = package.runtime_hint.as_deref().unwrap_or("npx");
-    if runtime != "npx" {
-        return Err(AruError::msg(
-            "MVP supports only the npm/npx package runtime",
-        ));
-    }
     let version = package.version.as_deref().unwrap_or(server_version);
+    let (command, inject_npx_yes) = match package.registry_type.as_str() {
+        "npm" if package.runtime_hint.as_deref().unwrap_or("npx") == "npx" => ("npx", true),
+        "pypi" if package.runtime_hint.as_deref() == Some("uvx") => {
+            validate_pypi_selector(&package.identifier, version)?;
+            ("uvx", false)
+        }
+        _ => return Err(AruError::msg("unsupported registry package runtime")),
+    };
     let mut args = Vec::new();
     for input in &package.runtime_arguments {
         append_argument(&mut args, input)?;
     }
-    if !args.iter().any(|arg| arg == "--yes" || arg == "-y") {
+    if inject_npx_yes && !args.iter().any(|arg| arg == "--yes" || arg == "-y") {
         args.push("--yes".into());
     }
     args.push(format!("{}@{version}", package.identifier));
@@ -424,18 +429,44 @@ fn package_candidate(package: &RegistryPackage, server_version: &str) -> Result<
     Ok(ResolvedCandidate {
         kind: "package".into(),
         transport: "stdio".into(),
-        command: Some("npx".into()),
+        command: Some(command.into()),
         args,
         env_vars,
         env_http_headers: BTreeMap::new(),
         bearer_token_env: None,
         url: None,
         package: Some(LockedMcpPackage {
-            registry: "npm".into(),
+            registry: package.registry_type.clone(),
             identifier: package.identifier.clone(),
             version: version.to_owned(),
         }),
     })
+}
+
+fn validate_pypi_selector(identifier: &str, version: &str) -> Result<()> {
+    let identifier_valid = identifier
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && identifier
+            .bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && identifier
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    let version_valid = !version.is_empty()
+        && !version.starts_with('-')
+        && version
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace() && byte != b'@');
+    if identifier_valid && version_valid {
+        Ok(())
+    } else {
+        Err(AruError::msg(
+            "invalid PyPI Registry package identifier or version",
+        ))
+    }
 }
 
 fn remote_candidate(remote: &RegistryRemote) -> Result<ResolvedCandidate> {
@@ -692,6 +723,86 @@ mod tests {
         let reversed = candidates(&reversed_server, &requirement, &[Target::Codex]).unwrap();
         assert_eq!(forward, reversed);
         assert_eq!(forward.len(), 2);
+    }
+
+    #[test]
+    fn pypi_uvx_candidate_is_exact_selectable_and_order_independent() {
+        let response: ServerResponse =
+            serde_json::from_str(include_str!("../tests/fixtures/registry/pypi.json")).unwrap();
+        let candidate =
+            package_candidate(&response.server.packages[1], &response.server.version).unwrap();
+        assert_eq!(candidate.command.as_deref(), Some("uvx"));
+        assert_eq!(
+            candidate.args,
+            [
+                "--python",
+                "3.12",
+                "weather-mcp-server@0.5.0",
+                "--region",
+                "us"
+            ]
+        );
+        assert_eq!(candidate.env_vars, ["WEATHER_API_KEY"]);
+        assert_eq!(
+            candidate.package,
+            Some(LockedMcpPackage {
+                registry: "pypi".into(),
+                identifier: "weather-mcp-server".into(),
+                version: "0.5.0".into(),
+            })
+        );
+
+        let mut requirement = McpRequirement {
+            registry: Some(DEFAULT_REGISTRY.into()),
+            server: Some(response.server.name.clone()),
+            version: None,
+            transport: Some("stdio".into()),
+            package_registry: None,
+            url: None,
+            command: None,
+            args: Vec::new(),
+            env_vars: Vec::new(),
+            env_http_headers: BTreeMap::new(),
+            bearer_token_env: None,
+            targets: None,
+        };
+        let ambiguous = candidates(&response.server, &requirement, &[Target::Codex]).unwrap();
+        assert_eq!(ambiguous.len(), 2);
+        let error = unique_candidate(ambiguous).unwrap_err().to_string();
+        assert!(error.contains("MCP candidate is ambiguous"));
+        assert!(error.contains("stdio/npm"));
+        assert!(error.contains("stdio/pypi"));
+        requirement.package_registry = Some("pypi".into());
+        let selected = candidates(&response.server, &requirement, &[Target::Codex]).unwrap();
+        assert_eq!(selected, [candidate]);
+
+        let mut reversed = response.server;
+        reversed.packages.reverse();
+        assert_eq!(
+            candidates(&reversed, &requirement, &[Target::Codex]).unwrap(),
+            selected
+        );
+    }
+
+    #[test]
+    fn pypi_rejects_runtime_hints_without_an_exact_uvx_contract() {
+        assert!(
+            unique_candidate(Vec::new())
+                .unwrap_err()
+                .to_string()
+                .contains("no MCP candidate satisfies")
+        );
+        for runtime_hint in [None, Some("python"), Some("pipx"), Some("UVX")] {
+            let package: RegistryPackage = serde_json::from_value(serde_json::json!({
+                "registryType": "pypi",
+                "identifier": "demo-mcp",
+                "version": "1.2.3",
+                "runtimeHint": runtime_hint,
+                "transport": {"type": "stdio"}
+            }))
+            .unwrap();
+            assert!(package_candidate(&package, "1.2.3").is_err());
+        }
     }
 
     #[test]

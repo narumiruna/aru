@@ -162,6 +162,105 @@ fn mcp_environment_hash_normalizes_order_and_tracks_references() {
 }
 
 #[test]
+fn locked_pypi_candidate_replays_offline_to_every_mcp_target() {
+    let temporary = tempfile::tempdir().unwrap();
+    let targets = vec![
+        Target::Codex,
+        Target::Claude,
+        Target::Copilot,
+        Target::Opencode,
+    ];
+    let requirement = McpRequirement {
+        registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
+        server: Some("io.example/weather".into()),
+        version: Some("=0.5.0".into()),
+        transport: Some("stdio".into()),
+        package_registry: Some("pypi".into()),
+        url: None,
+        command: None,
+        args: Vec::new(),
+        env_vars: Vec::new(),
+        env_http_headers: BTreeMap::new(),
+        bearer_token_env: None,
+        targets: None,
+    };
+    let manifest = Manifest {
+        project: crate::manifest::Project {
+            targets: targets.clone(),
+        },
+        instructions: crate::manifest::Instructions::default(),
+        skills: BTreeMap::new(),
+        mcp: BTreeMap::from([("weather".into(), requirement.clone())]),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
+    };
+    let candidate = crate::registry::ResolvedCandidate {
+        kind: "package".into(),
+        transport: "stdio".into(),
+        command: Some("uvx".into()),
+        args: vec!["weather-mcp@0.5.0".into()],
+        env_vars: vec!["WEATHER_API_KEY".into()],
+        env_http_headers: BTreeMap::new(),
+        bearer_token_env: None,
+        url: None,
+        package: Some(crate::lockfile::LockedMcpPackage {
+            registry: "pypi".into(),
+            identifier: "weather-mcp".into(),
+            version: "0.5.0".into(),
+        }),
+    };
+    let mut lock = Lockfile::empty();
+    lock.package_input_hash =
+        package_input_hash(&manifest, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    lock.mcp_servers.push(McpServer {
+        name: "weather".into(),
+        registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
+        server_id: "io.example/weather".into(),
+        requirement: canonical_json_digest(&normalized_mcp(&requirement)).unwrap(),
+        version: "0.5.0".into(),
+        metadata_sha256: "sha256:metadata".into(),
+        targets: targets_from_candidate(&targets, &candidate, None).unwrap(),
+    });
+    lock.normalize();
+    lock.projection_baselines = baselines(&lock, &[]).unwrap();
+    lock.projection_input_hash = projection_input_hash(&lock, &targets).unwrap();
+    lock.normalize();
+
+    let resolved = resolve(
+        temporary.path(),
+        &manifest,
+        ResolveOptions {
+            previous: Some(&lock),
+            locked: true,
+            offline: true,
+            materialize_skills: true,
+            update_skills: &BTreeSet::new(),
+            update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
+            dry_run: false,
+            skill_hints: &BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    let server = &resolved.lock.mcp_servers[0];
+    assert_eq!(
+        server
+            .targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        targets
+    );
+    assert!(server.targets.iter().all(|target| {
+        target.command.as_deref() == Some("uvx")
+            && target.args == ["weather-mcp@0.5.0"]
+            && target.env_vars == ["WEATHER_API_KEY"]
+            && target.package.as_ref().unwrap().registry == "pypi"
+    }));
+}
+
+#[test]
 fn projection_hash_sorts_target_set() {
     let lock = Lockfile::empty();
     let forward = projection_input_hash(&lock, &[Target::Codex, Target::Claude]).unwrap();

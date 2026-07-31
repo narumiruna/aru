@@ -562,7 +562,7 @@ pub struct McpAddArgs {
     /// Candidate transport selector (stdio or streamable-http).
     #[arg(long, help_heading = "Registry Options")]
     pub transport: Option<String>,
-    /// Candidate package registry selector (MVP supports npm).
+    /// Candidate package registry selector (npm or PyPI with an explicit uvx hint).
     #[arg(long = "package-registry", help_heading = "Registry Options")]
     pub package_registry: Option<String>,
     /// Environment variable containing a bearer token.

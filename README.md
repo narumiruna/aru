@@ -338,7 +338,7 @@ aru mcp add io.example/context \
   --package-registry npm
 ```
 
-A Registry candidate must be unique after transport, package-registry, and configured-target capability filtering. Aru never chooses the first API result when multiple candidates remain.
+Registry packages support npm records rendered through exact `npx` argv and PyPI records that explicitly declare the `uvx` runtime hint. Select PyPI with `--package-registry pypi`. A Registry candidate must be unique after transport, package-registry, and configured-target capability filtering; aru never chooses the first API result when multiple candidates remain. Cargo, OCI, NuGet, MCPB, unknown runtime hints, secret arguments, and unresolved required arguments remain fail-closed. Use a pinned direct stdio declaration when you need an argv shape the Registry cannot represent safely.
 
 ### Direct HTTPS endpoint
 
