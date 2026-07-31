@@ -9,7 +9,7 @@ use crate::instruction::InstructionScope;
 use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
-pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 3;
+pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -27,7 +27,34 @@ pub struct SkillPackage {
     pub version: String,
     pub revision: String,
     pub repository_name: String,
+    pub targets: Vec<Target>,
     pub skills: Vec<LockedSkill>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct AruPackage {
+    pub source: String,
+    pub requirement: String,
+    pub version: String,
+    pub revision: String,
+    pub name: String,
+    pub package_version: String,
+    pub manifest_sha256: String,
+    pub content_sha256: String,
+    pub targets: Vec<Target>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
+    #[serde(
+        default,
+        rename = "instruction-source",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub instruction_sources: Vec<LockedInstructionSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<LockedSkill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,6 +107,8 @@ pub struct LockedInstructionSource {
     pub scope: InstructionScope,
     pub targets: Vec<Target>,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -103,6 +132,8 @@ pub struct Lockfile {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub instruction_sources: Vec<LockedInstructionSource>,
+    #[serde(default, rename = "aru-package", skip_serializing_if = "Vec::is_empty")]
+    pub aru_packages: Vec<AruPackage>,
     #[serde(
         default,
         rename = "skill-package",
@@ -122,10 +153,11 @@ pub struct Lockfile {
 impl Lockfile {
     pub fn empty() -> Self {
         Self {
-            version: 1,
+            version: 3,
             package_input_hash: String::new(),
             projection_input_hash: String::new(),
             instruction_sources: Vec::new(),
+            aru_packages: Vec::new(),
             skill_packages: Vec::new(),
             mcp_servers: Vec::new(),
             projection_baselines: Vec::new(),
@@ -147,14 +179,19 @@ impl Lockfile {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.version != 1 {
+        if self.version != 3 {
             return Err(AruError::msg(format!(
-                "unsupported aru.lock version {}; expected 1",
+                "unsupported aru.lock version {}; expected 3",
                 self.version
             )));
         }
         let mut instruction_sources = BTreeSet::new();
         for instruction in &self.instruction_sources {
+            if instruction.targets.is_empty() {
+                return Err(AruError::msg(
+                    "aru.lock contains instruction source without targets",
+                ));
+            }
             if !instruction_sources.insert(&instruction.source) {
                 return Err(AruError::msg(
                     "aru.lock contains duplicate instruction source",
@@ -167,19 +204,89 @@ impl Lockfile {
                 ));
             }
         }
+        let mut package_sources = BTreeSet::new();
+        let mut package_names = BTreeSet::new();
+        let mut package_edges = 0_usize;
+        for package in &self.aru_packages {
+            if !package_sources.insert(package.source.as_str()) {
+                return Err(AruError::msg(
+                    "aru.lock contains duplicate aru package source",
+                ));
+            }
+            if !package_names.insert(package.name.as_str()) {
+                return Err(AruError::msg(
+                    "aru.lock contains duplicate aru package name",
+                ));
+            }
+            validate_revision(&package.revision, "aru package")?;
+            let targets: BTreeSet<_> = package.targets.iter().collect();
+            if package.targets.is_empty() || targets.len() != package.targets.len() {
+                return Err(AruError::msg(
+                    "aru.lock contains empty or duplicate aru package targets",
+                ));
+            }
+            package_edges = package_edges.saturating_add(package.dependencies.len());
+            if package_edges > crate::package::MAX_GRAPH_EDGES {
+                return Err(AruError::msg(format!(
+                    "aru.lock exceeds {} package dependency edges",
+                    crate::package::MAX_GRAPH_EDGES
+                )));
+            }
+            if package
+                .instruction_sources
+                .iter()
+                .any(|source| !source.managed)
+            {
+                return Err(AruError::msg(
+                    "aru.lock contains unmanaged instruction inside an aru package",
+                ));
+            }
+        }
+        if self.aru_packages.len() > crate::package::MAX_GRAPH_NODES {
+            return Err(AruError::msg(format!(
+                "aru.lock exceeds {} aru package nodes",
+                crate::package::MAX_GRAPH_NODES
+            )));
+        }
+        for package in &self.aru_packages {
+            for dependency in &package.dependencies {
+                if dependency == &package.source || !package_sources.contains(dependency.as_str()) {
+                    return Err(AruError::msg(format!(
+                        "aru.lock contains invalid aru package dependency {dependency:?}"
+                    )));
+                }
+            }
+            for instruction in &package.instruction_sources {
+                if !self.instruction_sources.contains(instruction) {
+                    return Err(AruError::msg(
+                        "aru.lock package instruction is missing from the complete instruction lock",
+                    ));
+                }
+            }
+        }
+        validate_package_graph(&self.aru_packages)?;
+
         let mut sources = BTreeSet::new();
         let mut skill_names = BTreeSet::new();
         for package in &self.skill_packages {
             if !sources.insert(&package.source) {
                 return Err(AruError::msg("aru.lock contains duplicate skill source"));
             }
-            if package.revision.len() != 40
-                || !package
-                    .revision
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
+            validate_revision(&package.revision, "skill package")?;
+            let unique_targets: BTreeSet<_> = package.targets.iter().collect();
+            if package.targets.is_empty() || unique_targets.len() != package.targets.len() {
+                return Err(AruError::msg(
+                    "aru.lock contains empty or duplicate skill package targets",
+                ));
+            }
+            if package
+                .targets
+                .iter()
+                .any(|target| !crate::target::capabilities(*target).skills)
             {
-                return Err(AruError::msg("aru.lock contains invalid Git revision"));
+                return Err(AruError::msg(
+                    "aru.lock contains unsupported skill package target",
+                ));
             }
             for skill in &package.skills {
                 if !skill_names.insert(&skill.name) {
@@ -192,17 +299,63 @@ impl Lockfile {
         }
         let mut mcp_names = BTreeSet::new();
         for server in &self.mcp_servers {
+            if server.targets.is_empty() {
+                return Err(AruError::msg(
+                    "aru.lock contains MCP server without targets",
+                ));
+            }
             if !mcp_names.insert(&server.name) {
                 return Err(AruError::msg("aru.lock contains duplicate MCP name"));
             }
             let mut targets = BTreeSet::new();
             for target in &server.targets {
+                if !crate::target::capabilities(target.target).mcp {
+                    return Err(AruError::msg(
+                        "aru.lock contains unsupported MCP server target",
+                    ));
+                }
                 if !targets.insert(target.target) {
                     return Err(AruError::msg(format!(
                         "aru.lock contains duplicate target for MCP {:?}",
                         server.name
                     )));
                 }
+            }
+        }
+        for package in &self.aru_packages {
+            let locked_skills = self
+                .skill_packages
+                .iter()
+                .find(|skills| skills.source == package.source);
+            if package.skills.is_empty() {
+                if locked_skills.is_some() {
+                    return Err(AruError::msg(
+                        "aru.lock has unexpected skill package for an aru package without skills",
+                    ));
+                }
+            } else if !locked_skills.is_some_and(|skills| {
+                skills.revision == package.revision
+                    && skills.targets == package.targets
+                    && skills.skills == package.skills
+            }) {
+                return Err(AruError::msg(
+                    "aru.lock aru package skills do not match the complete skill lock",
+                ));
+            }
+            for name in &package.mcp {
+                if !self.mcp_servers.iter().any(|server| server.name == *name) {
+                    return Err(AruError::msg(
+                        "aru.lock aru package MCP is missing from the complete MCP lock",
+                    ));
+                }
+            }
+        }
+        let mut baselines = BTreeSet::new();
+        for baseline in &self.projection_baselines {
+            if !baselines.insert((baseline.target, &baseline.kind, &baseline.key)) {
+                return Err(AruError::msg(
+                    "aru.lock contains duplicate projection baseline",
+                ));
             }
         }
         Ok(())
@@ -215,9 +368,27 @@ impl Lockfile {
             instruction.targets.sort();
             instruction.targets.dedup();
         }
+        self.aru_packages
+            .sort_by(|left, right| left.source.cmp(&right.source));
+        for package in &mut self.aru_packages {
+            package.targets.sort();
+            package.targets.dedup();
+            package.dependencies.sort();
+            package.dependencies.dedup();
+            package
+                .instruction_sources
+                .sort_by(|left, right| left.source.cmp(&right.source));
+            package
+                .skills
+                .sort_by(|left, right| left.name.cmp(&right.name));
+            package.mcp.sort();
+            package.mcp.dedup();
+        }
         self.skill_packages
             .sort_by(|left, right| left.source.cmp(&right.source));
         for package in &mut self.skill_packages {
+            package.targets.sort();
+            package.targets.dedup();
             package
                 .skills
                 .sort_by(|left, right| left.name.cmp(&right.name));
@@ -246,10 +417,12 @@ impl Lockfile {
     pub fn package_identity_digest(&self) -> Result<String> {
         #[derive(Serialize)]
         struct Identity<'a> {
+            packages: &'a [AruPackage],
             skills: &'a [SkillPackage],
             mcp: &'a [McpServer],
         }
         canonical_json_digest(&Identity {
+            packages: &self.aru_packages,
             skills: &self.skill_packages,
             mcp: &self.mcp_servers,
         })
@@ -259,15 +432,76 @@ impl Lockfile {
         #[derive(Serialize)]
         struct Identity<'a> {
             instructions: &'a [LockedInstructionSource],
+            packages: &'a [AruPackage],
             skills: &'a [SkillPackage],
             mcp: &'a [McpServer],
         }
         canonical_json_digest(&Identity {
             instructions: &self.instruction_sources,
+            packages: &self.aru_packages,
             skills: &self.skill_packages,
             mcp: &self.mcp_servers,
         })
     }
+}
+
+fn validate_revision(revision: &str, kind: &str) -> Result<()> {
+    if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(AruError::msg(format!(
+            "aru.lock contains invalid {kind} Git revision"
+        )))
+    }
+}
+
+fn validate_package_graph(packages: &[AruPackage]) -> Result<()> {
+    fn visit<'a>(
+        source: &'a str,
+        by_source: &BTreeMap<&'a str, &'a AruPackage>,
+        visiting: &mut BTreeSet<&'a str>,
+        complete: &mut BTreeSet<&'a str>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > crate::package::MAX_GRAPH_DEPTH {
+            return Err(AruError::msg(format!(
+                "aru.lock package graph exceeds maximum depth {}",
+                crate::package::MAX_GRAPH_DEPTH
+            )));
+        }
+        if complete.contains(source) {
+            return Ok(());
+        }
+        if !visiting.insert(source) {
+            return Err(AruError::msg(format!(
+                "aru.lock package graph contains a cycle at {source:?}"
+            )));
+        }
+        let package = by_source
+            .get(source)
+            .ok_or_else(|| AruError::msg("aru.lock package graph references a missing node"))?;
+        for dependency in &package.dependencies {
+            visit(dependency, by_source, visiting, complete, depth + 1)?;
+        }
+        visiting.remove(source);
+        complete.insert(source);
+        Ok(())
+    }
+
+    let by_source = packages
+        .iter()
+        .map(|package| (package.source.as_str(), package))
+        .collect::<BTreeMap<_, _>>();
+    let mut visiting = BTreeSet::new();
+    let mut complete = BTreeSet::new();
+    for source in by_source.keys() {
+        visit(source, &by_source, &mut visiting, &mut complete, 1)?;
+    }
+    Ok(())
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]
@@ -310,6 +544,7 @@ mod tests {
             },
             targets: vec![Target::Copilot, Target::Claude],
             sha256: "sha256:source".into(),
+            managed: false,
         });
         assert_eq!(package_identity, lock.package_identity_digest().unwrap());
         assert_ne!(lock_identity, lock.lock_identity_digest().unwrap());
@@ -330,6 +565,7 @@ mod tests {
             },
             targets: vec![Target::Claude],
             sha256: "sha256:source".into(),
+            managed: false,
         };
         let mut lock = Lockfile::empty();
         lock.instruction_sources = vec![source.clone(), source];
@@ -337,7 +573,75 @@ mod tests {
     }
 
     #[test]
-    fn v1_golden_lock_round_trips_to_identical_bytes() {
+    fn incomplete_target_and_duplicate_baseline_records_are_rejected() {
+        let mut lock = Lockfile::empty();
+        lock.mcp_servers.push(McpServer {
+            name: "docs".into(),
+            registry: None,
+            server_id: "docs".into(),
+            requirement: "sha256:requirement".into(),
+            version: "direct".into(),
+            metadata_sha256: "sha256:metadata".into(),
+            targets: Vec::new(),
+        });
+        assert!(
+            lock.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("without targets")
+        );
+
+        let mut lock = Lockfile::empty();
+        let baseline = ProjectionBaseline {
+            target: Target::Codex,
+            kind: "skill".into(),
+            key: "demo".into(),
+            sha256: "sha256:demo".into(),
+        };
+        lock.projection_baselines = vec![baseline.clone(), baseline];
+        assert!(
+            lock.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate projection baseline")
+        );
+    }
+
+    #[test]
+    fn package_graph_cycles_are_rejected() {
+        let package = |source: &str, name: &str, dependency: &str| AruPackage {
+            source: source.into(),
+            requirement: "version:^1".into(),
+            version: "1.0.0".into(),
+            revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            name: name.into(),
+            package_version: "1.0.0".into(),
+            manifest_sha256: "sha256:manifest".into(),
+            content_sha256: "sha256:content".into(),
+            targets: vec![Target::Codex],
+            dependencies: vec![dependency.into()],
+            instruction_sources: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+        };
+        let mut lock = Lockfile::empty();
+        lock.aru_packages = vec![
+            package(
+                "git+https://example.com/a.git",
+                "a",
+                "git+https://example.com/b.git",
+            ),
+            package(
+                "git+https://example.com/b.git",
+                "b",
+                "git+https://example.com/a.git",
+            ),
+        ];
+        assert!(lock.validate().unwrap_err().to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn v3_golden_lock_round_trips_to_identical_bytes() {
         let fixture = include_str!("../tests/fixtures/contracts/aru.lock");
         let lock: Lockfile = toml::from_str(fixture).unwrap();
         lock.validate().unwrap();

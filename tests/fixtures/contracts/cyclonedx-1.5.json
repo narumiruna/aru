@@ -1,0 +1,69 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-31T00:00:00Z",
+    "component": {
+      "type": "application",
+      "name": "aru-project",
+      "bom-ref": "aru:root"
+    },
+    "properties": [
+      {
+        "name": "aru:document-purpose",
+        "value": "inventory"
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "application",
+      "bom-ref": "aru:mcp:83ac5e2aa576fc46bfdb3f4b626244bb5356207cd2b0d3ff5dbab1cae77fdd9b",
+      "name": "docs",
+      "version": "direct",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "80d84a9e3f5fa2e768de0450be13e6e5d0e2595e480f1fb1965693f0ea0b0f42"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://example.com/mcp"
+        }
+      ],
+      "properties": [
+        {
+          "name": "aru:kind",
+          "value": "mcp"
+        },
+        {
+          "name": "aru:requirement",
+          "value": "sha256:f64d96122d084c1fb5b8e364118ca40ade4cca0c76fb3483a17aeb9676a06ccb"
+        },
+        {
+          "name": "aru:server-id",
+          "value": "docs"
+        },
+        {
+          "name": "aru:targets",
+          "value": "codex"
+        },
+        {
+          "name": "aru:transports",
+          "value": "streamable-http"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "aru:root",
+      "dependsOn": [
+        "aru:mcp:83ac5e2aa576fc46bfdb3f4b626244bb5356207cd2b0d3ff5dbab1cae77fdd9b"
+      ]
+    }
+  ]
+}

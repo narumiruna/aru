@@ -34,6 +34,8 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
         ));
     }
     let mut document = ManifestDocument::load(project)?;
+    let mut dependency_targets = args.targets;
+    dependency_targets.sort();
     let requirement = McpRequirement {
         registry: args.server.as_ref().map(|_| {
             args.registry
@@ -47,6 +49,7 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
         command: args.command,
         args: args.args,
         bearer_token_env: args.bearer_token_env,
+        targets: (!dependency_targets.is_empty()).then_some(dependency_targets),
     };
     requirement.validate(&args.name)?;
     document.set_mcp(&args.name, &requirement);

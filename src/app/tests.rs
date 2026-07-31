@@ -1,6 +1,8 @@
 use std::process::Command;
 
+use super::skill::remove as skill_remove;
 use super::*;
+use crate::cli::{SkillAddArgs, SkillRemoveArgs};
 use crate::interactive::{SkillAddSelectionMode, SkillChooser};
 
 fn git(repository: &Path, arguments: &[&str]) {
@@ -71,6 +73,7 @@ fn add_args(source: &Path) -> SkillAddArgs {
         version: Some("=1.0.0".into()),
         branch: None,
         rev: None,
+        targets: Vec::new(),
         upgrade: false,
         no_sync: false,
         dry_run: false,

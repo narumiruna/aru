@@ -23,6 +23,7 @@ pub struct InstructionUnit {
     pub scope: InstructionScope,
     pub targets: BTreeSet<Target>,
     pub source_sha256: String,
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

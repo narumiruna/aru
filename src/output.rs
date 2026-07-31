@@ -61,6 +61,12 @@ impl Output {
         self.emit(label, &message, status_color(label));
     }
 
+    pub fn preview(&self, message: &str) {
+        if !self.quiet {
+            self.emit("Resolved", message, "36");
+        }
+    }
+
     pub fn detail(&self, message: &str) {
         if !self.quiet && self.verbose > 0 {
             self.emit("Detail", message, "2");

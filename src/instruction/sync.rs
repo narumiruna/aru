@@ -397,6 +397,7 @@ fn projections_from_locked(
                 scope: source.scope.clone(),
                 targets: source.targets.iter().copied().collect(),
                 source_sha256: source.sha256.clone(),
+                managed: source.managed,
             },
             content: String::new(),
         })

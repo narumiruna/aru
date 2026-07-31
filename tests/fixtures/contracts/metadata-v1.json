@@ -1,0 +1,67 @@
+{
+  "edges": [
+    {
+      "from": "git+https://example.com/alpha.git",
+      "to": "git+https://example.com/shared.git"
+    },
+    {
+      "from": "git+https://example.com/beta.git",
+      "to": "git+https://example.com/shared.git"
+    }
+  ],
+  "format_version": 1,
+  "instructions": [],
+  "lock_version": 3,
+  "mcp": [],
+  "packages": [
+    {
+      "instructions": 0,
+      "mcp": 0,
+      "name": "alpha",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "skills": 0,
+      "source": "git+https://example.com/alpha.git",
+      "targets": [
+        "codex",
+        "claude"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "instructions": 0,
+      "mcp": 0,
+      "name": "beta",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "skills": 0,
+      "source": "git+https://example.com/beta.git",
+      "targets": [
+        "codex"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "instructions": 0,
+      "mcp": 0,
+      "name": "shared",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "skills": 0,
+      "source": "git+https://example.com/shared.git",
+      "targets": [
+        "codex",
+        "claude"
+      ],
+      "version": "1.0.0"
+    }
+  ],
+  "project_root": "<PROJECT>",
+  "project_targets": [
+    "codex",
+    "claude"
+  ],
+  "projections": [],
+  "roots": [
+    "git+https://example.com/alpha.git",
+    "git+https://example.com/beta.git"
+  ],
+  "skills": []
+}

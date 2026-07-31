@@ -54,6 +54,8 @@ fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
             requirement.clone(),
         )]),
         mcp: BTreeMap::new(),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
     };
     let empty_hints = BTreeMap::new();
     let initial = resolve(
@@ -66,6 +68,8 @@ fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
             materialize_skills: true,
             update_skills: &BTreeSet::new(),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &empty_hints,
         },
@@ -108,6 +112,8 @@ fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
             materialize_skills: true,
             update_skills: &BTreeSet::new(),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &hints,
         },
@@ -169,6 +175,8 @@ fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
             requirement.clone(),
         )]),
         mcp: BTreeMap::new(),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
     };
     let empty_hints = BTreeMap::new();
     let first = resolve(
@@ -181,6 +189,8 @@ fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
             materialize_skills: true,
             update_skills: &BTreeSet::new(),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &empty_hints,
         },
@@ -216,6 +226,8 @@ fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
             materialize_skills: true,
             update_skills: &BTreeSet::new(),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &hints,
         },
@@ -234,6 +246,8 @@ fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
             materialize_skills: true,
             update_skills: &BTreeSet::from([source]),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &empty_hints,
         },
@@ -263,8 +277,11 @@ fn offline_registry_resolution_fails_before_http_resolution() {
                 command: None,
                 args: Vec::new(),
                 bearer_token_env: None,
+                targets: None,
             },
         )]),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
     };
     let error = resolve(
         temporary.path(),
@@ -276,6 +293,8 @@ fn offline_registry_resolution_fails_before_http_resolution() {
             materialize_skills: true,
             update_skills: &BTreeSet::new(),
             update_mcp: &BTreeSet::new(),
+            update_packages: &BTreeSet::new(),
+            precise_packages: &BTreeMap::new(),
             dry_run: false,
             skill_hints: &BTreeMap::new(),
         },
@@ -302,15 +321,56 @@ fn package_hash_excludes_targets() {
         instructions: crate::manifest::Instructions::default(),
         skills: BTreeMap::from([("source".into(), SkillRequirement::default())]),
         mcp: BTreeMap::new(),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
     };
-    let first = package_input_hash(&manifest, &sources).unwrap();
+    let package_sources = BTreeMap::new();
+    let first = package_input_hash(&manifest, &sources, &package_sources).unwrap();
     manifest.project.targets.push(Target::Claude);
-    assert_eq!(first, package_input_hash(&manifest, &sources).unwrap());
+    assert_eq!(
+        first,
+        package_input_hash(&manifest, &sources, &package_sources).unwrap()
+    );
+    manifest.skills.get_mut("source").unwrap().targets = Some(vec![Target::Codex]);
+    assert_eq!(
+        first,
+        package_input_hash(&manifest, &sources, &package_sources).unwrap()
+    );
 
     manifest.skills.get_mut("source").unwrap().include = vec!["zeta".into(), "alpha".into()];
-    let selectors = package_input_hash(&manifest, &sources).unwrap();
+    let selectors = package_input_hash(&manifest, &sources, &package_sources).unwrap();
     manifest.skills.get_mut("source").unwrap().include.reverse();
-    assert_eq!(selectors, package_input_hash(&manifest, &sources).unwrap());
+    assert_eq!(
+        selectors,
+        package_input_hash(&manifest, &sources, &package_sources).unwrap()
+    );
+
+    let package_source = GitSource {
+        identity: "git+https://example.com/kit.git".into(),
+        fetch: "https://example.com/kit.git".into(),
+        repository_name: "kit".into(),
+    };
+    let package_sources = BTreeMap::from([("kit".into(), package_source)]);
+    manifest.packages.insert(
+        "kit".into(),
+        PackageRequirement {
+            version: Some("^1.0".into()),
+            targets: Some(vec![Target::Codex]),
+            ..PackageRequirement::default()
+        },
+    );
+    let package_hash = package_input_hash(&manifest, &sources, &package_sources).unwrap();
+    manifest.packages.get_mut("kit").unwrap().targets = Some(vec![Target::Claude]);
+    manifest.package_trust.insert(
+        "kit".into(),
+        crate::manifest::PackageTrust {
+            mcp: vec!["docs".into()],
+        },
+    );
+    assert_eq!(
+        package_hash,
+        package_input_hash(&manifest, &sources, &package_sources).unwrap()
+    );
 }
 
 #[test]

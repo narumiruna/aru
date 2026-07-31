@@ -11,7 +11,7 @@ use crate::lockfile::{
     ADAPTER_CAPABILITY_SCHEMA, LockedSkill, Lockfile, McpServer, McpTarget, ProjectionBaseline,
     SkillPackage,
 };
-use crate::manifest::{Manifest, McpRequirement, SkillRequirement, Target};
+use crate::manifest::{Manifest, McpRequirement, PackageRequirement, SkillRequirement, Target};
 use crate::registry::{RegistryClient, ResolvedCandidate};
 use crate::skill::{DiscoveredSkill, discover_and_select, discover_candidates};
 use crate::source::git::{self, GitSource};
@@ -31,6 +31,8 @@ pub struct ResolveOptions<'a> {
     pub materialize_skills: bool,
     pub update_skills: &'a BTreeSet<String>,
     pub update_mcp: &'a BTreeSet<String>,
+    pub update_packages: &'a BTreeSet<String>,
+    pub precise_packages: &'a BTreeMap<String, String>,
     pub dry_run: bool,
     pub skill_hints: &'a BTreeMap<String, SkillResolutionHint>,
 }
@@ -67,7 +69,19 @@ pub fn resolve(
     options: ResolveOptions<'_>,
 ) -> Result<Resolution> {
     let sources = canonical_sources(project, manifest)?;
-    let instructions = instruction::discovery::discover(project, manifest)?;
+    let package_sources = canonical_package_sources(project, manifest)?;
+    for source in sources.values() {
+        if package_sources
+            .values()
+            .any(|package| package.identity == source.identity)
+        {
+            return Err(AruError::msg(format!(
+                "Git source {} cannot be both a direct skill source and an aru package",
+                source.identity
+            )));
+        }
+    }
+    let mut instructions = instruction::discovery::discover(project, manifest)?;
     let skill_targets = target::skill_targets(&manifest.project.targets);
     let mcp_targets = target::mcp_targets(&manifest.project.targets);
     if !manifest.skills.is_empty() && skill_targets.is_empty() {
@@ -80,14 +94,8 @@ pub fn resolve(
             "no configured target supports MCP projections",
         ));
     }
-    let package_input_hash = package_input_hash(manifest, &sources)?;
-    let cache = if options.dry_run {
-        Cache::ephemeral()?
-    } else {
-        Cache::project(project)
-    };
-
-    if options.locked {
+    let package_input_hash = package_input_hash(manifest, &sources, &package_sources)?;
+    let locked = if options.locked {
         let lock = options
             .previous
             .cloned()
@@ -97,17 +105,76 @@ pub fn resolve(
                 "aru.lock is stale for package inputs; run aru lock or aru sync",
             ));
         }
+        Some(lock)
+    } else {
+        None
+    };
+    let cache = if options.dry_run {
+        Cache::ephemeral_for_project(project)?
+    } else {
+        Cache::project(project)
+    };
+    let package_resolution = crate::package::resolver::resolve(
+        project,
+        manifest,
+        &cache,
+        crate::package::resolver::ResolveOptions {
+            previous: options.previous,
+            locked: options.locked,
+            offline: options.offline,
+            update: options.update_packages,
+            precise: options.precise_packages,
+        },
+    )?;
+    instructions.extend(package_resolution.instructions.clone());
+    instructions.sort_by(|left, right| left.unit.source.cmp(&right.unit.source));
+    let mut combined_mcp = manifest.mcp.clone();
+    for (name, requirement) in &package_resolution.mcp {
+        if combined_mcp
+            .insert(name.clone(), requirement.clone())
+            .is_some()
+        {
+            return Err(AruError::msg(format!(
+                "MCP name {name:?} is provided by both the project and an aru package"
+            )));
+        }
+    }
+
+    if let Some(lock) = locked {
         instruction::lock::validate_locked_sources(&lock.instruction_sources, &instructions)?;
-        validate_locked_projection(&lock, manifest, &instructions)?;
-        let skill_sources = if options.materialize_skills {
+        for expected in &package_resolution.skill_packages {
+            if !lock.skill_packages.contains(expected) {
+                return Err(AruError::msg(
+                    "aru.lock is stale for an aru package skill export",
+                ));
+            }
+        }
+        let mut effective_manifest = manifest.clone();
+        effective_manifest.mcp = combined_mcp;
+        validate_locked_mcp(&lock, &effective_manifest.mcp, &manifest.project.targets)?;
+        validate_locked_projection(&lock, &effective_manifest, &sources, &instructions)?;
+        let mut skill_sources = if options.materialize_skills {
             materialize_locked(&cache, manifest, &sources, &lock, options.offline)?
         } else {
+            let package_sources = lock
+                .aru_packages
+                .iter()
+                .map(|package| package.source.as_str())
+                .collect::<BTreeSet<_>>();
             lock.skill_packages
                 .iter()
+                .filter(|package| !package_sources.contains(package.source.as_str()))
                 .flat_map(|package| package.skills.iter())
                 .map(|skill| (skill.name.clone(), PathBuf::new()))
                 .collect()
         };
+        for (name, path) in package_resolution.skill_sources {
+            if skill_sources.insert(name.clone(), path).is_some() {
+                return Err(AruError::msg(format!(
+                    "resolved skill name {name:?} is provided more than once"
+                )));
+            }
+        }
         return Ok(Resolution {
             lock,
             skill_sources,
@@ -116,12 +183,17 @@ pub fn resolve(
     }
 
     let previous = options.previous;
-    let mut skill_packages = Vec::new();
-    let mut skill_sources = BTreeMap::new();
-    let mut resolved_names = BTreeSet::new();
+    let mut skill_packages = package_resolution.skill_packages;
+    let mut skill_sources = package_resolution.skill_sources;
+    let mut resolved_names = skill_sources.keys().cloned().collect::<BTreeSet<_>>();
     for (manifest_source, requirement) in &manifest.skills {
         let source = sources.get(manifest_source).unwrap();
         let descriptor = skill_requirement_descriptor(requirement);
+        let targets = effective_targets(
+            &manifest.project.targets,
+            requirement.targets.as_deref(),
+            true,
+        );
         let old = previous.and_then(|lock| {
             lock.skill_packages
                 .iter()
@@ -164,27 +236,33 @@ pub fn resolve(
             version,
             revision,
             repository_name: source.repository_name.clone(),
+            targets,
             skills: selected.iter().map(locked_skill).collect(),
         });
     }
 
     let registry_client = RegistryClient::new()?;
     let mut mcp_servers = Vec::new();
-    for (name, requirement) in &manifest.mcp {
+    for (name, requirement) in &combined_mcp {
         let descriptor = canonical_json_digest(&normalized_mcp(requirement))?;
+        let targets = effective_targets(
+            &manifest.project.targets,
+            requirement.targets.as_deref(),
+            false,
+        );
         let old =
             previous.and_then(|lock| lock.mcp_servers.iter().find(|server| server.name == *name));
         let reusable = old.filter(|server| {
             !options.update_mcp.contains(name) && server.requirement == descriptor
         });
         let server = if let Some(old) = reusable {
-            rebuild_mcp_targets(old, requirement, &mcp_targets)?
+            rebuild_mcp_targets(old, requirement, &targets)?
         } else {
             resolve_mcp(
                 &registry_client,
                 name,
                 requirement,
-                &mcp_targets,
+                &targets,
                 &descriptor,
                 options.offline,
             )?
@@ -193,16 +271,17 @@ pub fn resolve(
     }
 
     let mut lock = Lockfile {
-        version: 1,
+        version: 3,
         package_input_hash,
         projection_input_hash: String::new(),
         instruction_sources: instruction::lock::locked_sources(&instructions),
+        aru_packages: package_resolution.packages,
         skill_packages,
         mcp_servers,
         projection_baselines: Vec::new(),
     };
     lock.normalize();
-    lock.projection_baselines = baselines(&lock, &manifest.project.targets, &instructions)?;
+    lock.projection_baselines = baselines(&lock, &instructions)?;
     lock.projection_input_hash = projection_input_hash(&lock, &manifest.project.targets)?;
     lock.normalize();
     lock.validate()?;
@@ -230,7 +309,7 @@ pub fn inspect_skill_source(
     });
     let (version, revision) = resolve_skill_reference(&source, requirement, old, false, offline)?;
     let cache = if dry_run {
-        Cache::ephemeral()?
+        Cache::ephemeral_for_project(project)?
     } else {
         Cache::project(project)
     };
@@ -334,6 +413,43 @@ fn validate_skill_hint(
     Ok(())
 }
 
+fn effective_targets(
+    project_targets: &[Target],
+    selected: Option<&[Target]>,
+    skill: bool,
+) -> Vec<Target> {
+    let mut targets = selected.unwrap_or(project_targets).to_vec();
+    targets.retain(|target| {
+        let capabilities = target::capabilities(*target);
+        if skill {
+            capabilities.skills
+        } else {
+            capabilities.mcp
+        }
+    });
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+fn canonical_package_sources(
+    project: &Path,
+    manifest: &Manifest,
+) -> Result<BTreeMap<String, GitSource>> {
+    let mut output = BTreeMap::new();
+    let mut identities = BTreeMap::<String, String>::new();
+    for source in manifest.packages.keys() {
+        let canonical = git::canonicalize(project, source)?;
+        if let Some(previous) = identities.insert(canonical.identity.clone(), source.clone()) {
+            return Err(AruError::msg(format!(
+                "aru package sources {previous:?} and {source:?} identify the same repository"
+            )));
+        }
+        output.insert(source.clone(), canonical);
+    }
+    Ok(output)
+}
+
 fn canonical_sources(project: &Path, manifest: &Manifest) -> Result<BTreeMap<String, GitSource>> {
     let mut output = BTreeMap::new();
     let mut identities = BTreeMap::<String, String>::new();
@@ -351,8 +467,15 @@ fn canonical_sources(project: &Path, manifest: &Manifest) -> Result<BTreeMap<Str
 
 #[derive(Serialize)]
 struct PackageInputs {
+    packages: Vec<PackageInput>,
     skills: Vec<SkillInput>,
     mcp: BTreeMap<String, McpRequirement>,
+}
+
+#[derive(Serialize)]
+struct PackageInput {
+    source: String,
+    requirement: PackageRequirement,
 }
 
 #[derive(Serialize)]
@@ -364,13 +487,34 @@ struct SkillInput {
 fn package_input_hash(
     manifest: &Manifest,
     sources: &BTreeMap<String, GitSource>,
+    package_sources: &BTreeMap<String, GitSource>,
 ) -> Result<String> {
+    let mut packages = manifest
+        .packages
+        .iter()
+        .map(|(key, requirement)| {
+            let mut requirement = requirement.clone();
+            requirement.normalize();
+            requirement.targets = None;
+            if requirement.rev.is_none() && requirement.branch.is_none() {
+                requirement.version = Some(normalize_semver_requirement(
+                    requirement.version.as_deref().unwrap_or("*"),
+                ));
+            }
+            PackageInput {
+                source: package_sources.get(key).unwrap().identity.clone(),
+                requirement,
+            }
+        })
+        .collect::<Vec<_>>();
+    packages.sort_by(|left, right| left.source.cmp(&right.source));
     let mut skills: Vec<_> = manifest
         .skills
         .iter()
         .map(|(key, requirement)| {
             let mut requirement = requirement.clone();
             requirement.normalize();
+            requirement.targets = None;
             if requirement.rev.is_none() && requirement.branch.is_none() {
                 requirement.version = Some(normalize_semver_requirement(
                     requirement.version.as_deref().unwrap_or("*"),
@@ -388,11 +532,16 @@ fn package_input_hash(
         .iter()
         .map(|(name, requirement)| (name.clone(), normalized_mcp(requirement)))
         .collect();
-    canonical_json_digest(&PackageInputs { skills, mcp })
+    canonical_json_digest(&PackageInputs {
+        packages,
+        skills,
+        mcp,
+    })
 }
 
 fn normalized_mcp(requirement: &McpRequirement) -> McpRequirement {
     let mut normalized = requirement.clone();
+    normalized.targets = None;
     if normalized.server.is_some() {
         if normalized.registry.is_none() {
             normalized.registry = Some(crate::registry::DEFAULT_REGISTRY.into());
@@ -644,14 +793,12 @@ fn rebuild_mcp_targets(
 
 fn baselines(
     lock: &Lockfile,
-    targets: &[Target],
     instructions: &[DiscoveredInstruction],
 ) -> Result<Vec<ProjectionBaseline>> {
     let mut output = Vec::new();
-    let skill_targets = target::skill_targets(targets);
     for package in &lock.skill_packages {
         for skill in &package.skills {
-            for target in &skill_targets {
+            for target in &package.targets {
                 output.push(ProjectionBaseline {
                     target: *target,
                     kind: "skill".into(),
@@ -696,25 +843,92 @@ fn projection_input_hash(lock: &Lockfile, targets: &[Target]) -> Result<String> 
     })
 }
 
+fn validate_locked_mcp(
+    lock: &Lockfile,
+    expected: &BTreeMap<String, McpRequirement>,
+    project_targets: &[Target],
+) -> Result<()> {
+    if lock.mcp_servers.len() != expected.len() {
+        return Err(AruError::msg(
+            "aru.lock does not contain the complete expected MCP set",
+        ));
+    }
+    for (name, requirement) in expected {
+        let server = lock
+            .mcp_servers
+            .iter()
+            .find(|server| server.name == *name)
+            .ok_or_else(|| AruError::msg(format!("aru.lock is missing MCP {name:?}")))?;
+        let descriptor = canonical_json_digest(&normalized_mcp(requirement))?;
+        if server.requirement != descriptor {
+            return Err(AruError::msg(format!("aru.lock is stale for MCP {name:?}")));
+        }
+        let expected_targets =
+            effective_targets(project_targets, requirement.targets.as_deref(), false)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+        let locked_targets = server
+            .targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<BTreeSet<_>>();
+        if expected_targets != locked_targets {
+            return Err(AruError::msg(format!(
+                "aru.lock lacks complete per-target projection selection for MCP {name:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_locked_projection(
     lock: &Lockfile,
     manifest: &Manifest,
+    sources: &BTreeMap<String, GitSource>,
     instructions: &[DiscoveredInstruction],
 ) -> Result<()> {
-    let configured_targets: BTreeSet<_> = target::mcp_targets(&manifest.project.targets)
+    for (manifest_source, requirement) in &manifest.skills {
+        let source = sources.get(manifest_source).unwrap();
+        let package = lock
+            .skill_packages
+            .iter()
+            .find(|package| package.source == source.identity)
+            .ok_or_else(|| AruError::msg("aru.lock is missing a skill package"))?;
+        let expected = effective_targets(
+            &manifest.project.targets,
+            requirement.targets.as_deref(),
+            true,
+        );
+        if package.targets != expected {
+            return Err(AruError::msg(format!(
+                "aru.lock lacks complete per-target projection selection for skill source {:?}",
+                manifest_source
+            )));
+        }
+    }
+    for (name, requirement) in &manifest.mcp {
+        let server = lock
+            .mcp_servers
+            .iter()
+            .find(|server| server.name == *name)
+            .ok_or_else(|| AruError::msg("aru.lock is missing an MCP server"))?;
+        let expected: BTreeSet<_> = effective_targets(
+            &manifest.project.targets,
+            requirement.targets.as_deref(),
+            false,
+        )
         .into_iter()
         .collect();
-    for server in &lock.mcp_servers {
         let locked_targets: BTreeSet<_> =
             server.targets.iter().map(|target| target.target).collect();
-        if locked_targets != configured_targets {
+        if locked_targets != expected {
             return Err(AruError::msg(format!(
                 "aru.lock lacks complete per-target projection selection for MCP {:?}",
                 server.name
             )));
         }
     }
-    let expected_baselines = baselines(lock, &manifest.project.targets, instructions)?;
+    let expected_baselines = baselines(lock, instructions)?;
     if lock.projection_baselines != expected_baselines {
         return Err(AruError::msg("aru.lock projection baseline is stale"));
     }

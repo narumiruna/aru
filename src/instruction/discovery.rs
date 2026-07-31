@@ -115,6 +115,7 @@ pub fn discover(project: &Path, manifest: &Manifest) -> Result<Vec<DiscoveredIns
                         scope,
                         targets: targets.clone(),
                         source_sha256: sha256_bytes(&bytes),
+                        managed: false,
                     },
                     content,
                 },
@@ -344,6 +345,8 @@ mod tests {
             },
             skills: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            packages: BTreeMap::new(),
+            package_trust: BTreeMap::new(),
         }
     }
 
@@ -420,6 +423,8 @@ mod tests {
             },
             skills: BTreeMap::new(),
             mcp: BTreeMap::new(),
+            packages: BTreeMap::new(),
+            package_trust: BTreeMap::new(),
         };
         assert!(
             discover(project.path(), &copilot_only)

@@ -1,5 +1,11 @@
+mod audit;
+mod export;
+mod inspection;
 mod instruction;
 mod mcp;
+mod package_archive;
+mod package_dependency;
+mod skill;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -7,19 +13,14 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use crate::cli::{
-    Cli, Command, InstructionCommand, LockArgs, McpCommand, SkillAddArgs, SkillCommand,
-    SkillRemoveArgs, SkillUpdateArgs, SyncArgs, TargetAddArgs, TargetCommand, TargetRemoveArgs,
-    TargetSetArgs,
+    Cli, Command, InstructionCommand, LockArgs, McpCommand, SkillCommand, SyncArgs, TargetAddArgs,
+    TargetCommand, TargetRemoveArgs, TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
-use crate::interactive::{
-    InquireSkillChooser, SkillAddSelectionMode, SkillChooser, choose_skills,
-    terminal_selection_mode,
-};
 use crate::lockfile::Lockfile;
-use crate::manifest::{ManifestDocument, SkillRequirement, Target, validate_name};
+use crate::manifest::{ManifestDocument, Target};
 use crate::output::Output;
-use crate::resolver::{SkillResolutionHint, canonical_update_skill_targets, inspect_skill_source};
+use crate::resolver::SkillResolutionHint;
 use crate::sync::{SyncOptions, SyncResult, garbage_collect, prepare};
 use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
 
@@ -54,6 +55,18 @@ pub fn run() -> Result<()> {
             args.target,
             policy.output,
         ),
+        Command::Add(args) => {
+            let project = discover_project(project_option)?;
+            package_dependency::add(&project, args, policy)
+        }
+        Command::Remove(args) => {
+            let project = discover_project(project_option)?;
+            package_dependency::remove(&project, args, policy)
+        }
+        Command::Update(args) => {
+            let project = discover_project(project_option)?;
+            package_dependency::update(&project, args, policy)
+        }
         Command::Lock(args) => {
             let project = discover_project(project_option)?;
             lock(&project, args, policy)
@@ -61,6 +74,30 @@ pub fn run() -> Result<()> {
         Command::Sync(args) => {
             let project = discover_project(project_option)?;
             sync(&project, args, policy)
+        }
+        Command::Audit(args) => {
+            let project = discover_project(project_option)?;
+            audit::run(&project, args, policy)
+        }
+        Command::Export(args) => {
+            let project = discover_project(project_option)?;
+            export::run(&project, args, policy)
+        }
+        Command::Tree(args) => {
+            let project = discover_project(project_option)?;
+            inspection::tree(&project, args)
+        }
+        Command::Info(args) => {
+            let project = discover_project(project_option)?;
+            inspection::info(&project, args, policy)
+        }
+        Command::Metadata(args) => {
+            let project = discover_project(project_option)?;
+            inspection::metadata(&project, args)
+        }
+        Command::Package(args) => {
+            let package = package_for_archive(project_option)?;
+            package_archive::run(&package, args, policy)
         }
         Command::Instruction { command } => {
             let project = discover_project(project_option)?;
@@ -82,10 +119,10 @@ pub fn run() -> Result<()> {
         Command::Skill { command } => {
             let project = discover_project(project_option)?;
             match command {
-                SkillCommand::Add(args) => skill_add(&project, args, policy),
-                SkillCommand::Remove(args) => skill_remove(&project, args, policy),
-                SkillCommand::Update(args) => skill_update(&project, args, policy),
-                SkillCommand::List => skill_list(&project),
+                SkillCommand::Add(args) => skill::add(&project, args, policy),
+                SkillCommand::Remove(args) => skill::remove(&project, args, policy),
+                SkillCommand::Update(args) => skill::update(&project, args, policy),
+                SkillCommand::List => skill::list(&project),
             }
         }
         Command::Mcp { command } => {
@@ -204,6 +241,8 @@ fn check_execution(
     let previous = Lockfile::load_optional(project)?;
     let update_skills = BTreeSet::new();
     let update_mcp = BTreeSet::new();
+    let update_packages = BTreeSet::new();
+    let precise_packages = BTreeMap::new();
     let skill_hints = BTreeMap::new();
     let prepared = prepare(
         project,
@@ -220,6 +259,8 @@ fn check_execution(
             manifest_bytes: None,
             update_skills: &update_skills,
             update_mcp: &update_mcp,
+            update_packages: &update_packages,
+            precise_packages: &precise_packages,
             skill_hints: &skill_hints,
         },
     )?;
@@ -372,328 +413,6 @@ fn normalize_targets(targets: &mut Vec<Target>) {
     targets.dedup();
 }
 
-fn skill_add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
-    let mut chooser = InquireSkillChooser;
-    skill_add_with_policy(project, args, mode, &mut chooser, policy)
-}
-
-#[cfg(test)]
-fn skill_add_with_mode(
-    project: &Path,
-    args: SkillAddArgs,
-    mode: SkillAddSelectionMode,
-    chooser: &mut dyn SkillChooser,
-) -> Result<()> {
-    skill_add_with_policy(project, args, mode, chooser, ExecutionPolicy::default())
-}
-
-fn skill_add_with_policy(
-    project: &Path,
-    args: SkillAddArgs,
-    mode: SkillAddSelectionMode,
-    chooser: &mut dyn SkillChooser,
-    policy: ExecutionPolicy,
-) -> Result<()> {
-    if mode != SkillAddSelectionMode::Interactive {
-        return skill_add_explicit(project, &args, mode, policy);
-    }
-
-    let (snapshot, key, requirement, existing, previous) = {
-        let _guard = begin(project, args.dry_run)?;
-        let snapshot = ProjectSnapshot::read(project)?;
-        let document = ManifestDocument::load(project)?;
-        let manifest = document.manifest()?;
-        let key = find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
-        let existing = manifest.skills.get(&key).cloned();
-        let requirement = skill_add_base_requirement(existing.as_ref(), &args);
-        requirement.validate(&key)?;
-        let previous = Lockfile::load_optional(project)?;
-        (snapshot, key, requirement, existing, previous)
-    };
-
-    policy.output.progress(&format!("skill source {key}"));
-    let inspection = inspect_skill_source(
-        project,
-        &key,
-        &requirement,
-        if args.upgrade {
-            None
-        } else {
-            previous.as_ref()
-        },
-        args.dry_run,
-        policy.offline,
-    )?;
-    let names = inspection
-        .candidates
-        .iter()
-        .map(|candidate| candidate.name.clone())
-        .collect::<Vec<_>>();
-    let current = match existing.as_ref() {
-        None => Vec::new(),
-        Some(requirement) if requirement.is_wildcard() => names
-            .iter()
-            .filter(|name| !requirement.exclude.contains(name))
-            .cloned()
-            .collect(),
-        Some(requirement) => requirement.include.clone(),
-    };
-    let Some(selected) = choose_skills(chooser, &names, &current)? else {
-        policy
-            .output
-            .completion("Skill selection canceled; no files were changed.");
-        return Ok(());
-    };
-
-    let _guard = begin(project, args.dry_run)?;
-    if ProjectSnapshot::read(project)? != snapshot {
-        return Err(AruError::msg(
-            "aru.toml or aru.lock changed during interactive skill selection; retry the command",
-        ));
-    }
-    let mut document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    let current_key =
-        find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
-    if current_key != key {
-        return Err(AruError::msg(
-            "skill source identity changed during interactive skill selection; retry the command",
-        ));
-    }
-    let current_existing = manifest.skills.get(&key);
-    let mut selected_requirement = skill_add_base_requirement(current_existing, &args);
-    let preserve_wildcard = current_existing.is_some_and(SkillRequirement::is_wildcard)
-        && selected.len() == names.len()
-        && selected.iter().all(|name| names.contains(name));
-    if preserve_wildcard {
-        selected_requirement.include = vec!["*".into()];
-        selected_requirement.exclude.clear();
-    } else {
-        selected_requirement.include = selected.clone();
-        selected_requirement.exclude.clear();
-    }
-    selected_requirement
-        .paths
-        .retain(|name, _| selected.contains(name));
-    selected_requirement.normalize();
-    selected_requirement.validate(&key)?;
-    document.set_skill(&key, &selected_requirement);
-    let manifest = document.manifest()?;
-    let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
-    let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    execute_with_skill_hints(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-        &hints,
-    )
-}
-
-fn skill_add_explicit(
-    project: &Path,
-    args: &SkillAddArgs,
-    mode: SkillAddSelectionMode,
-    policy: ExecutionPolicy,
-) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    let mut document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    let key = find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
-    let existing = manifest.skills.get(&key);
-    let mut requirement = skill_add_base_requirement(existing, args);
-    if existing.is_none() && mode == SkillAddSelectionMode::Explicit {
-        requirement.include.clear();
-    }
-    if mode == SkillAddSelectionMode::All {
-        requirement.include = vec!["*".into()];
-        requirement.exclude.clear();
-    } else {
-        for name in &args.skills {
-            validate_name(name, "skill name")?;
-            add_skill_selector(&mut requirement, name);
-        }
-        if let Some(path) = &args.path {
-            let parsed = crate::skill::validate_relative_selector(path)?;
-            let name = parsed
-                .file_name()
-                .and_then(|part| part.to_str())
-                .ok_or_else(|| AruError::msg("skill path has no UTF-8 directory name"))?
-                .to_owned();
-            validate_name(&name, "skill name")?;
-            add_skill_selector(&mut requirement, &name);
-            requirement.paths.insert(name, path.clone());
-        }
-    }
-    requirement.normalize();
-    requirement.validate(&key)?;
-    document.set_skill(&key, &requirement);
-    let manifest = document.manifest()?;
-    let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-    )
-}
-
-fn skill_add_update_targets(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    key: &str,
-    upgrade: bool,
-) -> Result<BTreeSet<String>> {
-    if upgrade {
-        canonical_update_skill_targets(project, manifest, &[key.to_owned()])
-    } else {
-        Ok(BTreeSet::new())
-    }
-}
-
-fn skill_add_base_requirement(
-    existing: Option<&SkillRequirement>,
-    args: &SkillAddArgs,
-) -> SkillRequirement {
-    let mut requirement = existing.cloned().unwrap_or_default();
-    if let Some(version) = &args.version {
-        requirement.version = Some(version.clone());
-        requirement.branch = None;
-        requirement.rev = None;
-    }
-    if let Some(branch) = &args.branch {
-        requirement.branch = Some(branch.clone());
-        requirement.version = None;
-        requirement.rev = None;
-    }
-    if let Some(revision) = &args.rev {
-        requirement.rev = Some(revision.clone());
-        requirement.version = None;
-        requirement.branch = None;
-    }
-    requirement
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ProjectSnapshot {
-    manifest: Vec<u8>,
-    lock: Option<Vec<u8>>,
-}
-
-impl ProjectSnapshot {
-    fn read(project: &Path) -> Result<Self> {
-        let manifest_path = project.join(crate::manifest::MANIFEST_FILE);
-        let lock_path = project.join(crate::lockfile::LOCK_FILE);
-        let manifest = std::fs::read(&manifest_path).at(&manifest_path)?;
-        let lock = if lock_path.exists() {
-            Some(std::fs::read(&lock_path).at(&lock_path)?)
-        } else {
-            None
-        };
-        Ok(Self { manifest, lock })
-    }
-}
-
-fn skill_remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    let mut document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    let key = find_skill_key(project, &manifest, &args.source)?
-        .ok_or_else(|| AruError::msg(format!("skill source {:?} is not declared", args.source)))?;
-    if args.skills.is_empty() {
-        document.remove_skill(&key);
-    } else {
-        let mut requirement = manifest.skills.get(&key).unwrap().clone();
-        for name in args.skills {
-            validate_name(&name, "skill name")?;
-            if requirement.is_wildcard() {
-                if !requirement.exclude.contains(&name) {
-                    requirement.exclude.push(name.clone());
-                }
-            } else if let Some(index) = requirement.include.iter().position(|item| item == &name) {
-                requirement.include.remove(index);
-            } else {
-                return Err(AruError::msg(format!(
-                    "skill {name:?} is not explicitly selected from {key:?}"
-                )));
-            }
-            requirement.paths.remove(&name);
-        }
-        requirement.normalize();
-        if requirement.include.is_empty() {
-            document.remove_skill(&key);
-        } else {
-            document.set_skill(&key, &requirement);
-        }
-    }
-    let manifest = document.manifest()?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
-}
-
-fn skill_list(project: &Path) -> Result<()> {
-    let manifest = ManifestDocument::load(project)?.manifest()?;
-    let lock = Lockfile::load_optional(project)?;
-    let mut listed_sources = BTreeSet::new();
-    if let Some(lock) = lock {
-        for package in lock.skill_packages {
-            listed_sources.insert(package.source.clone());
-            for skill in package.skills {
-                println!("{}\t{}\t{}", skill.name, package.version, package.source);
-            }
-        }
-    }
-    for source in manifest.skills.keys() {
-        let canonical = crate::source::git::canonicalize(project, source)?;
-        if !listed_sources.contains(&canonical.identity) {
-            println!("-\tunlocked\t{source}");
-        }
-    }
-    Ok(())
-}
-
-fn skill_update(project: &Path, args: SkillUpdateArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
-    let document = ManifestDocument::load(project)?;
-    let manifest = document.manifest()?;
-    let updates = canonical_update_skill_targets(project, &manifest, &args.sources)?;
-    execute(
-        project,
-        &manifest,
-        None,
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn execute(
     project: &Path,
@@ -736,9 +455,75 @@ fn execute_with_skill_hints(
     update_mcp: BTreeSet<String>,
     skill_hints: &BTreeMap<String, SkillResolutionHint>,
 ) -> Result<()> {
+    execute_with_updates(
+        project,
+        manifest,
+        manifest_bytes,
+        dry_run,
+        policy,
+        project_projections,
+        merge_instructions,
+        force,
+        update_skills,
+        update_mcp,
+        BTreeSet::new(),
+        BTreeMap::new(),
+        skill_hints,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_package_updates(
+    project: &Path,
+    manifest: &crate::manifest::Manifest,
+    manifest_bytes: Option<Vec<u8>>,
+    dry_run: bool,
+    policy: ExecutionPolicy,
+    project_projections: bool,
+    merge_instructions: bool,
+    force: bool,
+    update_packages: BTreeSet<String>,
+    precise_packages: BTreeMap<String, String>,
+) -> Result<()> {
+    execute_with_updates(
+        project,
+        manifest,
+        manifest_bytes,
+        dry_run,
+        policy,
+        project_projections,
+        merge_instructions,
+        force,
+        BTreeSet::new(),
+        BTreeSet::new(),
+        update_packages,
+        precise_packages,
+        &BTreeMap::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_with_updates(
+    project: &Path,
+    manifest: &crate::manifest::Manifest,
+    manifest_bytes: Option<Vec<u8>>,
+    dry_run: bool,
+    policy: ExecutionPolicy,
+    project_projections: bool,
+    merge_instructions: bool,
+    force: bool,
+    update_skills: BTreeSet<String>,
+    update_mcp: BTreeSet<String>,
+    update_packages: BTreeSet<String>,
+    precise_packages: BTreeMap<String, String>,
+    skill_hints: &BTreeMap<String, SkillResolutionHint>,
+) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
     let deferred = !project_projections
-        && (manifest_bytes.is_some() || !update_skills.is_empty() || !update_mcp.is_empty());
+        && (manifest_bytes.is_some()
+            || !update_skills.is_empty()
+            || !update_mcp.is_empty()
+            || !update_packages.is_empty());
     policy.output.progress("project state");
     let prepared = prepare(
         project,
@@ -755,6 +540,8 @@ fn execute_with_skill_hints(
             manifest_bytes,
             update_skills: &update_skills,
             update_mcp: &update_mcp,
+            update_packages: &update_packages,
+            precise_packages: &precise_packages,
             skill_hints,
         },
     )?;
@@ -796,6 +583,8 @@ fn execute_target_change(
     let previous = Lockfile::load_optional(project)?;
     let update_skills = BTreeSet::new();
     let update_mcp = BTreeSet::new();
+    let update_packages = BTreeSet::new();
+    let precise_packages = BTreeMap::new();
     let skill_hints = BTreeMap::new();
     let mut prepared = prepare(
         project,
@@ -812,6 +601,8 @@ fn execute_target_change(
             manifest_bytes: Some(manifest_bytes),
             update_skills: &update_skills,
             update_mcp: &update_mcp,
+            update_packages: &update_packages,
+            precise_packages: &precise_packages,
             skill_hints: &skill_hints,
         },
     )?;
@@ -849,6 +640,9 @@ fn finish_execution(
         output.warning(warning);
     }
     if dry_run {
+        for preview in &prepared.previews {
+            output.preview(preview);
+        }
         for item in &prepared.plan {
             output.plan(item, true);
         }
@@ -906,31 +700,6 @@ fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
     }
 }
 
-fn add_skill_selector(requirement: &mut SkillRequirement, name: &str) {
-    if requirement.is_wildcard() {
-        requirement.exclude.retain(|excluded| excluded != name);
-    } else if !requirement.include.iter().any(|selected| selected == name) {
-        requirement.include.push(name.into());
-    }
-}
-
-fn find_skill_key(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    requested: &str,
-) -> Result<Option<String>> {
-    if manifest.skills.contains_key(requested) {
-        return Ok(Some(requested.into()));
-    }
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.skills.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
-}
-
 fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         let path = path.canonicalize().at(&path)?;
@@ -950,6 +719,33 @@ fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
     ))
 }
 
+fn package_for_archive(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        let path = path.canonicalize().at(&path)?;
+        if !path.join(crate::package::PACKAGE_MANIFEST_FILE).is_file() {
+            return Err(AruError::msg(format!(
+                "no {} in {}",
+                crate::package::PACKAGE_MANIFEST_FILE,
+                path.display()
+            )));
+        }
+        return Ok(path);
+    }
+    let current = std::env::current_dir().at(".")?;
+    for ancestor in current.ancestors() {
+        if ancestor
+            .join(crate::package::PACKAGE_MANIFEST_FILE)
+            .is_file()
+        {
+            return ancestor.canonicalize().at(ancestor);
+        }
+    }
+    Err(AruError::msg(format!(
+        "no {} found in the current directory or its ancestors",
+        crate::package::PACKAGE_MANIFEST_FILE
+    )))
+}
+
 fn project_for_init(explicit: Option<PathBuf>, positional: Option<PathBuf>) -> Result<PathBuf> {
     if explicit.is_some() && positional.is_some() {
         return Err(AruError::msg(
@@ -965,6 +761,9 @@ fn project_for_init(explicit: Option<PathBuf>, positional: Option<PathBuf>) -> R
     }
     Ok(path)
 }
+
+#[cfg(test)]
+use skill::skill_add_with_mode;
 
 #[cfg(test)]
 mod tests;

@@ -19,13 +19,14 @@ apply-to = ["**/*.rs"]
 targets = ["claude", "copilot"]
 
 [skills]
-"owner/repository" = { version = "0.5.0", include = ["writing-plans"], exclude = [], paths = { writing-plans = "skills/writing-plans" } }
+"owner/repository" = { version = "0.5.0", include = ["writing-plans"], exclude = [], paths = { writing-plans = "skills/writing-plans" }, targets = ["codex"] }
 "owner/development" = { branch = "main", include = ["reviewing-code"], exclude = [] }
 
 [mcp.docs]
 transport = "streamable-http"
 url = "https://docs.example.com/mcp"
 bearer-token-env = "DOCS_TOKEN"
+targets = ["claude"]
 
 [mcp.yfinance]
 command = "uvx"
@@ -41,9 +42,61 @@ Each `instructions.sources` entry has non-empty project-relative `files`, option
 
 Source `targets` default to the complete project target set and otherwise must be a duplicate-free subset. Discovery always excludes `.git/**` and `.aru/**`; onboarding also skips common build/vendor roots and writes the exact files it found. Unsafe/absolute patterns, parent traversal, duplicate matches, symlinks, non-regular files, non-UTF-8 paths/content, files larger than 1 MiB, generated output paths, and reserved aru marker text fail before writes.
 
-Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
+Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target.
 
-`package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes targets and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
+An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
+
+`package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes project targets, dependency targets, and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
+
+## Native aru packages
+
+A project declares reusable Git packages in `aru.toml`:
+
+```toml
+[packages]
+"owner/agent-kit" = { version = "^1.2", targets = ["codex", "claude"] }
+
+[package-trust."owner/agent-kit"]
+mcp = ["docs"]
+```
+
+Package requirements support one of `version`, `branch`, or `rev`, plus an optional non-empty target subset. Omitted targets inherit the complete parent target set. Root package targets must be a subset of `project.targets`; transitive targets must be a subset of their parent's effective targets. Reaching the same canonical source through multiple parents unions compatible target sets, but conflicting requirement descriptors fail instead of invoking an implicit solver.
+
+A package is a Git repository with this root file:
+
+```toml
+# aru-package.toml
+[package]
+name = "agent-kit"
+version = "1.2.0"
+
+[[instructions.sources]]
+files = ["AGENTS.md"]
+scope = "source-directory"
+
+[skills]
+review = "skills/review"
+
+[mcp.docs]
+url = "https://docs.example.com/mcp"
+
+[dependencies]
+"owner/shared-agent-rules" = { version = "^1.0" }
+```
+
+`package.name` uses aru's lowercase portable name grammar and `package.version` is exact SemVer. A SemVer Git tag must agree with the package version. Unknown top-level or nested fields fail. The file has no scripts, hooks, commands to execute, secret values, target discovery, or compatibility dispatch.
+
+Instruction declarations use the ordinary instruction source schema relative to the package checkout. Their stable lock identity is namespaced by package source while directory scope remains project-relative. Package instructions for native AGENTS targets are managed blocks at the corresponding project `AGENTS.md`; a caller must use `--merge` to preserve an existing unmanaged document. Package skill exports map a globally unique skill name to one portable package-relative directory. Package MCP names are also project-global.
+
+Every package-provided MCP server is denied unless the root project has a `package-trust` entry for the package's canonical source identity or an equivalent declared source that explicitly lists the MCP name. Trust entries contain names only, are credential-free, and do not bypass transport or target capability validation.
+
+Root package sources may be local or remote Git repositories. Transitive local/file dependencies are rejected because their meaning would depend on a parent checkout location. Resolution is bounded to depth 16, 128 package nodes, 512 edges, 100,000 package-tree entries, and 256 MiB of regular-file content. Each package tree is additionally bounded to depth 32 and 20,000 entries. Symlinks, special files, non-portable paths, case-folding collisions, unsafe hidden Unicode, cycles, ambiguous canonical identities, and duplicate exports fail before project writes.
+
+`aru.lock` records exact package source, requirement descriptor, selected version/revision, package metadata, effective targets, dependency edges, and exported instruction/skill/MCP identities. Compatible locked nodes remain pinned unless selected by `aru update`; locked offline sync verifies cached package manifests and exports before projection.
+
+`aru package` builds `<name>-<version>.aru-package.tar.gz` under `target/aru-package/` unless `--output` is explicit. It requires a Git repository root and clean status unless `--allow-dirty` is explicit. Inventory comes from tracked and non-ignored files; ignored files, `.aru/`, and `target/aru-package/` are excluded. The command snapshots and validates the exact inventory through the ordinary package parser and bounded dependency resolver before writing.
+
+Archive entries are sorted portable paths with raw file bytes, uid/gid and names cleared, mtime zero, and mode normalized from the Git index to `0644` or `0755`. Directories are implicit. Gzip has timestamp zero and no filename. Symlinks, special files, path traversal, hidden controls, case-folding collisions, oversized files/trees, unsafe dependencies, and dirty input without acknowledgement fail before archive creation. `--list` performs the same validation and writes no archive. The byte-stable contract fixture is `tests/fixtures/contracts/agent-kit-1.2.0.aru-package.tar.gz`.
 
 ## Instruction projections
 
@@ -69,13 +122,15 @@ Generated path-specific files are wholly aru-owned. Removing a source or target 
 
 ## `aru.lock`
 
-`version = 1`. Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, and source SHA-256. `aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
+`version = 3`. Version 3 adds the native aru package graph and managed package-instruction identity; version 2 introduced explicit effective targets on skill packages. Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, source SHA-256, and whether aru must project package-owned native content. `aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
 
-Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each configured target with an implemented MCP adapter. Direct stdio entries lock their exact command and ordered argv with `version = "direct"`; they contain no resolved package metadata.
+Each `aru-package` locks its canonical source, requirement descriptor, selected Git version and full revision, declared name/version, manifest and complete package-tree digests, effective targets, dependency source identities, and exported instruction/skill/MCP records. Cycles, missing nodes, incomplete flattened exports, duplicate package names, and graph limit overflow invalidate the lock.
+
+Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, sorted effective targets, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each effective dependency target. Direct stdio entries lock their exact command and ordered argv with `version = "direct"`; they contain no resolved package metadata.
 
 `projection-input-hash` covers complete lock identity, sorted project targets, and adapter capability schema. `projection-baseline` contains only currently desired semantic instruction, skill, and MCP entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
 
-Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when Codex is also selected and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Codex MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name user-level entry. Instruction-only targets are filtered out before skill/MCP resolution. A declared skill or MCP requirement with no capable configured target fails explicitly.
+Codex skills project to `.agents/skills`. Claude skills project to `.claude/skills`: when the same skill package effectively selects Codex and project symlinks are supported, Claude entries link to `.agents`; otherwise they are copies. Codex MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name user-level entry. Instruction-only targets are filtered out before skill/MCP resolution. A declared skill or MCP requirement with no capable effective target fails explicitly.
 
 The canonical skill digest byte stream is:
 
@@ -87,6 +142,42 @@ Directories add no direct digest record. Symlinks and special files are rejected
 ## `.aru/state.toml`
 
 `version = 1`. Each `entry` has project-relative destination, kind/key, actual deployment mode (`copy`, `symlink`, `merge`, or `file`), last-applied semantic digest, and complete owning lock identity. Instruction `merge` entries track one source block; instruction `file` entries track a whole generated path. State proves local ownership but never replaces the committed baseline.
+
+## CycloneDX 1.5 inventory
+
+`aru export --format cyclonedx1.5` serializes the existing validated lock to JSON. It does not read `aru.toml`, resolve or fetch sources, rehash source trees, or claim that the lock is current for uncommitted manifest edits.
+
+The document has `bomFormat = "CycloneDX"`, `specVersion = "1.5"`, BOM `version = 1`, an `aru:root` application component, sorted components, and a root dependency relationship to every component. Native aru packages and skill packages are `library` components, instruction sources are `data` components, and MCP servers are `application` components. Package dependency edges preserve parent relationships. Stable `aru:*` properties carry only lock evidence such as kind, exact revision, requirement descriptor, exports, transports, and effective targets.
+
+The metadata property `aru:document-purpose = "inventory"` distinguishes the output from an attestation. Unknown license, vulnerability, provenance, and registry facts are omitted rather than inferred. External URL credentials are removed. An invalid URL, malformed lock, or missing lock fails the complete export.
+
+Timestamp is omitted by default. `--timestamp` accepts exactly an RFC 3339 UTC value such as `2026-07-31T00:00:00Z`; identical lock and timestamp inputs are byte-stable. `--output-file` is the only export option that writes a file.
+
+The byte-stable contract fixture is `tests/fixtures/contracts/cyclonedx-1.5.json`. SPDX is not part of this initial export contract.
+
+## Package graph and metadata JSON
+
+`aru tree --format json` emits graph `version = 1` with sorted `roots`, package `nodes`, and `{from,to}` dependency `edges`. `--depth` and `--target` filter both nodes and edges. Package source credentials are removed; malformed source URLs fail the complete output.
+
+`aru metadata --format-version 1` emits `format_version = 1`, the portable project root, declared targets, lock version, sorted package roots/nodes/edges, flattened instruction/skill/MCP inventory, and committed projection ownership identities. It validates and reads `aru.toml` and `aru.lock`: no source resolution, fetch, rehash, ownership operation, recovery, or target write occurs. URL credentials are removed and no secret values are present. `--no-deps` retains package graph roots and direct resources while omitting transitive nodes and edges. Unsupported or omitted format versions fail.
+
+The normalized byte-stable fixture is `tests/fixtures/contracts/metadata-v1.json`, with its environment-specific `project_root` replaced by `<PROJECT>`.
+
+## Audit report JSON
+
+`aru audit --format json` emits schema `version = 1` as a JSON number and a top-level `status` of `passed` or `failed`. `findings` are sorted by severity, code, path, line, column, and message. Each finding contains:
+
+- a stable dotted `code`;
+- `severity` (`error`, `warning`, or `info`);
+- a human-readable `message`;
+- optional portable `path`, one-based `line`, and one-based `column`; and
+- optional remediation `help`.
+
+Errors are blocking and make the command exit non-zero. Warnings and informational findings do not. JSON is written only to stdout or an explicit `--output` path; status remains on stderr. Audit performs no network access, creates no operation lock, does not recover pending transactions, and never changes manifest, lock, cache, ownership state, or target paths.
+
+Content audit treats ordinary Unicode, multilingual text, and emoji as valid. It reports bidi embedding/override/isolate controls, direction marks, zero-width format controls, invisible mathematical operators, and U+FEFF. Scanning is bounded to 100,000 deployed skill files, 64 MiB total, and 4 MiB per candidate text file. Instruction discovery retains its stricter source limits.
+
+Skill and MCP `update --dry-run` output includes a sorted `Resolved` record for every selected dependency. The record shows the current and candidate version/revision or explicitly marks the candidate unchanged. These records are human status, not a persisted format.
 
 ## `.aru/transaction.toml`
 

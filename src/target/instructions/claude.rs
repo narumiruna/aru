@@ -15,12 +15,21 @@ pub fn render(instruction: &DiscoveredInstruction) -> Result<InstructionProjecti
             } else {
                 PathBuf::from(directory).join("CLAUDE.md")
             };
+            let has_native_projection = instruction.unit.targets.iter().any(|target| {
+                crate::target::capabilities(*target).instructions
+                    == crate::target::InstructionCapability::NativeAgents
+            });
+            let content = if instruction.unit.managed && !has_native_projection {
+                normalized_markdown(&instruction.content)
+            } else {
+                "@AGENTS.md\n".into()
+            };
             Ok(InstructionProjection {
                 target: Target::Claude,
                 source,
                 destination,
                 mode: ProjectionMode::SharedBlock,
-                content: "@AGENTS.md\n".into(),
+                content,
             })
         }
         InstructionScope::ApplyTo { globs } => {
@@ -69,6 +78,7 @@ mod tests {
                 },
                 targets: BTreeSet::from([Target::Claude]),
                 source_sha256: sha256_bytes(b"ignored"),
+                managed: false,
             },
             content: "ignored".into(),
         };
@@ -76,6 +86,25 @@ mod tests {
         assert_eq!(projection.destination, PathBuf::from("src/api/CLAUDE.md"));
         assert_eq!(projection.mode, ProjectionMode::SharedBlock);
         assert_eq!(projection.content, "@AGENTS.md\n");
+    }
+
+    #[test]
+    fn claude_only_managed_package_instruction_embeds_content() {
+        let instruction = DiscoveredInstruction {
+            unit: InstructionUnit {
+                source: PathBuf::from("packages/hash/AGENTS.md"),
+                scope: InstructionScope::SourceDirectory {
+                    directory: ".".into(),
+                },
+                targets: BTreeSet::from([Target::Claude]),
+                source_sha256: sha256_bytes(b"package"),
+                managed: true,
+            },
+            content: "package rules\n".into(),
+        };
+        let projection = render(&instruction).unwrap();
+        assert_eq!(projection.destination, PathBuf::from("CLAUDE.md"));
+        assert_eq!(projection.content, "package rules\n");
     }
 
     #[test]
@@ -88,6 +117,7 @@ mod tests {
                 },
                 targets: BTreeSet::from([Target::Claude]),
                 source_sha256: sha256_bytes(b"rust"),
+                managed: false,
             },
             content: "# Rust\r\n\r\nAvoid unwrap.\r\n".into(),
         };

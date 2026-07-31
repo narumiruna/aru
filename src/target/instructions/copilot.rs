@@ -73,6 +73,7 @@ mod tests {
                 },
                 targets: BTreeSet::from([Target::Copilot]),
                 source_sha256: sha256_bytes(b"api\n"),
+                managed: false,
             },
             content: "api\n".into(),
         };
@@ -94,6 +95,7 @@ mod tests {
                 },
                 targets: BTreeSet::from([Target::Copilot]),
                 source_sha256: sha256_bytes(b"root"),
+                managed: false,
             },
             content: "# Project\r\n\r\nUse the workspace commands.\r\n".into(),
         };
@@ -110,6 +112,7 @@ mod tests {
                 },
                 targets: BTreeSet::from([Target::Copilot]),
                 source_sha256: sha256_bytes(b"api"),
+                managed: false,
             },
             content: "# API\n\nKeep handlers small.\n".into(),
         };

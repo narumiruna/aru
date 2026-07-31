@@ -287,7 +287,19 @@ fn target_skill_projection_matches_the_exact_set_across_layout_transitions() {
     let final_lock = aru::lockfile::Lockfile::load_optional(&project)
         .unwrap()
         .unwrap();
-    assert_eq!(initial_lock.skill_packages, final_lock.skill_packages);
+    let initial = &initial_lock.skill_packages[0];
+    let final_package = &final_lock.skill_packages[0];
+    assert_eq!(initial.source, final_package.source);
+    assert_eq!(initial.requirement, final_package.requirement);
+    assert_eq!(initial.version, final_package.version);
+    assert_eq!(initial.revision, final_package.revision);
+    assert_eq!(initial.skills, final_package.skills);
+    assert_eq!(
+        initial_lock.package_input_hash,
+        final_lock.package_input_hash
+    );
+    assert_eq!(initial.targets, [aru::manifest::Target::Claude]);
+    assert_eq!(final_package.targets, [aru::manifest::Target::Codex]);
 }
 
 #[test]
