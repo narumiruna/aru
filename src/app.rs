@@ -7,7 +7,7 @@ mod package_archive;
 mod package_dependency;
 mod skill;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
@@ -20,8 +20,9 @@ use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, Target};
 use crate::output::Output;
-use crate::resolver::SkillResolutionHint;
-use crate::sync::{SyncOptions, SyncResult, garbage_collect, prepare};
+use crate::sync::{
+    CollisionPolicy, ReconcileRequest, SyncResult, garbage_collect, prepare_request,
+};
 use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
 
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +38,25 @@ impl Default for ExecutionPolicy {
             locked: false,
             offline: false,
             output: Output::new(false, 0, crate::cli::ColorChoice::Never, true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ProjectionPolicy {
+    LockOnly,
+    Project(CollisionPolicy),
+}
+
+impl ExecutionPolicy {
+    fn request(self, dry_run: bool, projection: ProjectionPolicy) -> ReconcileRequest {
+        match projection {
+            ProjectionPolicy::LockOnly => {
+                ReconcileRequest::lock_update(self.locked, self.offline, dry_run)
+            }
+            ProjectionPolicy::Project(collision) => {
+                ReconcileRequest::project_update(self.locked, self.offline, dry_run, collision)
+            }
         }
     }
 }
@@ -199,14 +219,8 @@ fn lock(project: &Path, args: LockArgs, policy: ExecutionPolicy) -> Result<()> {
     execute(
         project,
         &manifest,
-        None,
-        dry_run,
-        policy,
-        false,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeSet::new(),
+        policy.request(dry_run, ProjectionPolicy::LockOnly),
+        policy.output,
     )
 }
 
@@ -221,14 +235,11 @@ fn sync(project: &Path, args: SyncArgs, policy: ExecutionPolicy) -> Result<()> {
     execute(
         project,
         &manifest,
-        None,
-        dry_run,
-        policy,
-        true,
-        args.merge,
-        args.force,
-        BTreeSet::new(),
-        BTreeSet::new(),
+        policy.request(
+            dry_run,
+            ProjectionPolicy::Project(CollisionPolicy::from_flags(args.merge, args.force)?),
+        ),
+        policy.output,
     )
 }
 
@@ -239,31 +250,12 @@ fn check_execution(
     output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
-    let update_skills = BTreeSet::new();
-    let update_mcp = BTreeSet::new();
-    let update_packages = BTreeSet::new();
-    let precise_packages = BTreeMap::new();
-    let skill_hints = BTreeMap::new();
-    let prepared = prepare(
-        project,
-        manifest,
-        SyncOptions {
-            previous: previous.as_ref(),
-            locked: true,
-            offline: true,
-            materialize_skills: false,
-            dry_run: true,
-            project_projections,
-            force: false,
-            merge_instructions: false,
-            manifest_bytes: None,
-            update_skills: &update_skills,
-            update_mcp: &update_mcp,
-            update_packages: &update_packages,
-            precise_packages: &precise_packages,
-            skill_hints: &skill_hints,
-        },
-    )?;
+    let request = if project_projections {
+        ReconcileRequest::check_project()
+    } else {
+        ReconcileRequest::check_lock()
+    };
+    let prepared = prepare_request(project, manifest, previous.as_ref(), request)?;
     if !prepared.operations.is_empty() || (project_projections && !prepared.warnings.is_empty()) {
         let message = if project_projections {
             "project is not synchronized; run `aru sync`"
@@ -394,17 +386,21 @@ fn apply_target_change(
         )
         .collect::<Vec<_>>();
     target_plan.sort();
+    let projection = if no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(CollisionPolicy::from_flags(merge_instructions, force)?)
+    };
+    let request = policy
+        .request(dry_run, projection)
+        .with_manifest_bytes(document.bytes());
     execute_target_change(
         project,
         &manifest,
-        document.bytes(),
-        dry_run,
-        !no_sync,
-        merge_instructions,
-        force,
+        request,
         target_plan,
         &targets,
-        policy,
+        policy.output,
     )
 }
 
@@ -413,138 +409,18 @@ fn normalize_targets(targets: &mut Vec<Target>) {
     targets.dedup();
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute(
     project: &Path,
     manifest: &crate::manifest::Manifest,
-    manifest_bytes: Option<Vec<u8>>,
-    dry_run: bool,
-    policy: ExecutionPolicy,
-    project_projections: bool,
-    merge_instructions: bool,
-    force: bool,
-    update_skills: BTreeSet<String>,
-    update_mcp: BTreeSet<String>,
-) -> Result<()> {
-    execute_with_skill_hints(
-        project,
-        manifest,
-        manifest_bytes,
-        dry_run,
-        policy,
-        project_projections,
-        merge_instructions,
-        force,
-        update_skills,
-        update_mcp,
-        &BTreeMap::new(),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_with_skill_hints(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    manifest_bytes: Option<Vec<u8>>,
-    dry_run: bool,
-    policy: ExecutionPolicy,
-    project_projections: bool,
-    merge_instructions: bool,
-    force: bool,
-    update_skills: BTreeSet<String>,
-    update_mcp: BTreeSet<String>,
-    skill_hints: &BTreeMap<String, SkillResolutionHint>,
-) -> Result<()> {
-    execute_with_updates(
-        project,
-        manifest,
-        manifest_bytes,
-        dry_run,
-        policy,
-        project_projections,
-        merge_instructions,
-        force,
-        update_skills,
-        update_mcp,
-        BTreeSet::new(),
-        BTreeMap::new(),
-        skill_hints,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_package_updates(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    manifest_bytes: Option<Vec<u8>>,
-    dry_run: bool,
-    policy: ExecutionPolicy,
-    project_projections: bool,
-    merge_instructions: bool,
-    force: bool,
-    update_packages: BTreeSet<String>,
-    precise_packages: BTreeMap<String, String>,
-) -> Result<()> {
-    execute_with_updates(
-        project,
-        manifest,
-        manifest_bytes,
-        dry_run,
-        policy,
-        project_projections,
-        merge_instructions,
-        force,
-        BTreeSet::new(),
-        BTreeSet::new(),
-        update_packages,
-        precise_packages,
-        &BTreeMap::new(),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn execute_with_updates(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    manifest_bytes: Option<Vec<u8>>,
-    dry_run: bool,
-    policy: ExecutionPolicy,
-    project_projections: bool,
-    merge_instructions: bool,
-    force: bool,
-    update_skills: BTreeSet<String>,
-    update_mcp: BTreeSet<String>,
-    update_packages: BTreeSet<String>,
-    precise_packages: BTreeMap<String, String>,
-    skill_hints: &BTreeMap<String, SkillResolutionHint>,
+    request: ReconcileRequest,
+    output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
-    let deferred = !project_projections
-        && (manifest_bytes.is_some()
-            || !update_skills.is_empty()
-            || !update_mcp.is_empty()
-            || !update_packages.is_empty());
-    policy.output.progress("project state");
-    let prepared = prepare(
-        project,
-        manifest,
-        SyncOptions {
-            previous: previous.as_ref(),
-            locked: policy.locked,
-            offline: policy.offline,
-            materialize_skills: true,
-            dry_run,
-            project_projections,
-            force,
-            merge_instructions,
-            manifest_bytes,
-            update_skills: &update_skills,
-            update_mcp: &update_mcp,
-            update_packages: &update_packages,
-            precise_packages: &precise_packages,
-            skill_hints,
-        },
-    )?;
+    let dry_run = request.dry_run();
+    let project_projections = request.projects();
+    let deferred = !project_projections && request.changes_intent();
+    output.progress("project state");
+    let prepared = prepare_request(project, manifest, previous.as_ref(), request)?;
     let changed_completion = if deferred {
         "Target paths were not changed; run `aru sync` to apply."
     } else if project_projections {
@@ -563,49 +439,22 @@ fn execute_with_updates(
         dry_run,
         changed_completion,
         unchanged_completion,
-        policy.output,
+        output,
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn execute_target_change(
     project: &Path,
     manifest: &crate::manifest::Manifest,
-    manifest_bytes: Vec<u8>,
-    dry_run: bool,
-    project_projections: bool,
-    merge_instructions: bool,
-    force: bool,
+    request: ReconcileRequest,
     target_plan: Vec<String>,
     targets: &[Target],
-    policy: ExecutionPolicy,
+    output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
-    let update_skills = BTreeSet::new();
-    let update_mcp = BTreeSet::new();
-    let update_packages = BTreeSet::new();
-    let precise_packages = BTreeMap::new();
-    let skill_hints = BTreeMap::new();
-    let mut prepared = prepare(
-        project,
-        manifest,
-        SyncOptions {
-            previous: previous.as_ref(),
-            locked: policy.locked,
-            offline: policy.offline,
-            materialize_skills: true,
-            dry_run,
-            project_projections,
-            force,
-            merge_instructions,
-            manifest_bytes: Some(manifest_bytes),
-            update_skills: &update_skills,
-            update_mcp: &update_mcp,
-            update_packages: &update_packages,
-            precise_packages: &precise_packages,
-            skill_hints: &skill_hints,
-        },
-    )?;
+    let dry_run = request.dry_run();
+    let project_projections = request.projects();
+    let mut prepared = prepare_request(project, manifest, previous.as_ref(), request)?;
     prepared.plan.extend(target_plan);
     prepared.plan.sort();
     let configured = targets
@@ -624,7 +473,7 @@ fn execute_target_change(
         dry_run,
         &completion,
         "Project is synchronized.",
-        policy.output,
+        output,
     )
 }
 

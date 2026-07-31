@@ -5,8 +5,9 @@ use crate::cli::{McpAddArgs, McpRemoveArgs, McpUpdateArgs};
 use crate::error::{AruError, Result};
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, McpRequirement, validate_name};
+use crate::sync::{CollisionPolicy, UpdateSelection};
 
-use super::ExecutionPolicy;
+use super::{ExecutionPolicy, ProjectionPolicy};
 
 pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = super::begin(project, args.dry_run)?;
@@ -54,18 +55,19 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
     requirement.validate(&args.name)?;
     document.set_mcp(&args.name, &requirement);
     let manifest = document.manifest()?;
-    super::execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
+    let projection = if args.no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(if args.force {
+            CollisionPolicy::Force
+        } else {
+            CollisionPolicy::Reject
+        })
+    };
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes());
+    super::execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn remove(project: &Path, args: McpRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
@@ -80,18 +82,15 @@ pub(super) fn remove(project: &Path, args: McpRemoveArgs, policy: ExecutionPolic
     }
     document.remove_mcp(&args.name);
     let manifest = document.manifest()?;
-    super::execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
+    let projection = if args.no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(CollisionPolicy::Reject)
+    };
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes());
+    super::execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn list(project: &Path) -> Result<()> {
@@ -142,16 +141,17 @@ pub(super) fn update(project: &Path, args: McpUpdateArgs, policy: ExecutionPolic
         }
         args.names.into_iter().collect()
     };
-    super::execute(
-        project,
-        &manifest,
-        None,
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        BTreeSet::new(),
-        updates,
-    )
+    let projection = if args.no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(if args.force {
+            CollisionPolicy::Force
+        } else {
+            CollisionPolicy::Reject
+        })
+    };
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_updates(UpdateSelection::default().mcp(updates));
+    super::execute(project, &manifest, request, policy.output)
 }

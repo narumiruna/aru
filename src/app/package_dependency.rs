@@ -5,8 +5,9 @@ use crate::cli::{PackageAddArgs, PackageRemoveArgs, PackageUpdateArgs};
 use crate::error::{AruError, Result};
 use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, ManifestDocument, validate_name};
+use crate::sync::{CollisionPolicy, UpdateSelection};
 
-use super::{ExecutionPolicy, begin, execute_package_updates};
+use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
 pub(super) fn add(project: &Path, args: PackageAddArgs, policy: ExecutionPolicy) -> Result<()> {
     let _guard = begin(project, args.dry_run)?;
@@ -58,18 +59,14 @@ pub(super) fn add(project: &Path, args: PackageAddArgs, policy: ExecutionPolicy)
     } else {
         BTreeSet::new()
     };
-    execute_package_updates(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        args.merge,
-        args.force,
-        updates,
-        BTreeMap::new(),
-    )
+    let request = policy
+        .request(
+            args.dry_run,
+            package_projection(args.no_sync, args.merge, args.force)?,
+        )
+        .with_manifest_bytes(document.bytes())
+        .with_updates(UpdateSelection::default().packages(updates, BTreeMap::new()));
+    execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn remove(
@@ -91,18 +88,13 @@ pub(super) fn remove(
         document.remove_package_trust(&trust_key);
     }
     let manifest = document.manifest()?;
-    execute_package_updates(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeMap::new(),
-    )
+    let request = policy
+        .request(
+            args.dry_run,
+            package_projection(args.no_sync, false, false)?,
+        )
+        .with_manifest_bytes(document.bytes());
+    execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn update(
@@ -161,18 +153,23 @@ pub(super) fn update(
     } else {
         BTreeMap::new()
     };
-    execute_package_updates(
-        project,
-        &manifest,
-        None,
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        args.merge,
-        args.force,
-        updates,
-        precise,
-    )
+    let request = policy
+        .request(
+            args.dry_run,
+            package_projection(args.no_sync, args.merge, args.force)?,
+        )
+        .with_updates(UpdateSelection::default().packages(updates, precise));
+    execute(project, &manifest, request, policy.output)
+}
+
+fn package_projection(no_sync: bool, merge: bool, force: bool) -> Result<ProjectionPolicy> {
+    if no_sync {
+        Ok(ProjectionPolicy::LockOnly)
+    } else {
+        Ok(ProjectionPolicy::Project(CollisionPolicy::from_flags(
+            merge, force,
+        )?))
+    }
 }
 
 fn find_package_key(

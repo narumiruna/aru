@@ -10,8 +10,9 @@ use crate::interactive::{
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
 use crate::resolver::{canonical_update_skill_targets, inspect_skill_source};
+use crate::sync::{CollisionPolicy, UpdateSelection};
 
-use super::{ExecutionPolicy, begin, execute, execute_with_skill_hints};
+use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
 pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
@@ -124,19 +125,16 @@ fn skill_add_with_policy(
     let manifest = document.manifest()?;
     let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
     let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    execute_with_skill_hints(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-        &hints,
-    )
+    let projection = skill_projection(args.no_sync, args.force);
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes())
+        .with_updates(
+            UpdateSelection::default()
+                .skills(updates)
+                .skill_hints(hints),
+        );
+    execute(project, &manifest, request, policy.output)
 }
 
 fn skill_add_explicit(
@@ -179,18 +177,12 @@ fn skill_add_explicit(
     document.set_skill(&key, &requirement);
     let manifest = document.manifest()?;
     let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-    )
+    let projection = skill_projection(args.no_sync, args.force);
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes())
+        .with_updates(UpdateSelection::default().skills(updates));
+    execute(project, &manifest, request, policy.output)
 }
 
 fn skill_add_update_targets(
@@ -285,18 +277,10 @@ pub(super) fn remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPol
         }
     }
     let manifest = document.manifest()?;
-    execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
+    let request = policy
+        .request(args.dry_run, skill_projection(args.no_sync, false))
+        .with_manifest_bytes(document.bytes());
+    execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn list(project: &Path) -> Result<()> {
@@ -325,18 +309,22 @@ pub(super) fn update(project: &Path, args: SkillUpdateArgs, policy: ExecutionPol
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let updates = canonical_update_skill_targets(project, &manifest, &args.sources)?;
-    execute(
-        project,
-        &manifest,
-        None,
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        args.force,
-        updates,
-        BTreeSet::new(),
-    )
+    let request = policy
+        .request(args.dry_run, skill_projection(args.no_sync, args.force))
+        .with_updates(UpdateSelection::default().skills(updates));
+    execute(project, &manifest, request, policy.output)
+}
+
+fn skill_projection(no_sync: bool, force: bool) -> ProjectionPolicy {
+    if no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(if force {
+            CollisionPolicy::Force
+        } else {
+            CollisionPolicy::Reject
+        })
+    }
 }
 
 fn add_skill_selector(requirement: &mut SkillRequirement, name: &str) {
