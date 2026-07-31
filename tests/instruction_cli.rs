@@ -84,6 +84,38 @@ fn instruction_help_exposes_onboarding_and_merge_contract() {
 }
 
 #[test]
+fn instruction_init_accepts_manifest_without_optional_tables() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path();
+    let manifest = "# keep\n[project]\ntargets = [\"codex\"]\n";
+    let instructions = "# Root instructions\n";
+    std::fs::write(project.join("aru.toml"), manifest).unwrap();
+    std::fs::write(project.join("AGENTS.md"), instructions).unwrap();
+
+    aru(project)
+        .args(["instruction", "init", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "dry-run: lock instruction AGENTS.md",
+        ));
+
+    assert_eq!(
+        std::fs::read_to_string(project.join("aru.toml")).unwrap(),
+        manifest
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.join("AGENTS.md")).unwrap(),
+        instructions
+    );
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru").exists());
+    assert!(!project.join("CLAUDE.md").exists());
+    assert!(!project.join(".codex").exists());
+    assert!(!project.join(".mcp.json").exists());
+}
+
+#[test]
 fn instruction_init_discovers_existing_agents_and_projects_all_targets() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path();
