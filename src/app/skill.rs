@@ -9,7 +9,9 @@ use crate::interactive::{
 };
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
-use crate::resolver::{canonical_update_skill_targets, inspect_skill_source};
+use crate::resolver::{
+    canonical_update_skill_targets, declared_skill_source_key, inspect_skill_source,
+};
 use crate::sync::{CollisionPolicy, UpdateSelection};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
@@ -46,7 +48,8 @@ fn skill_add_with_policy(
         let snapshot = ProjectSnapshot::read(project)?;
         let document = ManifestDocument::load(project)?;
         let manifest = document.manifest()?;
-        let key = find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
+        let key = declared_skill_source_key(project, &manifest, &args.source)?
+            .unwrap_or(args.source.clone());
         let existing = manifest.skills.get(&key).cloned();
         let requirement = skill_add_base_requirement(existing.as_ref(), &args);
         requirement.validate(&key)?;
@@ -98,7 +101,7 @@ fn skill_add_with_policy(
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let current_key =
-        find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
+        declared_skill_source_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
     if current_key != key {
         return Err(AruError::msg(
             "skill source identity changed during interactive skill selection; retry the command",
@@ -146,7 +149,8 @@ fn skill_add_explicit(
     let _guard = begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
-    let key = find_skill_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
+    let key =
+        declared_skill_source_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
     let existing = manifest.skills.get(&key);
     let mut requirement = skill_add_base_requirement(existing, args);
     if existing.is_none() && mode == SkillAddSelectionMode::Explicit {
@@ -248,7 +252,7 @@ pub(super) fn remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPol
     let _guard = begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
-    let key = find_skill_key(project, &manifest, &args.source)?
+    let key = declared_skill_source_key(project, &manifest, &args.source)?
         .ok_or_else(|| AruError::msg(format!("skill source {:?} is not declared", args.source)))?;
     if args.skills.is_empty() {
         document.remove_skill(&key);
@@ -333,21 +337,4 @@ fn add_skill_selector(requirement: &mut SkillRequirement, name: &str) {
     } else if !requirement.include.iter().any(|selected| selected == name) {
         requirement.include.push(name.into());
     }
-}
-
-fn find_skill_key(
-    project: &Path,
-    manifest: &crate::manifest::Manifest,
-    requested: &str,
-) -> Result<Option<String>> {
-    if manifest.skills.contains_key(requested) {
-        return Ok(Some(requested.into()));
-    }
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.skills.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
 }
