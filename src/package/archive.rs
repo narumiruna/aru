@@ -7,6 +7,7 @@ use flate2::{Compression, GzBuilder};
 use tar::{Builder, EntryType, Header};
 
 use crate::error::{AruError, IoContext, Result};
+use crate::manifest::MANIFEST_FILE;
 
 use super::{
     MAX_GRAPH_BYTES, MAX_PACKAGE_DEPTH, MAX_PACKAGE_ENTRIES, PackageManifest, portable_path,
@@ -165,13 +166,9 @@ pub fn collect(root: &Path, output: Option<&Path>, allow_dirty: bool) -> Result<
         });
     }
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    if !entries
-        .iter()
-        .any(|entry| entry.path == super::PACKAGE_MANIFEST_FILE)
-    {
+    if !entries.iter().any(|entry| entry.path == MANIFEST_FILE) {
         return Err(AruError::msg(format!(
-            "{} is not included by the Git package inventory",
-            super::PACKAGE_MANIFEST_FILE
+            "{MANIFEST_FILE} is not included by the Git package inventory"
         )));
     }
     Ok(ArchiveInput {

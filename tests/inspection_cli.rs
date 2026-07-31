@@ -231,7 +231,7 @@ fn info_reports_locked_and_uninstalled_package_metadata() {
     git(&repository, &["config", "user.name", "info tests"]);
     git(&repository, &["config", "commit.gpgsign", "false"]);
     std::fs::write(
-        repository.join("aru-package.toml"),
+        repository.join("aru.toml"),
         "[package]\nname='uninstalled'\nversion='1.2.0'\n[skills]\nreview='skills/review'\n",
     )
     .unwrap();

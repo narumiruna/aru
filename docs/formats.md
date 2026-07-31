@@ -62,10 +62,10 @@ mcp = ["docs"]
 
 Package requirements support one of `version`, `branch`, or `rev`, plus an optional non-empty target subset. Omitted targets inherit the complete parent target set. Root package targets must be a subset of `project.targets`; transitive targets must be a subset of their parent's effective targets. Reaching the same canonical source through multiple parents unions compatible target sets, but conflicting requirement descriptors fail instead of invoking an implicit solver.
 
-A package is a Git repository with this root file:
+A package is a Git repository with a package-mode root `aru.toml`:
 
 ```toml
-# aru-package.toml
+# aru.toml
 [package]
 name = "agent-kit"
 version = "1.2.0"
@@ -84,7 +84,7 @@ url = "https://docs.example.com/mcp"
 "owner/shared-agent-rules" = { version = "^1.0" }
 ```
 
-`package.name` uses aru's lowercase portable name grammar and `package.version` is exact SemVer. A SemVer Git tag must agree with the package version. Unknown top-level or nested fields fail. The file has no scripts, hooks, commands to execute, secret values, target discovery, or compatibility dispatch.
+The project (`[project]`) and package (`[package]`) schemas are distinct `aru.toml` modes; one file does not serve both roles simultaneously, and the legacy `aru-package.toml` filename is not recognized. `package.name` uses aru's lowercase portable name grammar and `package.version` is exact SemVer. A SemVer Git tag must agree with the package version. Unknown top-level or nested fields fail. The file has no scripts, hooks, commands to execute, secret values, target discovery, or compatibility dispatch.
 
 Instruction declarations use the ordinary instruction source schema relative to the package checkout. Their stable lock identity is namespaced by package source while directory scope remains project-relative. Package instructions for native AGENTS targets are managed blocks at the corresponding project `AGENTS.md`; a caller must use `--merge` to preserve an existing unmanaged document. Package skill exports map a globally unique skill name to one portable package-relative directory. Package MCP names are also project-global.
 

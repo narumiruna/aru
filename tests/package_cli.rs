@@ -84,7 +84,7 @@ fn write_package(
             ));
         }
     }
-    std::fs::write(repository.join("aru-package.toml"), manifest).unwrap();
+    std::fs::write(repository.join("aru.toml"), manifest).unwrap();
 }
 
 fn init_project(project: &Path, targets: &[&str]) {
@@ -440,14 +440,22 @@ fn package_branch_and_revision_requirements_reuse_exact_locked_commits() {
 }
 
 #[test]
-fn package_instruction_collision_and_raw_skill_repository_fail_before_project_writes() {
+fn invalid_package_sources_fail_before_project_writes() {
     let temporary = tempfile::tempdir().unwrap();
     let package = temporary.path().join("package");
+    let legacy_package = temporary.path().join("legacy-package");
     let raw_skill = temporary.path().join("raw-skill");
     let project = temporary.path().join("project");
     init_git(&package);
     write_package(&package, "rules", "1.0.0", true, None, None, &[]);
     commit_version(&package, "1.0.0");
+    init_git(&legacy_package);
+    std::fs::write(
+        legacy_package.join("aru-package.toml"),
+        "[package]\nname = \"legacy\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    commit_version(&legacy_package, "1.0.0");
     init_git(&raw_skill);
     std::fs::create_dir_all(raw_skill.join("skills/demo")).unwrap();
     std::fs::write(
@@ -477,6 +485,14 @@ fn package_instruction_collision_and_raw_skill_repository_fail_before_project_wr
         .assert()
         .failure()
         .stderr(predicate::str::contains("aru skill add"));
+    assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+    assert!(!project.join("aru.lock").exists());
+
+    aru(&project)
+        .args(["add", legacy_package.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no aru.toml"));
     assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
     assert!(!project.join("aru.lock").exists());
 }

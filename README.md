@@ -11,7 +11,7 @@ Declare what your project needs in `aru.toml`, pin the exact result in `aru.lock
 
 | Resource | Source of truth | Target result |
 | --- | --- | --- |
-| Native packages | Git repositories with `aru-package.toml` | Composed instructions, skills, trusted MCP, and package dependencies |
+| Native packages | Git repositories with a package-mode `aru.toml` | Composed instructions, skills, trusted MCP, and package dependencies |
 | Instructions | Existing `AGENTS.md` files or configured Markdown sources | Native use, Claude imports/rules, or Copilot instructions |
 | Agent Skills | Git repositories | Codex and Claude project skill directories |
 | MCP servers | Registry packages, HTTPS endpoints, or stdio argv | Codex and Claude MCP configuration |
@@ -139,7 +139,7 @@ You now have:
 
 ## 📦 Manage native packages
 
-A native aru package is a Git repository with a root `aru-package.toml`. It can export embedded instructions, skills, trusted MCP declarations, and bounded transitive package dependencies.
+A native aru package is a Git repository with a root `aru.toml` containing `[package]` metadata. It can export embedded instructions, skills, trusted MCP declarations, and bounded transitive package dependencies.
 
 ```console
 aru add owner/agent-kit
@@ -171,9 +171,9 @@ aru package --output dist/agent-kit.tar.gz
 aru package --allow-dirty
 ```
 
-`package` validates the current `aru-package.toml`, archive paths/content, and dependency graph before writing. It includes tracked and non-ignored files, rejects symlinks/special files/case collisions/hidden controls, and normalizes tar ordering, timestamps, ownership, and permissions. Dirty input requires explicit `--allow-dirty`; `.aru/`, ignored files, and `target/aru-package/` are excluded.
+`package` validates the current package-mode `aru.toml`, archive paths/content, and dependency graph before writing. It includes tracked and non-ignored files, rejects symlinks/special files/case collisions/hidden controls, and normalizes tar ordering, timestamps, ownership, and permissions. Dirty input requires explicit `--allow-dirty`; `.aru/`, ignored files, and `target/aru-package/` are excluded.
 
-See the complete [`aru-package.toml`, graph, trust, and archive contracts](docs/formats.md#native-aru-packages).
+See the complete [`aru.toml` package, graph, trust, and archive contracts](docs/formats.md#native-aru-packages).
 
 <a id="manage-instructions"></a>
 

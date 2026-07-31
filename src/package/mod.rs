@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::{AruError, IoContext, Result};
-use crate::manifest::{Instructions, McpRequirement, PackageRequirement, Target, validate_name};
-
-pub const PACKAGE_MANIFEST_FILE: &str = "aru-package.toml";
+use crate::manifest::{
+    Instructions, MANIFEST_FILE, McpRequirement, PackageRequirement, Target, validate_name,
+};
 pub const MAX_GRAPH_DEPTH: usize = 16;
 pub const MAX_GRAPH_NODES: usize = 128;
 pub const MAX_GRAPH_EDGES: usize = 512;
@@ -44,12 +44,12 @@ pub struct PackageManifest {
 
 impl PackageManifest {
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join(PACKAGE_MANIFEST_FILE);
+        let path = root.join(MANIFEST_FILE);
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                 return Err(AruError::msg(format!(
-                    "Git source has no {PACKAGE_MANIFEST_FILE}; use `aru skill add` for a raw skill repository"
+                    "Git source has no {MANIFEST_FILE}; use `aru skill add` for a raw skill repository"
                 )));
             }
             Err(source) => {
@@ -61,18 +61,18 @@ impl PackageManifest {
         };
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(AruError::msg(format!(
-                "{PACKAGE_MANIFEST_FILE} must be a regular non-symlink file"
+                "{MANIFEST_FILE} must be a regular non-symlink file"
             )));
         }
         if metadata.len() > MAX_MANIFEST_BYTES {
             return Err(AruError::msg(format!(
-                "{PACKAGE_MANIFEST_FILE} exceeds {MAX_MANIFEST_BYTES} bytes"
+                "{MANIFEST_FILE} exceeds {MAX_MANIFEST_BYTES} bytes"
             )));
         }
         let text = std::fs::read_to_string(&path).at(&path)?;
         if text.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(AruError::msg(format!(
-                "{PACKAGE_MANIFEST_FILE} exceeds {MAX_MANIFEST_BYTES} bytes"
+                "{MANIFEST_FILE} exceeds {MAX_MANIFEST_BYTES} bytes"
             )));
         }
         reject_unknown_fields(&text, &path)?;
@@ -250,7 +250,7 @@ fn reject_unknown_fields(text: &str, path: &Path) -> Result<()> {
     })?;
     let root = value
         .as_table()
-        .ok_or_else(|| AruError::msg("aru-package.toml must contain TOML tables"))?;
+        .ok_or_else(|| AruError::msg("aru.toml package manifest must contain TOML tables"))?;
     reject_keys(
         root,
         &["package", "instructions", "skills", "mcp", "dependencies"],
