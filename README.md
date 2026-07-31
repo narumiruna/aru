@@ -76,6 +76,22 @@ Verify the installation:
 aru --help
 ```
 
+### Self-update
+
+Binaries installed by the standalone curl, wget, or PowerShell installers can update themselves to the latest stable GitHub Release without an `aru.toml` project:
+
+```console
+aru self update
+```
+
+Download and checksum-verify the complete update without replacing the current executable:
+
+```console
+aru self update --dry-run
+```
+
+Self-update is disabled for Cargo-built binaries so aru does not overwrite package-manager-owned files. Update those installations with `cargo install aru --locked` instead. `--offline` and `--frozen` reject self-update before network access.
+
 ### Shell completions
 
 Generate a completion script from the current command tree and install it in your shell's user completion directory:

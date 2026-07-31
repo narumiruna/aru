@@ -79,6 +79,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
+      ARU_BUILD_DISTRIBUTION: standalone
       TARGET: ${{ matrix.target }}
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
@@ -101,6 +102,27 @@ jobs:
 
       - name: Build release binary
         run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Verify Unix standalone marker
+        if: runner.os != 'Windows'
+        run: |
+          if output="$("target/${TARGET}/release/aru" --offline self update 2>&1)"; then
+            echo "Offline self-update unexpectedly succeeded" >&2
+            exit 1
+          fi
+          printf '%s\n' "$output" | grep --fixed-strings "self-update is unavailable in offline mode"
+
+      - name: Verify Windows standalone marker
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $output = & "target/$env:TARGET/release/aru.exe" --offline self update 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            throw "Offline self-update unexpectedly succeeded"
+          }
+          if (($output | Out-String) -notmatch "self-update is unavailable in offline mode") {
+            throw "Release binary is missing the standalone self-update marker: $output"
+          }
 
       - name: Create Unix archive
         if: matrix.archive == 'tar'

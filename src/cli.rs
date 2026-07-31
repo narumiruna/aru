@@ -120,6 +120,12 @@ pub enum Command {
     GenerateShellCompletion(GenerateShellCompletionArgs),
     /// Build a verified deterministic native-package archive.
     Package(PackageArchiveArgs),
+    /// Manage the aru executable.
+    #[command(name = "self")]
+    SelfManagement {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
     /// Manage project instructions.
     Instruction {
         #[command(subcommand)]
@@ -180,6 +186,19 @@ pub struct GenerateShellCompletionArgs {
     /// Shell to generate completions for.
     #[arg(value_enum)]
     pub shell: CompletionShell,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SelfCommand {
+    /// Update a standalone aru installation to the latest stable release.
+    Update(SelfUpdateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct SelfUpdateArgs {
+    /// Download and validate the update without replacing aru.
+    #[arg(short = 'n', long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
