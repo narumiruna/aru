@@ -15,6 +15,7 @@ pub mod ownership;
 pub mod package;
 pub mod registry;
 pub mod resolver;
+mod self_update;
 pub mod skill;
 pub mod source;
 pub mod sync;

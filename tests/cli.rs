@@ -159,7 +159,8 @@ fn generates_bash_zsh_and_fish_completions_without_a_project() {
             .stderr("")
             .stdout(
                 predicate::str::contains(marker)
-                    .and(predicate::str::contains("generate-shell-completion")),
+                    .and(predicate::str::contains("generate-shell-completion"))
+                    .and(predicate::str::contains("self")),
             );
     }
 
@@ -169,6 +170,33 @@ fn generates_bash_zsh_and_fish_completions_without_a_project() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("possible values: bash, zsh, fish"));
+}
+
+#[test]
+fn self_update_is_project_independent_and_rejects_non_standalone_builds() {
+    let temporary = tempfile::tempdir().unwrap();
+
+    cargo_bin_cmd!("aru")
+        .args(["self", "update", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--dry-run"));
+
+    for arguments in [vec!["self", "update"], vec!["self", "update", "--dry-run"]] {
+        cargo_bin_cmd!("aru")
+            .current_dir(temporary.path())
+            .args(arguments)
+            .assert()
+            .failure()
+            .stdout("")
+            .stderr(
+                predicate::str::contains(
+                    "self-update is only available for standalone aru installations",
+                )
+                .and(predicate::str::contains("cargo install aru --locked"))
+                .and(predicate::str::contains("aru.toml").not()),
+            );
+    }
 }
 
 #[test]

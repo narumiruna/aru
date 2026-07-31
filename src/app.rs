@@ -5,6 +5,7 @@ mod instruction;
 mod mcp;
 mod package_archive;
 mod package_dependency;
+mod self_update;
 mod shell_completion;
 mod skill;
 
@@ -14,8 +15,8 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use crate::cli::{
-    Cli, Command, InstructionCommand, LockArgs, McpCommand, SkillCommand, SyncArgs, TargetAddArgs,
-    TargetCommand, TargetRemoveArgs, TargetSetArgs,
+    Cli, Command, InstructionCommand, LockArgs, McpCommand, SelfCommand, SkillCommand, SyncArgs,
+    TargetAddArgs, TargetCommand, TargetRemoveArgs, TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::Lockfile;
@@ -121,6 +122,9 @@ pub fn run() -> Result<()> {
             let package = package_for_archive(project_option)?;
             package_archive::run(&package, args, policy)
         }
+        Command::SelfManagement { command } => match command {
+            SelfCommand::Update(args) => self_update::update(args, policy.offline, policy.output),
+        },
         Command::Instruction { command } => {
             let project = discover_project(project_option)?;
             match command {

@@ -8,7 +8,7 @@ The tag independently triggers:
 - `Publish` (`.github/workflows/publish.yml`), which publishes the crate to crates.io;
 - `Installer scripts` (`.github/workflows/installers.yml`), which runs isolated Unix and Windows installer tests. A manual run additionally installs the latest published release through the hosted scripts.
 
-The Release and Publish workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`. A failed workflow can be rerun independently.
+The Release and Publish workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`. Release archive builds set `ARU_BUILD_DISTRIBUTION=standalone` and verify the marker before packaging, enabling `aru self update`; ordinary Cargo builds remain package-manager-owned and reject self-update. A failed workflow can be rerun independently.
 
 ## One-time repository configuration
 
