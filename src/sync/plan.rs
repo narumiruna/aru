@@ -269,3 +269,70 @@ pub(super) fn lock_details(lock: &Lockfile) -> Vec<String> {
     details.sort();
     details
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lockfile::{LockedMcpPackage, McpServer, McpTarget};
+    use crate::manifest::Target;
+
+    fn pypi_lock(version: &str, metadata: &str) -> Lockfile {
+        let mut lock = Lockfile::empty();
+        lock.mcp_servers.push(McpServer {
+            name: "weather".into(),
+            registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
+            server_id: "io.example/weather".into(),
+            requirement: "sha256:requirement".into(),
+            version: version.into(),
+            metadata_sha256: metadata.into(),
+            targets: vec![McpTarget {
+                target: Target::Codex,
+                kind: "package".into(),
+                transport: "stdio".into(),
+                command: Some("uvx".into()),
+                args: vec![format!("weather-mcp@{version}")],
+                env_vars: Vec::new(),
+                env_http_headers: BTreeMap::new(),
+                url: None,
+                bearer_token_env: None,
+                package: Some(LockedMcpPackage {
+                    registry: "pypi".into(),
+                    identifier: "weather-mcp".into(),
+                    version: version.into(),
+                }),
+            }],
+        });
+        lock
+    }
+
+    #[test]
+    fn pypi_update_preview_reports_unchanged_and_version_transitions() {
+        let selected = BTreeSet::from(["weather".to_owned()]);
+        let previous = pypi_lock("0.5.0", "sha256:old");
+        let unchanged = pypi_lock("0.5.0", "sha256:old");
+        assert_eq!(
+            update_previews(
+                Some(&previous),
+                &unchanged,
+                &BTreeSet::new(),
+                &selected,
+                &BTreeSet::new(),
+            ),
+            ["MCP weather 0.5.0 (unchanged)"]
+        );
+
+        let updated = pypi_lock("0.6.0", "sha256:new");
+        assert_eq!(
+            update_previews(
+                Some(&previous),
+                &updated,
+                &BTreeSet::new(),
+                &selected,
+                &BTreeSet::new(),
+            ),
+            ["MCP weather 0.5.0 -> 0.6.0"]
+        );
+        assert_eq!(previous.mcp_servers[0].version, "0.5.0");
+        assert_eq!(updated.mcp_servers[0].version, "0.6.0");
+    }
+}

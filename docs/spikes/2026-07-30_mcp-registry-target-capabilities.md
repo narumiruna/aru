@@ -29,11 +29,11 @@ The local OpenAPI contract additionally establishes:
 - Resolve SemVer requirements over active versions. A non-SemVer version is accepted only as `=<literal>` and uses exact lookup.
 - Normalize and hash only the selected server id, exact version, and selected candidate fields.
 - Sort candidates before diagnostics, but require exactly one after manifest selectors and capability filtering.
-- Support npm packages that can be rendered as the argument array `npx [runtime arguments] --yes <identifier>@<exact-version> [package arguments]`. PyPI, Cargo, OCI, NuGet, MCPB, unknown runtimes, unresolved argument templates, and fixed environment values fail closed in v1.
+- Initially support npm packages that can be rendered as the argument array `npx [runtime arguments] --yes <identifier>@<exact-version> [package arguments]`. The 2026-07-31 extension also accepts PyPI records with an explicit `uvx` runtime hint, as documented in [`2026-07-31_mcp-registry-runtime-expansion.md`](2026-07-31_mcp-registry-runtime-expansion.md). Cargo, OCI, NuGet, MCPB, unknown or unapproved runtimes, unresolved argument templates, and fixed required environment values remain fail closed.
 - Secret stdio environment inputs are retained only as environment variable names. No secret value is read or locked.
 - Support static HTTPS streamable-HTTP remotes. A header is portable only when it is an exact `{ENV_NAME}` reference, or `Authorization: Bearer {ENV_NAME}`; all other variable/header templates fail closed.
 
-Fixtures under `tests/fixtures/registry/` cover pagination, active/deprecated and SemVer/non-SemVer records, npm package metadata, remote bearer references, and ambiguous candidates.
+Fixtures under `tests/fixtures/registry/` cover pagination, active/deprecated and SemVer/non-SemVer records, npm and approved PyPI package metadata, remote bearer references, runtime selection, and ambiguous candidates.
 
 ## Target capability observations
 

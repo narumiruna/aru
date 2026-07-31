@@ -11,3 +11,10 @@ targets = ["codex", "claude"]
 transport = "streamable-http"
 url = "https://docs.example.com/mcp"
 bearer-token-env = "DOCS_TOKEN"
+
+[mcp.docs.env-http-headers]
+X-API-Key = "DOCS_API_KEY"
+
+[mcp.demo]
+command = "demo-mcp"
+env-vars = ["DEMO_TOKEN"]

@@ -290,6 +290,8 @@ fn reject_unknown_fields(text: &str, path: &Path) -> Result<()> {
                     "url",
                     "command",
                     "args",
+                    "env-vars",
+                    "env-http-headers",
                     "bearer-token-env",
                     "targets",
                 ],

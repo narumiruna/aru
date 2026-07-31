@@ -641,6 +641,42 @@ mod tests {
     }
 
     #[test]
+    fn pypi_mcp_package_round_trips_with_exact_uvx_identity() {
+        let target = McpTarget {
+            target: Target::Codex,
+            kind: "package".into(),
+            transport: "stdio".into(),
+            command: Some("uvx".into()),
+            args: vec!["weather-mcp@0.5.0".into()],
+            env_vars: vec!["WEATHER_API_KEY".into()],
+            env_http_headers: BTreeMap::new(),
+            url: None,
+            bearer_token_env: None,
+            package: Some(LockedMcpPackage {
+                registry: "pypi".into(),
+                identifier: "weather-mcp".into(),
+                version: "0.5.0".into(),
+            }),
+        };
+        let mut lock = Lockfile::empty();
+        lock.mcp_servers.push(McpServer {
+            name: "weather".into(),
+            registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
+            server_id: "io.example/weather".into(),
+            requirement: "sha256:requirement".into(),
+            version: "0.5.0".into(),
+            metadata_sha256: "sha256:metadata".into(),
+            targets: vec![target],
+        });
+
+        let bytes = lock.bytes().unwrap();
+        let replayed: Lockfile = toml::from_str(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        replayed.validate().unwrap();
+        assert_eq!(replayed.mcp_servers, lock.mcp_servers);
+        assert_eq!(replayed.bytes().unwrap(), bytes);
+    }
+
+    #[test]
     fn v3_golden_lock_round_trips_to_identical_bytes() {
         let fixture = include_str!("../tests/fixtures/contracts/aru.lock");
         let lock: Lockfile = toml::from_str(fixture).unwrap();

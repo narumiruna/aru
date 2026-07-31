@@ -324,6 +324,14 @@ pub struct McpRequirement {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    #[serde(default, rename = "env-vars", skip_serializing_if = "Vec::is_empty")]
+    pub env_vars: Vec<String>,
+    #[serde(
+        default,
+        rename = "env-http-headers",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub env_http_headers: BTreeMap<String, String>,
     #[serde(
         default,
         rename = "bearer-token-env",
@@ -335,6 +343,13 @@ pub struct McpRequirement {
 }
 
 impl McpRequirement {
+    pub fn normalize(&mut self) {
+        self.env_vars.sort();
+        if let Some(targets) = &mut self.targets {
+            targets.sort();
+        }
+    }
+
     pub fn validate(&self, name: &str) -> Result<()> {
         validate_name(name, "MCP name")?;
         let source_count = usize::from(self.server.is_some())
@@ -348,6 +363,45 @@ impl McpRequirement {
         if self.command.is_none() && !self.args.is_empty() {
             return Err(AruError::msg(format!(
                 "MCP {name:?} args require a direct stdio command"
+            )));
+        }
+        if self.command.is_none() && !self.env_vars.is_empty() {
+            return Err(AruError::msg(format!(
+                "MCP {name:?} env-vars require a direct stdio command"
+            )));
+        }
+        if self.url.is_none() && !self.env_http_headers.is_empty() {
+            return Err(AruError::msg(format!(
+                "MCP {name:?} env-http-headers require a direct URL"
+            )));
+        }
+        let unique_env: BTreeSet<_> = self.env_vars.iter().collect();
+        if unique_env.len() != self.env_vars.len() {
+            return Err(AruError::msg(format!(
+                "MCP {name:?} env-vars contains duplicates"
+            )));
+        }
+        for env in &self.env_vars {
+            validate_env_name(env)?;
+        }
+        let mut unique_headers = BTreeSet::new();
+        for (header, env) in &self.env_http_headers {
+            validate_http_header_name(header)?;
+            if !unique_headers.insert(header.to_ascii_lowercase()) {
+                return Err(AruError::msg(format!(
+                    "MCP {name:?} env-http-headers contains duplicate header {header:?}"
+                )));
+            }
+            validate_env_name(env)?;
+        }
+        if self.bearer_token_env.is_some()
+            && self
+                .env_http_headers
+                .keys()
+                .any(|header| header.eq_ignore_ascii_case("authorization"))
+        {
+            return Err(AruError::msg(format!(
+                "MCP {name:?} cannot combine bearer-token-env with an Authorization env-http-header"
             )));
         }
         if let Some(command) = &self.command {
@@ -688,6 +742,16 @@ fn mcp_table(requirement: &McpRequirement) -> Table {
     if !requirement.args.is_empty() {
         table["args"] = Item::Value(string_array(&requirement.args).into());
     }
+    if !requirement.env_vars.is_empty() {
+        table["env-vars"] = Item::Value(string_array(&requirement.env_vars).into());
+    }
+    if !requirement.env_http_headers.is_empty() {
+        let mut headers = Table::new();
+        for (header, env) in &requirement.env_http_headers {
+            headers[header] = toml_edit::value(env.as_str());
+        }
+        table["env-http-headers"] = Item::Table(headers);
+    }
     if let Some(targets) = &requirement.targets {
         table["targets"] = Item::Value(target_array(targets).into());
     }
@@ -774,9 +838,15 @@ pub fn validate_env_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         Err(AruError::msg(format!(
-            "invalid secret environment variable name {name:?}"
+            "invalid environment variable name {name:?}"
         )))
     }
+}
+
+pub fn validate_http_header_name(name: &str) -> Result<()> {
+    reqwest::header::HeaderName::from_bytes(name.as_bytes())
+        .map(|_| ())
+        .map_err(|_| AruError::msg(format!("invalid HTTP header name {name:?}")))
 }
 
 pub fn validate_https_url(value: &str, kind: &str) -> Result<()> {
