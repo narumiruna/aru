@@ -29,6 +29,7 @@ fn create_skill_repository(repository: &Path) {
     for (key, value) in [
         ("user.email", "target-tests@example.com"),
         ("user.name", "target tests"),
+        ("commit.gpgsign", "false"),
     ] {
         Command::new("git")
             .current_dir(repository)
@@ -101,9 +102,9 @@ fn target_add_remove_and_set_apply_exact_persistent_sets() {
         .args(["target", "add", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("add target claude"))
-        .stdout(predicate::str::contains(
-            "targets synchronized: codex, claude",
+        .stderr(predicate::str::contains("Added target claude"))
+        .stderr(predicate::str::contains(
+            "Targets synchronized: codex, claude.",
         ));
     assert!(
         std::fs::read_to_string(project.join("aru.toml"))
@@ -115,16 +116,14 @@ fn target_add_remove_and_set_apply_exact_persistent_sets() {
         .args(["target", "add", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "aru project is already synchronized",
-        ));
+        .stderr(predicate::str::contains("Project is synchronized."));
 
     aru(project)
         .args(["target", "remove", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("remove target claude"))
-        .stdout(predicate::str::contains("targets synchronized: codex"));
+        .stderr(predicate::str::contains("Removed target claude"))
+        .stderr(predicate::str::contains("Targets synchronized: codex."));
 
     let before = std::fs::read(project.join("aru.toml")).unwrap();
     aru(project)
@@ -138,9 +137,9 @@ fn target_add_remove_and_set_apply_exact_persistent_sets() {
         .args(["target", "set", "claude"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("add target claude"))
-        .stdout(predicate::str::contains("remove target codex"))
-        .stdout(predicate::str::contains("targets synchronized: claude"));
+        .stderr(predicate::str::contains("Added target claude"))
+        .stderr(predicate::str::contains("Removed target codex"))
+        .stderr(predicate::str::contains("Targets synchronized: claude."));
     aru(project)
         .args(["target", "list"])
         .assert()
@@ -180,9 +179,9 @@ fn target_dry_run_and_no_sync_make_pending_projection_state_explicit() {
         .args(["target", "add", "claude", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("dry-run: add target claude"))
-        .stdout(predicate::str::contains(
-            "dry-run: create MCP docs (.mcp.json)",
+        .stderr(predicate::str::contains("Would add target claude"))
+        .stderr(predicate::str::contains(
+            "Would create MCP docs (.mcp.json)",
         ));
     assert_eq!(
         std::fs::read(project.join("aru.toml")).unwrap(),
@@ -205,8 +204,8 @@ fn target_dry_run_and_no_sync_make_pending_projection_state_explicit() {
         .args(["target", "add", "claude", "--no-sync"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "target paths were not changed (--no-sync); run `aru sync` to apply",
+        .stderr(predicate::str::contains(
+            "Target paths were not changed; run `aru sync` to apply.",
         ));
     let locked_after = aru::lockfile::Lockfile::load_optional(project)
         .unwrap()
@@ -328,8 +327,8 @@ fn target_add_rejects_unmanaged_collision_unless_force_is_explicit() {
         .args(["target", "add", "claude", "--force", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "dry-run: force replace skill demo (.claude/skills/demo)",
+        .stderr(predicate::str::contains(
+            "Would force replace skill demo (.claude/skills/demo)",
         ));
     aru(&project)
         .args(["target", "add", "claude", "--force"])
@@ -425,7 +424,7 @@ fn target_set_with_missing_state_preserves_removed_artifacts_and_reports_them() 
         .args(["target", "set", "claude"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("warning:"))
+        .stderr(predicate::str::contains("Warning"))
         .stderr(predicate::str::contains(".agents/skills/demo"))
         .stderr(predicate::str::contains(".codex/config.toml"));
 
@@ -467,11 +466,9 @@ fn target_no_sync_warns_before_forgetting_unowned_removed_projections() {
         .args(["target", "set", "codex", "--no-sync"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("warning:"))
+        .stderr(predicate::str::contains("Warning"))
         .stderr(predicate::str::contains(".mcp.json"))
-        .stdout(predicate::str::contains(
-            "target paths were not changed (--no-sync)",
-        ));
+        .stderr(predicate::str::contains("Target paths were not changed"));
     assert!(project.join(".mcp.json").is_file());
 }
 

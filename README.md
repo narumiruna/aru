@@ -64,10 +64,11 @@ Aru passes Git arguments directly and uses your existing SSH or credential-helpe
 
 ### 1. Initialize a project
 
-Run this from the project root:
+Initialize the current directory, or pass another existing directory as `PATH`:
 
 ```console
 aru init --target codex --target claude --target copilot
+aru init PATH --target codex
 ```
 
 This creates the project manifest and configures the initial target set. Supported target names are `codex`, `claude`, `copilot`, `pi`, and `opencode`.
@@ -77,20 +78,23 @@ This creates the project manifest and configures the initial target set. Support
 Preview discovery before changing project files:
 
 ```console
-aru instruction init --dry-run
+aru instruction add --discover --dry-run
 ```
 
 Then apply it:
 
 ```console
-aru instruction init
+aru instruction add --discover
 ```
+
+> [!IMPORTANT]
+> Before 1.0, `aru instruction init` was replaced directly by `aru instruction add --discover`; there is no compatibility alias.
 
 If an unmanaged `CLAUDE.md` or `.github/copilot-instructions.md` already exists, aru reports a collision. Choose one explicit strategy:
 
 ```console
-aru instruction init --merge  # preserve existing Markdown and add aru-owned blocks
-aru instruction init --force  # replace colliding unmanaged instruction output
+aru instruction add --discover --merge  # preserve Markdown and add owned blocks
+aru instruction add --discover --force  # replace unmanaged instruction output
 ```
 
 > [!CAUTION]
@@ -113,10 +117,11 @@ In an interactive terminal, aru opens a searchable multi-select menu:
 | <kbd>Enter</kbd> | Confirm |
 | <kbd>Esc</kbd> | Cancel without changing project files |
 
-Verify that the committed lock can be replayed without re-resolution:
+Verify that the committed lock can be replayed, then check local synchronization without writing:
 
 ```console
 aru sync --locked
+aru sync --check
 ```
 
 You now have:
@@ -159,6 +164,16 @@ Aru projects instructions according to target capabilities:
 - **GitHub Copilot** receives a root `.github/copilot-instructions.md` block and path-specific files under `.github/instructions/aru/`.
 
 Unsupported scope and target combinations fail before any write. Removing a source or target removes only digest-matching, aru-owned output; drifted or unowned content is preserved for review.
+
+List declared file selectors or remove exact selectors without touching canonical source files:
+
+```console
+aru instruction list
+aru instruction remove AGENTS.md --dry-run
+aru instruction remove AGENTS.md
+```
+
+Use `--no-sync` on add or remove to update only `aru.toml` and `aru.lock`; aru reports that target paths remain pending.
 
 <a id="manage-skills"></a>
 
@@ -219,11 +234,14 @@ A new source installs normally. An existing SemVer source selects the latest mat
 ### Update or remove
 
 ```console
+aru skill list
 aru skill update                         # update all eligible sources
 aru skill update owner/repository        # update one source
 aru skill remove owner/repository --skill review
 aru skill remove owner/repository        # remove the source
 ```
+
+`skill list` writes deterministic tab-separated `name`, locked version, and canonical source records to stdout.
 
 Ordinary `aru sync` and `aru sync --locked` keep a branch's locked commit. Run `skill update` or add with `--upgrade` to move it. Because force-pushes can make old commits unreachable, prefer immutable SemVer tags for published, long-lived configurations.
 
@@ -273,11 +291,12 @@ Pin package versions explicitly in argv. The example constrains the unbounded MC
 Update or remove servers by project-local name:
 
 ```console
+aru mcp list
 aru mcp update context
 aru mcp remove docs
 ```
 
-`mcp update [name]` unlocks only selected Registry packages. Direct URLs and direct stdio commands do not have Registry versions to upgrade.
+`mcp list` writes deterministic tab-separated name, source type, and transport records to stdout. `mcp update [name]` unlocks only selected Registry packages. Direct URLs and direct stdio commands do not have Registry versions to upgrade.
 
 <a id="manage-targets"></a>
 
@@ -311,13 +330,40 @@ Use `--no-sync` to update only manifest and lock intent, then run `aru sync` lat
 | Command | Behavior |
 | --- | --- |
 | `aru lock` | Resolve instructions and packages; update `aru.lock` without changing target paths |
+| `aru lock --check` | Check that the existing lock is complete and current without writing or using the network |
 | `aru sync` | Reuse compatible locked packages, fill missing lock data, and reconcile target paths |
 | `aru sync --locked` | Require a complete, current lock; never change it or advance a branch |
-| `aru sync --dry-run` | Print the deterministic plan without changing project files, lock, cache, or target paths |
+| `aru sync --check` | Check the lock and all target paths locally without writing |
+| `aru sync --dry-run` | Print the deterministic plan without changing persistent project state |
 
-`--dry-run` may read Git or HTTP sources through temporary storage. It does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
+`--dry-run` / `-n` may read Git or HTTP sources through temporary storage. It does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
 
-`--no-sync` on add, remove, or update still resolves and transactionally updates `aru.toml` and `aru.lock`; it skips only target projections.
+`--no-sync` on add, remove, or update still resolves and transactionally updates `aru.toml` and `aru.lock`; it skips only target projections and prints the command needed to apply them later.
+
+### Common uv/Cargo-style options
+
+| Option | Behavior |
+| --- | --- |
+| `--project <PATH>` | Discover the aru project from a specific directory |
+| `--locked` | Fail if the command would change `aru.lock` |
+| `--offline` | Disable remote Git and Registry access; use local sources or cached locks |
+| `--frozen` | Equivalent to `--locked --offline` |
+| `-q`, `--quiet` | Suppress normal status output, but keep errors and actionable warnings |
+| `-v`, `--verbose` | Show resolved revisions and digests; repeat for projection identity detail |
+| `--color auto\|always\|never` | Control color in human-readable status output |
+| `--no-progress` | Hide static TTY resolution progress |
+
+Aru sends list data to stdout and human-readable status to stderr. Normal status uses Cargo-style verbs and omits full digests:
+
+```text
+      Locked skill review 1.2.0
+     Created skill review (.agents/skills/review)
+     Updated aru.toml
+     Updated aru.lock
+    Finished Project synchronized.
+```
+
+Use `-v` when exact revisions and digests are needed. Status meaning never depends on color.
 
 Changing `project.targets` by hand does not unlock package versions, but it invalidates the projection hash. A locked sync will fail until a normal sync updates per-target projections. Prefer `aru target add`, `remove`, or `set` so all related state changes in one transaction.
 
@@ -431,7 +477,7 @@ git -C /tmp/aru-demo-source tag 1.0.0
 cd /tmp/aru-demo-project
 aru init --target codex --target claude
 aru skill add /tmp/aru-demo-source --skill demo
-aru sync --locked
+aru --offline sync --locked
 aru skill update /tmp/aru-demo-source
 aru skill remove /tmp/aru-demo-source
 ```
@@ -439,10 +485,11 @@ aru skill remove /tmp/aru-demo-source
 Representative output is deterministic:
 
 ```text
-create skill demo (.agents/skills/demo)
-create skill demo (.claude/skills/demo)
-lock skill demo 1.0.0 sha256:…
-write lockfile
+     Created skill demo (.agents/skills/demo)
+     Created skill demo (.claude/skills/demo)
+      Locked skill demo 1.0.0
+     Updated aru.lock
+    Finished Project synchronized.
 ```
 
 <a id="development"></a>
