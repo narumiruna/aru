@@ -35,6 +35,8 @@ fn mcp_add_help_groups_sources_and_describes_apply_options() {
         .stdout(predicate::str::contains(
             "Environment variable containing a bearer token",
         ))
+        .stdout(predicate::str::contains("--env-var <NAME>"))
+        .stdout(predicate::str::contains("--header-env <HEADER=ENV>"))
         .stdout(predicate::str::contains("Codex-only").not())
         .stdout(predicate::str::contains(
             "Update manifest and lock but skip target project paths",
@@ -129,6 +131,183 @@ fn direct_stdio_command_is_locked_projected_and_replayed() {
         .assert()
         .success()
         .stderr(predicate::str::contains("Project is synchronized."));
+}
+
+#[test]
+fn direct_environment_references_are_projected_without_reading_secret_values() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    init_targets(&project, &["codex", "claude", "copilot", "opencode"]);
+
+    aru(&project)
+        .env("GITHUB_TOKEN", "marker-secret-must-not-be-persisted")
+        .args([
+            "mcp",
+            "add",
+            "--command",
+            "docker",
+            "--arg",
+            "github-mcp",
+            "--env-var",
+            "GITHUB_TOKEN",
+            "--name",
+            "github",
+        ])
+        .assert()
+        .success();
+    aru(&project)
+        .env("DOCS_API_KEY", "second-marker-secret-must-not-be-persisted")
+        .args([
+            "mcp",
+            "add",
+            "--url",
+            "https://example.com/mcp",
+            "--header-env",
+            "X-API-Key=DOCS_API_KEY",
+            "--name",
+            "docs",
+        ])
+        .assert()
+        .success();
+
+    let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+    assert!(manifest.contains("env-vars = [\"GITHUB_TOKEN\"]"));
+    assert!(manifest.contains("[mcp.docs.env-http-headers]"));
+    assert!(manifest.contains("X-API-Key = \"DOCS_API_KEY\""));
+
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    let github = lock
+        .mcp_servers
+        .iter()
+        .find(|server| server.name == "github")
+        .unwrap();
+    assert!(
+        github
+            .targets
+            .iter()
+            .all(|target| target.env_vars == ["GITHUB_TOKEN"])
+    );
+    let docs = lock
+        .mcp_servers
+        .iter()
+        .find(|server| server.name == "docs")
+        .unwrap();
+    assert!(docs.targets.iter().all(|target| {
+        target.env_http_headers.get("X-API-Key").map(String::as_str) == Some("DOCS_API_KEY")
+    }));
+
+    let codex = std::fs::read_to_string(project.join(".codex/config.toml")).unwrap();
+    assert!(codex.contains("env_vars = [\"GITHUB_TOKEN\"]"));
+    assert!(codex.contains("X-API-Key = \"DOCS_API_KEY\""));
+
+    let claude: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join(".mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        claude["mcpServers"]["github"]["env"]["GITHUB_TOKEN"],
+        "${GITHUB_TOKEN}"
+    );
+    assert_eq!(
+        claude["mcpServers"]["docs"]["headers"]["X-API-Key"],
+        "${DOCS_API_KEY}"
+    );
+
+    let copilot: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join(".github/mcp.json")).unwrap()).unwrap();
+    assert_eq!(
+        copilot["mcpServers"]["github"]["env"]["GITHUB_TOKEN"],
+        "${GITHUB_TOKEN}"
+    );
+    assert_eq!(
+        copilot["mcpServers"]["docs"]["headers"]["X-API-Key"],
+        "${DOCS_API_KEY}"
+    );
+
+    let opencode = std::fs::read_to_string(project.join("opencode.json")).unwrap();
+    assert!(opencode.contains("{env:GITHUB_TOKEN}"));
+    assert!(opencode.contains("{env:DOCS_API_KEY}"));
+
+    let persisted = [
+        "aru.toml",
+        "aru.lock",
+        ".codex/config.toml",
+        ".mcp.json",
+        ".github/mcp.json",
+        "opencode.json",
+    ]
+    .iter()
+    .map(|path| std::fs::read_to_string(project.join(path)).unwrap())
+    .collect::<String>();
+    assert!(!persisted.contains("marker-secret-must-not-be-persisted"));
+    assert!(!persisted.contains("second-marker-secret-must-not-be-persisted"));
+
+    aru(&project).args(["sync", "--locked"]).assert().success();
+    aru(&project).arg("audit").assert().success();
+}
+
+#[test]
+fn invalid_direct_environment_references_fail_before_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            vec![
+                "mcp",
+                "add",
+                "--command",
+                "demo",
+                "--env-var",
+                "TOKEN",
+                "--env-var",
+                "TOKEN",
+                "--name",
+                "demo",
+            ],
+            "env-vars contains duplicates",
+        ),
+        (
+            vec![
+                "mcp",
+                "add",
+                "--url",
+                "https://example.com/mcp",
+                "--header-env",
+                "missing-assignment",
+                "--name",
+                "demo",
+            ],
+            "expected HEADER=ENV",
+        ),
+        (
+            vec![
+                "mcp",
+                "add",
+                "--url",
+                "https://example.com/mcp",
+                "--header-env",
+                "Authorization=OTHER_TOKEN",
+                "--bearer-token-env",
+                "TOKEN",
+                "--name",
+                "demo",
+            ],
+            "cannot combine bearer-token-env",
+        ),
+    ];
+
+    for (index, (args, expected)) in cases.into_iter().enumerate() {
+        let project = temporary.path().join(format!("project-{index}"));
+        init_targets(&project, &["codex"]);
+        let manifest = std::fs::read(project.join("aru.toml")).unwrap();
+        aru(&project)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+        assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), manifest);
+        assert!(!project.join("aru.lock").exists());
+        assert!(!project.join(".codex").exists());
+    }
 }
 
 #[test]

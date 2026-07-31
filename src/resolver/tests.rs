@@ -20,6 +20,8 @@ fn offline_registry_resolution_fails_before_http_resolution() {
                 url: None,
                 command: None,
                 args: Vec::new(),
+                env_vars: Vec::new(),
+                env_http_headers: BTreeMap::new(),
                 bearer_token_env: None,
                 targets: None,
             },
@@ -114,6 +116,48 @@ fn package_hash_excludes_targets() {
     assert_eq!(
         package_hash,
         package_input_hash(&manifest, &sources, &package_sources).unwrap()
+    );
+}
+
+#[test]
+fn mcp_environment_hash_normalizes_order_and_tracks_references() {
+    let mut manifest = Manifest {
+        project: crate::manifest::Project {
+            targets: vec![Target::Codex],
+        },
+        instructions: crate::manifest::Instructions::default(),
+        skills: BTreeMap::new(),
+        mcp: BTreeMap::from([(
+            "demo".into(),
+            McpRequirement {
+                registry: None,
+                server: None,
+                version: None,
+                transport: None,
+                package_registry: None,
+                url: None,
+                command: Some("demo-mcp".into()),
+                args: Vec::new(),
+                env_vars: vec!["Z_TOKEN".into(), "A_TOKEN".into()],
+                env_http_headers: BTreeMap::new(),
+                bearer_token_env: None,
+                targets: None,
+            },
+        )]),
+        packages: BTreeMap::new(),
+        package_trust: BTreeMap::new(),
+    };
+    let empty = BTreeMap::new();
+    let first = package_input_hash(&manifest, &empty, &empty).unwrap();
+    manifest.mcp.get_mut("demo").unwrap().env_vars.reverse();
+    assert_eq!(
+        first,
+        package_input_hash(&manifest, &empty, &empty).unwrap()
+    );
+    manifest.mcp.get_mut("demo").unwrap().env_vars[0] = "B_TOKEN".into();
+    assert_ne!(
+        first,
+        package_input_hash(&manifest, &empty, &empty).unwrap()
     );
 }
 

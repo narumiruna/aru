@@ -346,10 +346,11 @@ A Registry candidate must be unique after transport, package-registry, and confi
 aru mcp add \
   --url https://docs.example.com/mcp \
   --name docs \
-  --bearer-token-env DOCS_MCP_TOKEN
+  --bearer-token-env DOCS_MCP_TOKEN \
+  --header-env X-Workspace=DOCS_MCP_WORKSPACE
 ```
 
-Aru stores only the environment variable name or placeholder, never its secret value. Repeat `--target` to narrow any MCP declaration to configured MCP-capable targets:
+Repeat `--header-env HEADER=ENV` for non-Authorization headers whose values come from the environment. Header names are case-insensitive and cannot collide; use `--bearer-token-env` rather than a second `Authorization` declaration. Aru stores only each environment variable name or target placeholder, never its value. Repeat `--target` to narrow any MCP declaration to configured MCP-capable targets:
 
 ```console
 aru mcp add \
@@ -366,10 +367,11 @@ aru mcp add \
   --arg=--with \
   --arg 'mcp<2' \
   --arg yfmcp@0.12.2 \
+  --env-var YFINANCE_API_KEY \
   --name yfinance
 ```
 
-Aru stores the executable and each repeated `--arg` as an ordered argv array. Use `--arg=--flag` when an argument begins with `-`. Aru projects these commands but never executes them during add, lock, or sync.
+Repeat `--env-var NAME` to forward an existing environment variable without reading it. Aru stores the executable and each repeated `--arg` as an ordered argv array. Use `--arg=--flag` when an argument begins with `-`. Aru projects these commands but never executes them during add, lock, or sync.
 
 Pin package versions explicitly in argv. The example constrains the unbounded MCP SDK dependency because `yfmcp` 0.12.2 uses the 1.x API.
 

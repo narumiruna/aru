@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::cli::{McpAddArgs, McpRemoveArgs, McpUpdateArgs};
@@ -34,10 +34,11 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
             "direct stdio MCP cannot set registry or package-registry",
         ));
     }
+    let env_http_headers = parse_header_env(&args.header_env)?;
     let mut document = ManifestDocument::load(project)?;
     let mut dependency_targets = args.targets;
     dependency_targets.sort();
-    let requirement = McpRequirement {
+    let mut requirement = McpRequirement {
         registry: args.server.as_ref().map(|_| {
             args.registry
                 .unwrap_or_else(|| crate::registry::DEFAULT_REGISTRY.into())
@@ -49,10 +50,13 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
         url: args.url,
         command: args.command,
         args: args.args,
+        env_vars: args.env_vars,
+        env_http_headers,
         bearer_token_env: args.bearer_token_env,
         targets: (!dependency_targets.is_empty()).then_some(dependency_targets),
     };
     requirement.validate(&args.name)?;
+    requirement.normalize();
     document.set_mcp(&args.name, &requirement);
     let manifest = document.manifest()?;
     let projection = if args.no_sync {
@@ -68,6 +72,30 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
         .request(args.dry_run, projection)
         .with_manifest_bytes(document.bytes());
     super::execute(project, &manifest, request, policy.output)
+}
+
+fn parse_header_env(assignments: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut headers = BTreeMap::new();
+    let mut normalized = BTreeSet::new();
+    for assignment in assignments {
+        let (header, env) = assignment.split_once('=').ok_or_else(|| {
+            AruError::msg(format!(
+                "invalid --header-env {assignment:?}; expected HEADER=ENV"
+            ))
+        })?;
+        if header.is_empty() || env.is_empty() {
+            return Err(AruError::msg(format!(
+                "invalid --header-env {assignment:?}; expected non-empty HEADER=ENV"
+            )));
+        }
+        if !normalized.insert(header.to_ascii_lowercase()) {
+            return Err(AruError::msg(format!(
+                "duplicate --header-env for HTTP header {header:?}"
+            )));
+        }
+        headers.insert(header.to_owned(), env.to_owned());
+    }
+    Ok(headers)
 }
 
 pub(super) fn remove(project: &Path, args: McpRemoveArgs, policy: ExecutionPolicy) -> Result<()> {

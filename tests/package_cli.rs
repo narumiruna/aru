@@ -564,6 +564,13 @@ fn package_mcp_requires_an_explicit_root_trust_decision() {
         Some("docs"),
         &[],
     );
+    let package_manifest = repository.join("aru.toml");
+    let manifest = std::fs::read_to_string(&package_manifest).unwrap();
+    std::fs::write(
+        &package_manifest,
+        format!("{manifest}\n[mcp.docs.env-http-headers]\nX-API-Key = \"DOCS_API_KEY\"\n"),
+    )
+    .unwrap();
     commit_version(&repository, "1.0.0");
     init_project(&project, &["codex"]);
     let manifest = std::fs::read(project.join("aru.toml")).unwrap();
@@ -577,13 +584,41 @@ fn package_mcp_requires_an_explicit_root_trust_decision() {
     assert!(!project.join("aru.lock").exists());
 
     aru(&project)
+        .env(
+            "DOCS_API_KEY",
+            "package-marker-secret-must-not-be-persisted",
+        )
         .args(["add", repository.to_str().unwrap(), "--trust-mcp", "docs"])
         .assert()
         .success();
     let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
     assert!(manifest.contains("[package-trust"));
     assert!(manifest.contains("mcp = [\"docs\"]"));
-    assert!(project.join(".codex/config.toml").is_file());
+    let lock = std::fs::read_to_string(project.join("aru.lock")).unwrap();
+    let codex_path = project.join(".codex/config.toml");
+    let codex = std::fs::read_to_string(&codex_path).unwrap();
+    assert!(codex.contains("X-API-Key = \"DOCS_API_KEY\""));
+    assert!(!lock.contains("package-marker-secret-must-not-be-persisted"));
+    assert!(!codex.contains("package-marker-secret-must-not-be-persisted"));
+
+    let drifted = codex.replace("DOCS_API_KEY", "DRIFTED_DOCS_API_KEY");
+    std::fs::write(&codex_path, &drifted).unwrap();
+    let project_manifest = std::fs::read(project.join("aru.toml")).unwrap();
+    let project_lock = std::fs::read(project.join("aru.lock")).unwrap();
+    aru(&project)
+        .args(["sync", "--locked"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("drift"));
+    assert_eq!(
+        std::fs::read(project.join("aru.toml")).unwrap(),
+        project_manifest
+    );
+    assert_eq!(
+        std::fs::read(project.join("aru.lock")).unwrap(),
+        project_lock
+    );
+    assert_eq!(std::fs::read_to_string(codex_path).unwrap(), drifted);
 }
 
 #[test]

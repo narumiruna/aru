@@ -69,6 +69,8 @@ fn optional_tables_are_created_only_when_mutated() {
             url: None,
             command: Some("demo-mcp".into()),
             args: Vec::new(),
+            env_vars: Vec::new(),
+            env_http_headers: BTreeMap::new(),
             bearer_token_env: None,
             targets: None,
         },
@@ -79,6 +81,65 @@ fn optional_tables_are_created_only_when_mutated() {
     assert!(!mcp_output.contains("[skills]"));
     assert!(mcp_output.contains("[custom]\nanswer = 42"));
     assert_eq!(mcp.manifest().unwrap().mcp.len(), 1);
+}
+
+#[test]
+fn mcp_environment_references_round_trip_and_normalize() {
+    let text = "[project]\ntargets = [\"codex\"]\n\n[mcp.demo]\ncommand = \"demo-mcp\"\nenv-vars = [\"Z_TOKEN\", \"A_TOKEN\"]\n";
+    let mut document = ManifestDocument {
+        path: PathBuf::from("aru.toml"),
+        doc: text.parse().unwrap(),
+    };
+    let mut requirement = document.manifest().unwrap().mcp["demo"].clone();
+    requirement.normalize();
+    assert_eq!(requirement.env_vars, ["A_TOKEN", "Z_TOKEN"]);
+
+    requirement = McpRequirement {
+        registry: None,
+        server: None,
+        version: None,
+        transport: None,
+        package_registry: None,
+        url: Some("https://example.com/mcp".into()),
+        command: None,
+        args: Vec::new(),
+        env_vars: Vec::new(),
+        env_http_headers: BTreeMap::from([
+            ("X-API-Key".into(), "DOCS_API_KEY".into()),
+            ("X-Tenant-ID".into(), "DOCS_TENANT".into()),
+        ]),
+        bearer_token_env: None,
+        targets: None,
+    };
+    document.set_mcp("demo", &requirement);
+    let output = String::from_utf8(document.bytes()).unwrap();
+    assert!(output.contains("[mcp.demo.env-http-headers]"));
+    assert!(output.contains("X-API-Key = \"DOCS_API_KEY\""));
+    assert_eq!(
+        document.manifest().unwrap().mcp["demo"].env_http_headers,
+        requirement.env_http_headers
+    );
+}
+
+#[test]
+fn mcp_environment_references_reject_ambiguous_or_unsafe_inputs() {
+    let invalid = [
+        "[mcp.demo]\nurl = \"https://example.com/mcp\"\nenv-vars = [\"TOKEN\"]\n",
+        "[mcp.demo]\ncommand = \"demo\"\n[mcp.demo.env-http-headers]\nX-Key = \"TOKEN\"\n",
+        "[mcp.demo]\ncommand = \"demo\"\nenv-vars = [\"TOKEN\", \"TOKEN\"]\n",
+        "[mcp.demo]\ncommand = \"demo\"\nenv-vars = [\"lowercase\"]\n",
+        "[mcp.demo]\nurl = \"https://example.com/mcp\"\n[mcp.demo.env-http-headers]\n\"Bad Header\" = \"TOKEN\"\n",
+        "[mcp.demo]\nurl = \"https://example.com/mcp\"\nbearer-token-env = \"TOKEN\"\n[mcp.demo.env-http-headers]\nAuthorization = \"OTHER_TOKEN\"\n",
+        "[mcp.demo]\nurl = \"https://example.com/mcp\"\n[mcp.demo.env-http-headers]\nAuthorization = \"TOKEN\"\nauthorization = \"OTHER_TOKEN\"\n",
+    ];
+    for mcp in invalid {
+        let text = format!("[project]\ntargets = [\"codex\"]\n\n{mcp}");
+        let document = ManifestDocument {
+            path: PathBuf::from("aru.toml"),
+            doc: text.parse().unwrap(),
+        };
+        assert!(document.manifest().is_err(), "accepted invalid MCP:\n{mcp}");
+    }
 }
 
 #[test]
@@ -326,6 +387,11 @@ fn manifest_fixture_parses_and_preserves_comments() {
     assert_eq!(
         manifest.skills["owner/repository"].paths["writing-plans"],
         "skills/writing-plans"
+    );
+    assert_eq!(manifest.mcp["demo"].env_vars, ["DEMO_TOKEN"]);
+    assert_eq!(
+        manifest.mcp["docs"].env_http_headers["X-API-Key"],
+        "DOCS_API_KEY"
     );
     assert_eq!(document.bytes(), fixture.as_bytes());
 }

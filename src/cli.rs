@@ -547,6 +547,12 @@ pub struct McpAddArgs {
     /// Ordered argument for --command; may be repeated.
     #[arg(long = "arg", value_name = "ARG", action = ArgAction::Append, requires = "command", help_heading = "Source Options")]
     pub args: Vec<String>,
+    /// Environment variable to forward to --command; may be repeated.
+    #[arg(long = "env-var", value_name = "NAME", action = ArgAction::Append, requires = "command", help_heading = "Authentication Options")]
+    pub env_vars: Vec<String>,
+    /// Environment-backed HTTP header as HEADER=ENV; may be repeated.
+    #[arg(long = "header-env", value_name = "HEADER=ENV", action = ArgAction::Append, requires = "url", help_heading = "Authentication Options")]
+    pub header_env: Vec<String>,
     /// Registry base URL.
     #[arg(long, help_heading = "Registry Options")]
     pub registry: Option<String>,

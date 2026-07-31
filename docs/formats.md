@@ -28,9 +28,13 @@ url = "https://docs.example.com/mcp"
 bearer-token-env = "DOCS_TOKEN"
 targets = ["claude"]
 
+[mcp.docs.env-http-headers]
+X-Workspace = "DOCS_WORKSPACE"
+
 [mcp.yfinance]
 command = "uvx"
 args = ["--with", "mcp<2", "yfmcp@0.12.2"]
+env-vars = ["YFINANCE_API_KEY"]
 ```
 
 The manifest is intentionally unversioned during early development. `project.targets` is a non-empty, duplicate-free persistent set. Target commands retain the existing value decoration so a trailing comment on `targets` survives mutation.
@@ -44,7 +48,7 @@ Source `targets` default to the complete project target set and otherwise must b
 
 Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target. All current targets support skills through their native project directories.
 
-An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; pin package versions inside argv when reproducibility matters. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets: Codex, Claude, Copilot, or OpenCode. pi has no built-in MCP and is rejected. aru records and projects direct commands but never executes them. Secret-bearing fields contain environment names only.
+An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; optional `env-vars` is a non-empty-name, duplicate-free list that is valid only with `command`. Direct remote `env-http-headers` maps validated, case-insensitively unique HTTP field names to environment names and is valid only with `url`; it cannot define `Authorization` when `bearer-token-env` is also present. Environment names use uppercase letters, digits, and underscores and begin with an uppercase letter or underscore. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets: Codex, Claude, Copilot, or OpenCode. pi has no built-in MCP and is rejected. aru records and projects direct commands but never executes them, and secret-bearing fields contain environment names only. Codex retains names, Claude and Copilot emit `${ENV}` placeholders, and OpenCode emits `{env:ENV}` placeholders.
 
 `package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes project targets, dependency targets, and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
 

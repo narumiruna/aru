@@ -594,6 +594,8 @@ mod tests {
             url: None,
             command: None,
             args: Vec::new(),
+            env_vars: Vec::new(),
+            env_http_headers: BTreeMap::new(),
             bearer_token_env: None,
             targets: None,
         };
@@ -630,6 +632,8 @@ mod tests {
             url: None,
             command: None,
             args: Vec::new(),
+            env_vars: Vec::new(),
+            env_http_headers: BTreeMap::new(),
             bearer_token_env: None,
             targets: None,
         };
@@ -677,6 +681,8 @@ mod tests {
             url: None,
             command: None,
             args: Vec::new(),
+            env_vars: Vec::new(),
+            env_http_headers: BTreeMap::new(),
             bearer_token_env: None,
             targets: None,
         };

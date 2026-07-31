@@ -324,6 +324,7 @@ fn package_input_hash(
 
 fn normalized_mcp(requirement: &McpRequirement) -> McpRequirement {
     let mut normalized = requirement.clone();
+    normalized.normalize();
     normalized.targets = None;
     if normalized.server.is_some() {
         if normalized.registry.is_none() {
@@ -362,7 +363,11 @@ fn resolve_mcp(
                     .unwrap_or_else(|| "stdio".into()),
                 command: Some(command.clone()),
                 args: requirement.args.clone(),
-                env_vars: Vec::new(),
+                env_vars: {
+                    let mut env_vars = requirement.env_vars.clone();
+                    env_vars.sort();
+                    env_vars
+                },
                 env_http_headers: BTreeMap::new(),
                 bearer_token_env: None,
                 url: None,
@@ -385,7 +390,7 @@ fn resolve_mcp(
                 command: None,
                 args: Vec::new(),
                 env_vars: Vec::new(),
-                env_http_headers: BTreeMap::new(),
+                env_http_headers: requirement.env_http_headers.clone(),
                 bearer_token_env: requirement.bearer_token_env.clone(),
                 url: Some(url.clone()),
                 package: None,
