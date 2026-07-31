@@ -483,13 +483,13 @@ fn drifted_generated_instruction_file_is_never_updated_or_removed() {
 }
 
 #[test]
-fn instruction_only_targets_do_not_receive_skill_or_mcp_projections() {
+fn pi_supports_native_skills_but_rejects_mcp_projections() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
     let repository = temporary.path().join("repository");
     std::fs::create_dir(&project).unwrap();
     create_skill_repository(&repository);
-    init(&project, &["copilot"]);
+    init(&project, &["pi"]);
     aru(&project)
         .args([
             "mcp",
@@ -504,16 +504,14 @@ fn instruction_only_targets_do_not_receive_skill_or_mcp_projections() {
         .stderr(predicate::str::contains(
             "no configured target supports MCP projections",
         ));
+    assert!(!project.join("aru.lock").exists());
+
     aru(&project)
         .args(["skill", "add", repository.to_str().unwrap(), "--all"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "no configured target supports Agent Skills projections",
-        ));
-    assert!(!project.join("aru.lock").exists());
-    assert!(!project.join(".agents").exists());
-    assert!(!project.join(".claude").exists());
+        .success();
+    assert!(project.join(".pi/skills/demo").is_dir());
+    assert!(!project.join(".agents/skills/demo").exists());
 }
 
 #[test]
@@ -695,7 +693,7 @@ fn target_changes_support_merge_and_deferred_instruction_projection() {
 }
 
 #[test]
-fn adding_instruction_only_targets_preserves_capable_package_selection() {
+fn adding_targets_expands_capable_projections_without_unlocking_packages() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
     let repository = temporary.path().join("repository");
@@ -728,12 +726,49 @@ fn adding_instruction_only_targets_preserves_capable_package_selection() {
     let after = aru::lockfile::Lockfile::load_optional(&project)
         .unwrap()
         .unwrap();
-    assert_eq!(before.skill_packages, after.skill_packages);
-    assert_eq!(before.mcp_servers, after.mcp_servers);
-    assert_eq!(after.mcp_servers[0].targets.len(), 1);
-    assert_eq!(after.mcp_servers[0].targets[0].target.to_string(), "codex");
+    let before_skill = &before.skill_packages[0];
+    let after_skill = &after.skill_packages[0];
+    assert_eq!(before_skill.source, after_skill.source);
+    assert_eq!(before_skill.version, after_skill.version);
+    assert_eq!(before_skill.revision, after_skill.revision);
+    assert_eq!(before_skill.skills, after_skill.skills);
+    assert_eq!(
+        after_skill.targets,
+        [
+            aru::manifest::Target::Codex,
+            aru::manifest::Target::Copilot,
+            aru::manifest::Target::Opencode,
+            aru::manifest::Target::Pi,
+        ]
+    );
+    assert_eq!(before.mcp_servers[0].version, after.mcp_servers[0].version);
+    assert_eq!(
+        before.mcp_servers[0].metadata_sha256,
+        after.mcp_servers[0].metadata_sha256
+    );
+    assert_eq!(
+        after.mcp_servers[0]
+            .targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        [
+            aru::manifest::Target::Codex,
+            aru::manifest::Target::Copilot,
+            aru::manifest::Target::Opencode,
+        ]
+    );
     assert!(!project.join(".mcp.json").exists());
-    assert!(project.join(".agents/skills/demo").is_dir());
+    assert!(project.join(".codex/config.toml").is_file());
+    assert!(project.join(".github/mcp.json").is_file());
+    assert!(project.join("opencode.json").is_file());
+    for destination in [
+        ".agents/skills/demo",
+        ".github/skills/demo",
+        ".pi/skills/demo",
+        ".opencode/skills/demo",
+    ] {
+        assert!(project.join(destination).exists(), "missing {destination}");
+    }
     assert!(!project.join(".claude/skills/demo").exists());
-    assert!(!project.join(".github/skills/demo").exists());
 }
