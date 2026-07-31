@@ -504,7 +504,7 @@ Rules:
 
 ## Resolved implementation decisions
 
-- Native packages use root `aru-package.toml`; package and lock contracts are documented in `docs/formats.md`.
+- Native packages use a package-mode root `aru.toml`; package and lock contracts are documented in `docs/formats.md`.
 - Package identity is the canonical credential-free Git repository source in this release; no registry identity is inferred.
 - Hidden format controls are blocking audit errors, while warnings and informational findings do not make audit fail.
 - Audit JSON, tree JSON, and metadata each begin at contract version 1. SARIF is not part of the initial contract.

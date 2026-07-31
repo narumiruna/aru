@@ -62,7 +62,7 @@ fn package_list_and_archive_are_deterministic_with_normalized_headers() {
         .success()
         .stdout(concat!(
             "AGENTS.md\n",
-            "aru-package.toml\n",
+            "aru.toml\n",
             "skills/review/SKILL.md\n",
         ));
     assert!(!repository.join("target/aru-package").exists());
@@ -110,10 +110,7 @@ fn package_list_and_archive_are_deterministic_with_normalized_headers() {
         assert!(matches!(header.mode().unwrap(), 0o644 | 0o755));
         paths.push(entry.path().unwrap().to_string_lossy().into_owned());
     }
-    assert_eq!(
-        paths,
-        ["AGENTS.md", "aru-package.toml", "skills/review/SKILL.md"]
-    );
+    assert_eq!(paths, ["AGENTS.md", "aru.toml", "skills/review/SKILL.md"]);
 }
 
 #[cfg(unix)]
@@ -187,12 +184,12 @@ fn package_validates_dependency_graph_before_writing_archive() {
     let repository = temporary.path().join("package");
     package_repository(&dependency);
     package_repository(&repository);
-    let mut manifest = std::fs::read_to_string(repository.join("aru-package.toml")).unwrap();
+    let mut manifest = std::fs::read_to_string(repository.join("aru.toml")).unwrap();
     manifest.push_str(&format!(
         "\n[dependencies.\"{}\"]\nversion = \"*\"\n",
         dependency.display()
     ));
-    std::fs::write(repository.join("aru-package.toml"), manifest).unwrap();
+    std::fs::write(repository.join("aru.toml"), manifest).unwrap();
 
     aru(&repository)
         .args(["package", "--allow-dirty"])

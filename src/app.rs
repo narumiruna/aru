@@ -571,10 +571,10 @@ fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
 fn package_for_archive(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         let path = path.canonicalize().at(&path)?;
-        if !path.join(crate::package::PACKAGE_MANIFEST_FILE).is_file() {
+        if !path.join(crate::manifest::MANIFEST_FILE).is_file() {
             return Err(AruError::msg(format!(
                 "no {} in {}",
-                crate::package::PACKAGE_MANIFEST_FILE,
+                crate::manifest::MANIFEST_FILE,
                 path.display()
             )));
         }
@@ -582,16 +582,13 @@ fn package_for_archive(explicit: Option<PathBuf>) -> Result<PathBuf> {
     }
     let current = std::env::current_dir().at(".")?;
     for ancestor in current.ancestors() {
-        if ancestor
-            .join(crate::package::PACKAGE_MANIFEST_FILE)
-            .is_file()
-        {
+        if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
             return ancestor.canonicalize().at(ancestor);
         }
     }
     Err(AruError::msg(format!(
         "no {} found in the current directory or its ancestors",
-        crate::package::PACKAGE_MANIFEST_FILE
+        crate::manifest::MANIFEST_FILE
     )))
 }
 

@@ -8,7 +8,8 @@ use crate::error::{AruError, IoContext, Result};
 use crate::instruction::DiscoveredInstruction;
 use crate::lockfile::{AruPackage, LockedSkill, Lockfile, SkillPackage};
 use crate::manifest::{
-    Manifest, McpRequirement, PackageRequirement, PackageTrust, Project, SkillRequirement, Target,
+    MANIFEST_FILE, Manifest, McpRequirement, PackageRequirement, PackageTrust, Project,
+    SkillRequirement, Target,
 };
 use crate::skill::{DiscoveredSkill, discover_and_select};
 use crate::source::git::{self, GitSource};
@@ -623,7 +624,7 @@ fn load_checkout(
 ) -> Result<(PackageManifest, String, String)> {
     validate_tree(checkout, budget)?;
     let manifest = PackageManifest::load(checkout)?;
-    let path = checkout.join(super::PACKAGE_MANIFEST_FILE);
+    let path = checkout.join(MANIFEST_FILE);
     let manifest_digest = sha256_bytes(&std::fs::read(&path).at(&path)?);
     let content_digest = tree_digest(checkout)?;
     Ok((manifest, manifest_digest, content_digest))

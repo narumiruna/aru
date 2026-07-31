@@ -15,6 +15,19 @@ fn valid_fixture_parses_and_tree_is_bounded() {
 }
 
 #[test]
+fn legacy_package_manifest_is_not_loaded() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("aru-package.toml"),
+        "[package]\nname='demo'\nversion='1.0.0'\n",
+    )
+    .unwrap();
+
+    let error = PackageManifest::load(root.path()).unwrap_err();
+    assert!(error.to_string().contains("no aru.toml"));
+}
+
+#[test]
 fn unknown_nested_fields_and_invalid_versions_fail_closed() {
     let temporary = tempfile::tempdir().unwrap();
     for (name, text, expected) in [
@@ -36,7 +49,7 @@ fn unknown_nested_fields_and_invalid_versions_fail_closed() {
     ] {
         let root = temporary.path().join(name);
         std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join(PACKAGE_MANIFEST_FILE), text).unwrap();
+        std::fs::write(root.join(crate::manifest::MANIFEST_FILE), text).unwrap();
         assert!(
             PackageManifest::load(&root)
                 .unwrap_err()
@@ -50,7 +63,7 @@ fn unknown_nested_fields_and_invalid_versions_fail_closed() {
 fn package_tree_rejects_hidden_unicode_and_symlinks() {
     let hidden = tempfile::tempdir().unwrap();
     std::fs::write(
-        hidden.path().join(PACKAGE_MANIFEST_FILE),
+        hidden.path().join(crate::manifest::MANIFEST_FILE),
         "[package]\nname='demo'\nversion='1.0.0'\n",
     )
     .unwrap();
@@ -66,7 +79,7 @@ fn package_tree_rejects_hidden_unicode_and_symlinks() {
     {
         let linked = tempfile::tempdir().unwrap();
         std::fs::write(
-            linked.path().join(PACKAGE_MANIFEST_FILE),
+            linked.path().join(crate::manifest::MANIFEST_FILE),
             "[package]\nname='demo'\nversion='1.0.0'\n",
         )
         .unwrap();
