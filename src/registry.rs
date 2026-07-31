@@ -545,11 +545,12 @@ fn append_argument(output: &mut Vec<String>, input: &InputArgument) -> Result<()
 }
 
 pub fn supports(target: &Target, candidate: &ResolvedCandidate) -> bool {
-    match (target, candidate.transport.as_str()) {
-        (Target::Codex | Target::Claude, "stdio") => candidate.command.is_some(),
-        (Target::Codex | Target::Claude, "streamable-http") => candidate.url.is_some(),
-        _ => false,
-    }
+    crate::target::supports_mcp_candidate(
+        *target,
+        &candidate.transport,
+        candidate.command.is_some(),
+        candidate.url.is_some(),
+    )
 }
 
 fn status(metadata: &serde_json::Value) -> Option<&str> {

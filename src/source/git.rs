@@ -29,6 +29,106 @@ pub struct GitResolution {
     pub revision: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReferenceSpec<'a> {
+    version: Option<&'a str>,
+    branch: Option<&'a str>,
+    revision: Option<&'a str>,
+}
+
+impl<'a> ReferenceSpec<'a> {
+    pub(crate) fn new(
+        version: Option<&'a str>,
+        branch: Option<&'a str>,
+        revision: Option<&'a str>,
+    ) -> Self {
+        Self {
+            version,
+            branch,
+            revision,
+        }
+    }
+
+    pub(crate) fn descriptor(self) -> String {
+        if let Some(revision) = self.revision {
+            format!("rev:{}", revision.to_ascii_lowercase())
+        } else if let Some(branch) = self.branch {
+            format!("branch:{branch}")
+        } else {
+            format!(
+                "version:{}",
+                normalize_version_requirement(self.version.unwrap_or("*"))
+            )
+        }
+    }
+
+    fn matches_locked(self, version: &str, revision: &str) -> bool {
+        self.revision
+            .is_none_or(|expected| revision.starts_with(&expected.to_ascii_lowercase()))
+            && self.branch.is_none_or(|expected| version == expected)
+            && self
+                .version
+                .is_none_or(|_| locked_version_matches(self.version, version))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LockedReference<'a> {
+    pub(crate) requirement: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) revision: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ReferencePolicy<'a> {
+    pub(crate) locked: bool,
+    pub(crate) update: bool,
+    pub(crate) offline: bool,
+    pub(crate) precise: Option<&'a str>,
+}
+
+pub(crate) fn select_reference(
+    source: &GitSource,
+    spec: ReferenceSpec<'_>,
+    old: Option<LockedReference<'_>>,
+    policy: ReferencePolicy<'_>,
+    resource: &str,
+) -> Result<GitResolution> {
+    let descriptor = spec.descriptor();
+    if policy.locked {
+        let old = old.ok_or_else(|| AruError::msg(format!("aru.lock is missing {resource}")))?;
+        if old.requirement != descriptor {
+            return Err(AruError::msg(format!("aru.lock is stale for {resource}")));
+        }
+        return Ok(GitResolution {
+            version: old.version.to_owned(),
+            revision: old.revision.to_owned(),
+        });
+    }
+    if let Some(old) = old
+        && !policy.update
+        && old.requirement == descriptor
+        && spec.matches_locked(old.version, old.revision)
+    {
+        return Ok(GitResolution {
+            version: old.version.to_owned(),
+            revision: old.revision.to_owned(),
+        });
+    }
+    if policy.offline && !source.is_local() {
+        return Err(AruError::msg(format!(
+            "offline mode cannot resolve remote {resource}"
+        )));
+    }
+    let exact = precise_requirement(spec, policy.precise)?;
+    resolve(
+        source,
+        exact.as_deref().or(spec.version),
+        spec.branch,
+        spec.revision,
+    )
+}
+
 pub fn canonicalize(project: &Path, input: &str) -> Result<GitSource> {
     validate_source_argument(input)?;
 
@@ -182,6 +282,38 @@ pub fn locked_version_matches(requirement: Option<&str>, version: &str) -> bool 
         return false;
     };
     Version::parse(version).is_ok_and(|version| requirement.matches(&version))
+}
+
+pub(crate) fn normalize_version_requirement(requirement: &str) -> String {
+    VersionReq::parse(requirement)
+        .map(|requirement| requirement.to_string())
+        .unwrap_or_else(|_| requirement.to_owned())
+}
+
+fn precise_requirement(spec: ReferenceSpec<'_>, precise: Option<&str>) -> Result<Option<String>> {
+    let Some(version) = precise else {
+        return Ok(None);
+    };
+    if spec.branch.is_some() || spec.revision.is_some() {
+        return Err(AruError::msg(
+            "--precise can only update a SemVer aru package requirement",
+        ));
+    }
+    let parsed = Version::parse(version).map_err(|error| {
+        AruError::msg(format!(
+            "invalid precise package version {version:?}: {error}"
+        ))
+    })?;
+    if let Some(requirement) = spec.version {
+        let requirement = VersionReq::parse(requirement)
+            .map_err(|error| AruError::msg(format!("invalid package requirement: {error}")))?;
+        if !requirement.matches(&parsed) {
+            return Err(AruError::msg(format!(
+                "precise version {version} does not satisfy declared requirement {requirement}"
+            )));
+        }
+    }
+    Ok(Some(format!("={version}")))
 }
 
 pub fn checkout_exact(source: &GitSource, revision: &str, destination: &Path) -> Result<String> {

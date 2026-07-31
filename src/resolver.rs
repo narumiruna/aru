@@ -345,40 +345,23 @@ fn resolve_skill_reference(
     update: bool,
     offline: bool,
 ) -> Result<(String, String)> {
-    let descriptor = skill_requirement_descriptor(requirement);
-    if !update
-        && old.is_some_and(|package| {
-            package.requirement == descriptor
-                && requirement
-                    .rev
-                    .as_ref()
-                    .is_none_or(|rev| package.revision.starts_with(&rev.to_ascii_lowercase()))
-                && requirement
-                    .branch
-                    .as_ref()
-                    .is_none_or(|branch| package.version == *branch)
-                && requirement.version.as_deref().is_none_or(|_| {
-                    git::locked_version_matches(requirement.version.as_deref(), &package.version)
-                })
-        })
-    {
-        let package = old.unwrap();
-        Ok((package.version.clone(), package.revision.clone()))
-    } else {
-        if offline && !source.is_local() {
-            return Err(AruError::msg(format!(
-                "offline mode cannot resolve remote Git source {}",
-                source.identity
-            )));
-        }
-        let resolved = git::resolve(
-            source,
-            requirement.version.as_deref(),
-            requirement.branch.as_deref(),
-            requirement.rev.as_deref(),
-        )?;
-        Ok((resolved.version, resolved.revision))
-    }
+    let old = old.map(|package| git::LockedReference {
+        requirement: &package.requirement,
+        version: &package.version,
+        revision: &package.revision,
+    });
+    let resolved = git::select_reference(
+        source,
+        skill_reference(requirement),
+        old,
+        git::ReferencePolicy {
+            update,
+            offline,
+            ..git::ReferencePolicy::default()
+        },
+        &format!("Git source {}", source.identity),
+    )?;
+    Ok((resolved.version, resolved.revision))
 }
 
 fn validate_skill_hint(
@@ -558,22 +541,19 @@ fn normalized_mcp(requirement: &McpRequirement) -> McpRequirement {
 }
 
 fn normalize_semver_requirement(requirement: &str) -> String {
-    semver::VersionReq::parse(requirement)
-        .map(|requirement| requirement.to_string())
-        .unwrap_or_else(|_| requirement.to_owned())
+    git::normalize_version_requirement(requirement)
+}
+
+fn skill_reference(requirement: &SkillRequirement) -> git::ReferenceSpec<'_> {
+    git::ReferenceSpec::new(
+        requirement.version.as_deref(),
+        requirement.branch.as_deref(),
+        requirement.rev.as_deref(),
+    )
 }
 
 fn skill_requirement_descriptor(requirement: &SkillRequirement) -> String {
-    if let Some(rev) = &requirement.rev {
-        format!("rev:{}", rev.to_ascii_lowercase())
-    } else if let Some(branch) = &requirement.branch {
-        format!("branch:{branch}")
-    } else {
-        format!(
-            "version:{}",
-            normalize_semver_requirement(requirement.version.as_deref().unwrap_or("*"))
-        )
-    }
+    skill_reference(requirement).descriptor()
 }
 
 fn locked_skill(skill: &DiscoveredSkill) -> LockedSkill {

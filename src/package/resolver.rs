@@ -345,64 +345,26 @@ impl GraphResolver<'_> {
         requirement: &PackageRequirement,
         old: Option<&AruPackage>,
     ) -> Result<(String, String)> {
-        let descriptor = requirement_descriptor(requirement);
-        if self.options.locked {
-            let old = old.ok_or_else(|| {
-                AruError::msg(format!(
-                    "aru.lock is missing aru package {}",
-                    source.identity
-                ))
-            })?;
-            if old.requirement != descriptor {
-                return Err(AruError::msg(format!(
-                    "aru.lock is stale for aru package {}",
-                    source.identity
-                )));
-            }
-            return Ok((old.version.clone(), old.revision.clone()));
-        }
-        if let Some(old) = old
-            && !self.options.update.contains(&source.identity)
-            && old.requirement == descriptor
-            && locked_matches(requirement, old)
-        {
-            return Ok((old.version.clone(), old.revision.clone()));
-        }
-        if self.options.offline && !source.is_local() {
-            return Err(AruError::msg(format!(
-                "offline mode cannot resolve remote aru package {}",
-                source.identity
-            )));
-        }
-        let precise = self.options.precise.get(&source.identity);
-        if precise.is_some() && (requirement.branch.is_some() || requirement.rev.is_some()) {
-            return Err(AruError::msg(
-                "--precise can only update a SemVer aru package requirement",
-            ));
-        }
-        let exact = precise.map(|version| format!("={version}"));
-        if let Some(version) = precise {
-            let parsed = semver::Version::parse(version).map_err(|error| {
-                AruError::msg(format!(
-                    "invalid precise package version {version:?}: {error}"
-                ))
-            })?;
-            if let Some(requirement) = &requirement.version {
-                let requirement = semver::VersionReq::parse(requirement).map_err(|error| {
-                    AruError::msg(format!("invalid package requirement: {error}"))
-                })?;
-                if !requirement.matches(&parsed) {
-                    return Err(AruError::msg(format!(
-                        "precise version {version} does not satisfy declared requirement {requirement}"
-                    )));
-                }
-            }
-        }
-        let resolved = git::resolve(
+        let old = old.map(|package| git::LockedReference {
+            requirement: &package.requirement,
+            version: &package.version,
+            revision: &package.revision,
+        });
+        let resolved = git::select_reference(
             source,
-            exact.as_deref().or(requirement.version.as_deref()),
-            requirement.branch.as_deref(),
-            requirement.rev.as_deref(),
+            package_reference(requirement),
+            old,
+            git::ReferencePolicy {
+                locked: self.options.locked,
+                update: self.options.update.contains(&source.identity),
+                offline: self.options.offline,
+                precise: self
+                    .options
+                    .precise
+                    .get(&source.identity)
+                    .map(String::as_str),
+            },
+            &format!("aru package {}", source.identity),
         )?;
         Ok((resolved.version, resolved.revision))
     }
@@ -643,32 +605,16 @@ fn canonical_trust(
     Ok(trust)
 }
 
-fn requirement_descriptor(requirement: &PackageRequirement) -> String {
-    if let Some(revision) = &requirement.rev {
-        format!("rev:{}", revision.to_ascii_lowercase())
-    } else if let Some(branch) = &requirement.branch {
-        format!("branch:{branch}")
-    } else {
-        let requirement = requirement.version.as_deref().unwrap_or("*");
-        let normalized = semver::VersionReq::parse(requirement)
-            .map(|requirement| requirement.to_string())
-            .unwrap_or_else(|_| requirement.into());
-        format!("version:{normalized}")
-    }
+fn package_reference(requirement: &PackageRequirement) -> git::ReferenceSpec<'_> {
+    git::ReferenceSpec::new(
+        requirement.version.as_deref(),
+        requirement.branch.as_deref(),
+        requirement.rev.as_deref(),
+    )
 }
 
-fn locked_matches(requirement: &PackageRequirement, package: &AruPackage) -> bool {
-    requirement
-        .rev
-        .as_ref()
-        .is_none_or(|revision| package.revision.starts_with(&revision.to_ascii_lowercase()))
-        && requirement
-            .branch
-            .as_ref()
-            .is_none_or(|branch| package.version == *branch)
-        && requirement.version.as_deref().is_none_or(|_| {
-            git::locked_version_matches(requirement.version.as_deref(), &package.version)
-        })
+fn requirement_descriptor(requirement: &PackageRequirement) -> String {
+    package_reference(requirement).descriptor()
 }
 
 fn load_checkout(

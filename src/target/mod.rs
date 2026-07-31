@@ -1,6 +1,8 @@
 pub mod claude;
 pub mod codex;
 pub mod instructions;
+pub(crate) mod mcp;
+pub(crate) mod skill;
 
 use serde_json::{Map, Value, json};
 
@@ -62,6 +64,19 @@ pub fn mcp_targets(targets: &[Target]) -> Vec<Target> {
         .copied()
         .filter(|target| capabilities(*target).mcp)
         .collect()
+}
+
+pub(crate) fn supports_mcp_candidate(
+    target: Target,
+    transport: &str,
+    has_command: bool,
+    has_url: bool,
+) -> bool {
+    match transport {
+        "stdio" => capabilities(target).mcp && has_command,
+        "streamable-http" => capabilities(target).mcp && has_url,
+        _ => false,
+    }
 }
 
 pub fn normalized_entry(target: &McpTarget) -> Result<Value> {

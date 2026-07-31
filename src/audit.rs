@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Component, Path};
 
 use serde::Serialize;
@@ -8,8 +8,7 @@ use crate::error::{AruError, Result};
 use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, ManifestDocument};
 use crate::ownership::{STATE_FILE, State};
-use crate::resolver::SkillResolutionHint;
-use crate::sync::{SyncOptions, prepare};
+use crate::sync::{ReconcileRequest, prepare_request};
 use crate::transaction::JOURNAL_FILE;
 
 const REPORT_VERSION: u32 = 1;
@@ -424,30 +423,11 @@ fn inspect_projection(
     lock: &Lockfile,
     findings: &mut Vec<Finding>,
 ) {
-    let update_skills = BTreeSet::new();
-    let update_mcp = BTreeSet::new();
-    let update_packages = BTreeSet::new();
-    let precise_packages = BTreeMap::new();
-    let skill_hints = BTreeMap::<String, SkillResolutionHint>::new();
-    match prepare(
+    match prepare_request(
         project,
         manifest,
-        SyncOptions {
-            previous: Some(lock),
-            locked: true,
-            offline: true,
-            materialize_skills: false,
-            dry_run: true,
-            project_projections: true,
-            force: false,
-            merge_instructions: false,
-            manifest_bytes: None,
-            update_skills: &update_skills,
-            update_mcp: &update_mcp,
-            update_packages: &update_packages,
-            precise_packages: &precise_packages,
-            skill_hints: &skill_hints,
-        },
+        Some(lock),
+        ReconcileRequest::check_project(),
     ) {
         Ok(prepared) => {
             for item in prepared.plan {

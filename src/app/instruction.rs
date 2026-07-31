@@ -5,6 +5,9 @@ use crate::cli::{InstructionAddArgs, InstructionRemoveArgs};
 use crate::error::{AruError, Result};
 use crate::instruction::discovery::discover_agents;
 use crate::manifest::{InstructionSource, InstructionSourceScope, ManifestDocument};
+use crate::sync::CollisionPolicy;
+
+use super::ProjectionPolicy;
 
 pub(super) fn add(
     project: &Path,
@@ -52,18 +55,15 @@ pub(super) fn add(
         document.set_instruction_sources(&sources);
     }
     let manifest = document.manifest()?;
-    super::execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        args.merge,
-        args.force,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
+    let projection = if args.no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(CollisionPolicy::from_flags(args.merge, args.force)?)
+    };
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes());
+    super::execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn remove(
@@ -94,18 +94,15 @@ pub(super) fn remove(
     sources.retain(|source| !source.files.is_empty());
     document.set_instruction_sources(&sources);
     let manifest = document.manifest()?;
-    super::execute(
-        project,
-        &manifest,
-        Some(document.bytes()),
-        args.dry_run,
-        policy,
-        !args.no_sync,
-        false,
-        false,
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )
+    let projection = if args.no_sync {
+        ProjectionPolicy::LockOnly
+    } else {
+        ProjectionPolicy::Project(CollisionPolicy::Reject)
+    };
+    let request = policy
+        .request(args.dry_run, projection)
+        .with_manifest_bytes(document.bytes());
+    super::execute(project, &manifest, request, policy.output)
 }
 
 pub(super) fn list(project: &Path) -> Result<()> {
