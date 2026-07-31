@@ -20,3 +20,8 @@ package-registry = "npm"
 [mcp.yfinance]
 command = "uvx"
 args = ["--with", "mcp<2", "yfmcp@0.12.2"]
+
+[mcp.firecrawl]
+command = "npx"
+args = ["-y", "firecrawl-mcp@3.23.0"]
+env-vars = ["FIRECRAWL_API_KEY"]
