@@ -26,6 +26,8 @@ pub enum AruError {
     },
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("command reported blocking findings")]
+    Reported,
 }
 
 impl AruError {

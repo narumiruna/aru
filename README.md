@@ -11,6 +11,7 @@ Declare what your project needs in `aru.toml`, pin the exact result in `aru.lock
 
 | Resource | Source of truth | Target result |
 | --- | --- | --- |
+| Native packages | Git repositories with `aru-package.toml` | Composed instructions, skills, trusted MCP, and package dependencies |
 | Instructions | Existing `AGENTS.md` files or configured Markdown sources | Native use, Claude imports/rules, or Copilot instructions |
 | Agent Skills | Git repositories | Codex and Claude project skill directories |
 | MCP servers | Registry packages, HTTPS endpoints, or stdio argv | Codex and Claude MCP configuration |
@@ -21,11 +22,15 @@ Aru is designed to be reproducible and fail closed: it validates the complete op
 
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Manage native packages](#manage-native-packages)
 - [Manage instructions](#manage-instructions)
 - [Manage skills](#manage-skills)
 - [Manage MCP servers](#manage-mcp-servers)
 - [Manage targets](#manage-targets)
 - [Lock and sync](#lock-and-sync)
+- [Inspect packages and metadata](#inspect-packages-and-metadata)
+- [Audit project integrity](#audit-project-integrity)
+- [Export locked inventory](#export-locked-inventory)
 - [Project files](#project-files)
 - [Target capabilities](#target-capabilities)
 - [Safety and recovery](#safety-and-recovery)
@@ -130,6 +135,46 @@ You now have:
 - **`aru.lock`** — exact, reproducible resolutions and projections
 - **Target files** — reconciled instructions, skills, and MCP configuration
 
+<a id="manage-native-packages"></a>
+
+## 📦 Manage native packages
+
+A native aru package is a Git repository with a root `aru-package.toml`. It can export embedded instructions, skills, trusted MCP declarations, and bounded transitive package dependencies.
+
+```console
+aru add owner/agent-kit
+aru add owner/agent-kit --version '^1.2'
+aru add ../local-agent-kit --target codex --target claude
+aru add owner/mcp-kit --trust-mcp docs
+```
+
+`add` updates `aru.toml`, resolves the complete package graph into `aru.lock`, and synchronizes projections by default. Use `--no-sync` to defer target paths or `--dry-run` to use temporary storage and write nothing. Package instructions that need to join an existing unmanaged `AGENTS.md` require explicit `--merge`; `--force` remains destructive takeover.
+
+Compatible lock nodes remain pinned during ordinary sync. Preview or apply updates with Cargo-style selection:
+
+```console
+aru update --dry-run
+aru update
+aru update owner/agent-kit
+aru update owner/agent-kit --precise 1.2.3
+aru remove owner/agent-kit
+```
+
+Package-provided MCP servers are denied by default. `--trust-mcp NAME` records a root, credential-free decision for that package source; it never bypasses transport, target, secret, or ownership validation. Transitive local paths, scripts, hooks, duplicate exports, cycles, conflicting source requirements, unsupported targets, and oversized graphs fail before project writes.
+
+Package authors can validate inventory and build a deterministic archive from a clean package Git root:
+
+```console
+aru package --list
+aru package
+aru package --output dist/agent-kit.tar.gz
+aru package --allow-dirty
+```
+
+`package` validates the current `aru-package.toml`, archive paths/content, and dependency graph before writing. It includes tracked and non-ignored files, rejects symlinks/special files/case collisions/hidden controls, and normalizes tar ordering, timestamps, ownership, and permissions. Dirty input requires explicit `--allow-dirty`; `.aru/`, ignored files, and `target/aru-package/` are excluded.
+
+See the complete [`aru-package.toml`, graph, trust, and archive contracts](docs/formats.md#native-aru-packages).
+
 <a id="manage-instructions"></a>
 
 ## 📝 Manage instructions
@@ -190,6 +235,7 @@ aru skill add owner/repository -a                 # short form of --all
 aru skill add owner/repository --skill review \
   --skill applying-tdd                            # explicit, repeatable names
 aru skill add owner/repository --path extras/review # non-standard layout
+aru skill add owner/repository --all --target codex  # narrow deployment
 ```
 
 In a pipe, redirected shell, or CI runner, a bare `skill add` fails before fetching. Pass `--all`, `--skill`, or `--path` explicitly. At least one skill must be selected.
@@ -235,13 +281,14 @@ A new source installs normally. An existing SemVer source selects the latest mat
 
 ```console
 aru skill list
+aru skill update --dry-run               # preview current and candidate revisions
 aru skill update                         # update all eligible sources
 aru skill update owner/repository        # update one source
 aru skill remove owner/repository --skill review
 aru skill remove owner/repository        # remove the source
 ```
 
-`skill list` writes deterministic tab-separated `name`, locked version, and canonical source records to stdout.
+`skill list` writes deterministic tab-separated `name`, locked version, and canonical source records to stdout. Repeat `--target` to narrow a skill source to configured, skill-capable targets. Omit it to use every compatible project target.
 
 Ordinary `aru sync` and `aru sync --locked` keep a branch's locked commit. Run `skill update` or add with `--upgrade` to move it. Because force-pushes can make old commits unreachable, prefer immutable SemVer tags for published, long-lived configurations.
 
@@ -271,7 +318,14 @@ aru mcp add \
   --bearer-token-env DOCS_MCP_TOKEN
 ```
 
-Aru stores only the environment variable name or placeholder, never its secret value.
+Aru stores only the environment variable name or placeholder, never its secret value. Repeat `--target` to narrow any MCP declaration to configured MCP-capable targets:
+
+```console
+aru mcp add \
+  --url https://docs.example.com/mcp \
+  --name docs \
+  --target claude
+```
 
 ### Direct stdio command
 
@@ -292,6 +346,7 @@ Update or remove servers by project-local name:
 
 ```console
 aru mcp list
+aru mcp update --dry-run
 aru mcp update context
 aru mcp remove docs
 ```
@@ -366,6 +421,56 @@ Aru sends list data to stdout and human-readable status to stderr. Normal status
 Use `-v` when exact revisions and digests are needed. Status meaning never depends on color.
 
 Changing `project.targets` by hand does not unlock package versions, but it invalidates the projection hash. A locked sync will fail until a normal sync updates per-target projections. Prefer `aru target add`, `remove`, or `set` so all related state changes in one transaction.
+
+<a id="inspect-packages-and-metadata"></a>
+
+## 🌳 Inspect packages and metadata
+
+Inspection commands read validated lock evidence and write no project state:
+
+```console
+aru tree
+aru tree --depth 2 --target claude
+aru tree --invert shared-rules
+aru tree --format json
+aru info agent-kit
+aru metadata --format-version 1
+aru metadata --format-version 1 --no-deps
+```
+
+`tree` renders a deterministic deduplicated package graph; `--invert` shows reverse dependencies. `info` uses exact locked evidence when installed and can inspect an undeclared Git package through bounded temporary storage. `metadata` requires an explicit contract version, emits JSON only to stdout, removes URL credentials, and never fetches; `--no-deps` limits package records to direct graph roots.
+
+<a id="audit-project-integrity"></a>
+
+## 🔍 Audit project integrity
+
+Run a detailed, local integrity review without changing project or cache state:
+
+```console
+aru audit
+aru audit --format json
+aru audit --format json --output audit.json
+```
+
+Audit checks manifest and lock consistency, pending recovery, ownership references, target projection drift, deployed skill content, and hidden Unicode format controls in instructions and deployed skills. Ordinary multilingual text and emoji are accepted. Bidi controls, zero-width format controls, and unexpected byte-order marks are blocking findings with exact path, line, column, and code point.
+
+`aru sync --check` remains the concise exact-state gate. `aru audit` provides versioned, sorted findings and remediation guidance. It is non-interactive, uses no network, never repairs state, and exits non-zero when blocking findings exist. JSON schema version 1 is written to stdout unless `--output` is explicit; human findings and status use stderr.
+
+<a id="export-locked-inventory"></a>
+
+## 📤 Export locked inventory
+
+Export the existing lock as a deterministic CycloneDX 1.5 inventory:
+
+```console
+aru export --format cyclonedx1.5
+aru export --format cyclonedx1.5 --output-file sbom.json
+aru export --format cyclonedx1.5 --timestamp 2026-07-31T00:00:00Z
+```
+
+Export reads and validates `aru.lock` only. It performs no resolution, source fetch, source rehash, ownership update, or target write. Components and relationships are sorted, URL credentials are removed, and unknown or invalid URLs fail rather than produce a partial inventory. Omit `--timestamp` for timestamp-free deterministic output, or provide an RFC 3339 UTC value for byte-stable metadata.
+
+The result is a dependency inventory, not a vulnerability, license, provenance, or security attestation. SPDX is not part of the first export contract.
 
 <a id="project-files"></a>
 

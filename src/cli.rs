@@ -12,6 +12,27 @@ pub enum ColorChoice {
     Never,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum AuditFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ExportFormat {
+    #[default]
+    #[value(name = "cyclonedx1.5")]
+    CycloneDx15,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum TreeFormat {
+    #[default]
+    Text,
+    Json,
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "aru",
@@ -19,7 +40,7 @@ pub enum ColorChoice {
     about = "Project manager for coding-agent instructions, skills, and MCP servers"
 )]
 pub struct Cli {
-    /// Project directory (defaults to the nearest ancestor containing aru.toml).
+    /// Project or package directory (defaults to the nearest relevant manifest).
     #[arg(
         long,
         global = true,
@@ -68,10 +89,28 @@ pub struct Cli {
 pub enum Command {
     /// Initialize an aru project.
     Init(InitArgs),
+    /// Add a native aru package dependency.
+    Add(PackageAddArgs),
+    /// Remove a native aru package dependency.
+    Remove(PackageRemoveArgs),
+    /// Update all or selected native aru packages.
+    Update(PackageUpdateArgs),
     /// Update aru.lock without projecting files.
     Lock(LockArgs),
     /// Reconcile the lock and configured target project paths.
     Sync(SyncArgs),
+    /// Inspect project integrity without changing project state.
+    Audit(AuditArgs),
+    /// Export a deterministic inventory from aru.lock.
+    Export(ExportArgs),
+    /// Display the locked native-package dependency graph.
+    Tree(TreeArgs),
+    /// Inspect one locked or available native package.
+    Info(InfoArgs),
+    /// Print versioned machine-readable project metadata.
+    Metadata(MetadataArgs),
+    /// Build a verified deterministic native-package archive.
+    Package(PackageArchiveArgs),
     /// Manage project instructions.
     Instruction {
         #[command(subcommand)]
@@ -95,6 +134,52 @@ pub enum Command {
 }
 
 #[derive(Debug, Args)]
+pub struct TreeArgs {
+    /// Output format.
+    #[arg(long, value_enum, default_value_t)]
+    pub format: TreeFormat,
+    /// Limit package graph depth (the project root is depth 0).
+    #[arg(long, value_name = "N")]
+    pub depth: Option<usize>,
+    /// Show only packages effective for this target.
+    #[arg(long, value_name = "TARGET")]
+    pub target: Option<Target>,
+    /// Display reverse dependencies for a package selector.
+    #[arg(short = 'i', long, value_name = "PACKAGE")]
+    pub invert: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct InfoArgs {
+    /// Locked package name/source or a Git source to inspect.
+    #[arg(value_name = "PACKAGE")]
+    pub package: String,
+}
+
+#[derive(Debug, Args)]
+pub struct MetadataArgs {
+    /// Machine contract version (currently 1).
+    #[arg(long, value_name = "VERSION")]
+    pub format_version: u32,
+    /// Include only direct package dependencies.
+    #[arg(long)]
+    pub no_deps: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PackageArchiveArgs {
+    /// List archive paths without writing an archive.
+    #[arg(long, conflicts_with = "output")]
+    pub list: bool,
+    /// Permit tracked modifications and untracked, non-ignored files.
+    #[arg(long)]
+    pub allow_dirty: bool,
+    /// Write the archive to this path.
+    #[arg(long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub struct InitArgs {
     /// Directory to initialize (defaults to the current directory).
     #[arg(value_name = "PATH")]
@@ -102,6 +187,77 @@ pub struct InitArgs {
     /// Target to configure; may be repeated.
     #[arg(long, value_name = "TARGET", required = true, action = ArgAction::Append)]
     pub target: Vec<Target>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
+pub struct PackageAddArgs {
+    /// GitHub owner/repo, Git URL, SSH source, or local Git repository.
+    pub source: String,
+    /// Cargo-style SemVer tag requirement (a bare version uses caret semantics).
+    #[arg(long, help_heading = "Source Options")]
+    pub version: Option<String>,
+    /// Moving Git branch to resolve and pin to an exact commit.
+    #[arg(long, value_name = "NAME", help_heading = "Source Options")]
+    pub branch: Option<String>,
+    /// Exact Git commit (7-40 hexadecimal characters).
+    #[arg(long, help_heading = "Source Options")]
+    pub rev: Option<String>,
+    /// Resolve this package instead of reusing its compatible lock.
+    #[arg(short = 'U', long, help_heading = "Source Options")]
+    pub upgrade: bool,
+    /// Configured target that should receive this package; may be repeated.
+    #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append)]
+    pub targets: Vec<Target>,
+    /// Explicitly trust a package-provided MCP name; may be repeated.
+    #[arg(long = "trust-mcp", value_name = "NAME", action = ArgAction::Append)]
+    pub trust_mcp: Vec<String>,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding package instruction blocks.
+    #[arg(long, conflicts_with = "force", help_heading = "Apply Options")]
+    pub merge: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long, help_heading = "Apply Options")]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PackageRemoveArgs {
+    /// Declared native aru package source.
+    pub source: String,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PackageUpdateArgs {
+    /// Declared or transitive package source; omit to update all.
+    #[arg(value_name = "PACKAGE")]
+    pub packages: Vec<String>,
+    /// Select one exact SemVer version compatible with its declared requirement.
+    #[arg(long, value_name = "VERSION")]
+    pub precise: Option<String>,
+    /// Update lock intent but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
+    /// Preserve unmanaged Markdown while adding package instruction blocks.
+    #[arg(long, conflicts_with = "force", help_heading = "Apply Options")]
+    pub merge: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long, help_heading = "Apply Options")]
+    pub force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -128,6 +284,29 @@ pub struct SyncArgs {
     /// Destructively take over colliding unmanaged entries.
     #[arg(long)]
     pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AuditArgs {
+    /// Select human-readable text or versioned JSON output.
+    #[arg(long, value_enum, default_value_t)]
+    pub format: AuditFormat,
+    /// Write the report to a file instead of stdout or stderr.
+    #[arg(long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// Select the inventory format.
+    #[arg(long, value_enum, default_value_t)]
+    pub format: ExportFormat,
+    /// Write the inventory to a file instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    pub output_file: Option<PathBuf>,
+    /// Set a deterministic RFC 3339 UTC metadata timestamp.
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -271,6 +450,9 @@ pub struct SkillAddArgs {
     /// Exact Git commit (7-40 hexadecimal characters).
     #[arg(long, help_heading = "Source Options")]
     pub rev: Option<String>,
+    /// Configured target that should receive this dependency; may be repeated.
+    #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Selection Options")]
+    pub targets: Vec<Target>,
     /// Resolve the latest compatible tag or branch head instead of reusing the lock.
     #[arg(short = 'U', long, help_heading = "Source Options")]
     pub upgrade: bool,
@@ -364,6 +546,9 @@ pub struct McpAddArgs {
     /// Environment variable containing a bearer token.
     #[arg(long = "bearer-token-env", help_heading = "Authentication Options")]
     pub bearer_token_env: Option<String>,
+    /// Configured target that should receive this dependency; may be repeated.
+    #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Apply Options")]
+    pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,

@@ -594,6 +594,7 @@ mod tests {
             command: None,
             args: Vec::new(),
             bearer_token_env: None,
+            targets: None,
         };
         let found = candidates(&server, &requirement, &[Target::Codex]).unwrap();
         assert_eq!(found.len(), 2);
@@ -629,6 +630,7 @@ mod tests {
             command: None,
             args: Vec::new(),
             bearer_token_env: None,
+            targets: None,
         };
         assert!(
             candidates(&server, &requirement, &[Target::Codex, Target::Claude])
@@ -675,6 +677,7 @@ mod tests {
             command: None,
             args: Vec::new(),
             bearer_token_env: None,
+            targets: None,
         };
         let forward = candidates(&response.server, &requirement, &[Target::Codex]).unwrap();
         let mut reversed_server = response.server;

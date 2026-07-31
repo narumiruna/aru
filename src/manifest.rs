@@ -128,6 +128,8 @@ pub struct SkillRequirement {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub paths: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<Target>>,
 }
 
 fn wildcard() -> Vec<String> {
@@ -143,6 +145,7 @@ impl Default for SkillRequirement {
             include: wildcard(),
             exclude: Vec::new(),
             paths: BTreeMap::new(),
+            targets: None,
         }
     }
 }
@@ -159,6 +162,9 @@ impl SkillRequirement {
             self.include = wildcard();
         } else {
             self.exclude.clear();
+        }
+        if let Some(targets) = &mut self.targets {
+            targets.sort();
         }
     }
 
@@ -198,6 +204,102 @@ impl SkillRequirement {
         }
         Ok(())
     }
+
+    pub fn validate_targets(&self, source: &str, project_targets: &[Target]) -> Result<()> {
+        validate_dependency_targets(
+            self.targets.as_deref(),
+            project_targets,
+            &format!("skill source {source:?}"),
+            |target| crate::target::capabilities(target).skills,
+            "Agent Skills",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PackageRequirement {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<Target>>,
+}
+
+impl PackageRequirement {
+    pub fn normalize(&mut self) {
+        if let Some(targets) = &mut self.targets {
+            targets.sort();
+        }
+    }
+
+    pub fn validate(&self, source: &str, parent_targets: &[Target]) -> Result<()> {
+        let references = usize::from(self.version.is_some())
+            + usize::from(self.branch.is_some())
+            + usize::from(self.rev.is_some());
+        if references > 1 {
+            return Err(AruError::msg(format!(
+                "aru package {source:?} can set only one of version, branch, or rev"
+            )));
+        }
+        if let Some(version) = &self.version {
+            semver::VersionReq::parse(version).map_err(|error| {
+                AruError::msg(format!(
+                    "invalid aru package SemVer requirement {version:?}: {error}"
+                ))
+            })?;
+        }
+        if let Some(branch) = &self.branch {
+            validate_branch_name(branch)?;
+        }
+        if let Some(revision) = &self.rev {
+            let valid = (7..=40).contains(&revision.len())
+                && revision.bytes().all(|byte| byte.is_ascii_hexdigit());
+            if !valid {
+                return Err(AruError::msg(format!(
+                    "invalid aru package Git revision {revision:?}"
+                )));
+            }
+        }
+        validate_dependency_targets(
+            self.targets.as_deref(),
+            parent_targets,
+            &format!("aru package {source:?}"),
+            |_| true,
+            "configured targets",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PackageTrust {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
+}
+
+impl PackageTrust {
+    pub fn normalize(&mut self) {
+        sort_dedup(&mut self.mcp);
+    }
+
+    pub fn validate(&self, source: &str) -> Result<()> {
+        if self.mcp.is_empty() {
+            return Err(AruError::msg(format!(
+                "package trust {source:?} must name at least one MCP server"
+            )));
+        }
+        if self.mcp.iter().collect::<BTreeSet<_>>().len() != self.mcp.len() {
+            return Err(AruError::msg(format!(
+                "package trust {source:?} contains duplicate MCP names"
+            )));
+        }
+        for name in &self.mcp {
+            validate_name(name, "trusted package MCP name")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -228,6 +330,8 @@ pub struct McpRequirement {
         skip_serializing_if = "Option::is_none"
     )]
     pub bearer_token_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<Vec<Target>>,
 }
 
 impl McpRequirement {
@@ -301,6 +405,16 @@ impl McpRequirement {
         }
         Ok(())
     }
+
+    pub fn validate_targets(&self, name: &str, project_targets: &[Target]) -> Result<()> {
+        validate_dependency_targets(
+            self.targets.as_deref(),
+            project_targets,
+            &format!("MCP {name:?}"),
+            |target| crate::target::capabilities(target).mcp,
+            "MCP",
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -312,6 +426,10 @@ pub struct Manifest {
     pub skills: BTreeMap<String, SkillRequirement>,
     #[serde(default)]
     pub mcp: BTreeMap<String, McpRequirement>,
+    #[serde(default)]
+    pub packages: BTreeMap<String, PackageRequirement>,
+    #[serde(default, rename = "package-trust")]
+    pub package_trust: BTreeMap<String, PackageTrust>,
 }
 
 impl Manifest {
@@ -328,9 +446,17 @@ impl Manifest {
         }
         for (source, requirement) in &self.skills {
             requirement.validate(source)?;
+            requirement.validate_targets(source, &self.project.targets)?;
         }
         for (name, requirement) in &self.mcp {
             requirement.validate(name)?;
+            requirement.validate_targets(name, &self.project.targets)?;
+        }
+        for (source, requirement) in &self.packages {
+            requirement.validate(source, &self.project.targets)?;
+        }
+        for (source, trust) in &self.package_trust {
+            trust.validate(source)?;
         }
         Ok(())
     }
@@ -352,7 +478,14 @@ impl ManifestDocument {
                 path.display()
             ))
         })?;
-        for key in ["project", "instructions", "skills", "mcp"] {
+        for key in [
+            "project",
+            "instructions",
+            "skills",
+            "mcp",
+            "packages",
+            "package-trust",
+        ] {
             if doc.get(key).is_some_and(|item| !item.is_table()) {
                 return Err(AruError::msg(format!(
                     "{key} must use a TOML table so aru can edit it without losing unrelated content"
@@ -444,6 +577,31 @@ impl ManifestDocument {
         }
     }
 
+    pub fn set_package(&mut self, source: &str, requirement: &PackageRequirement) {
+        table_mut_or_insert(&mut self.doc, "packages")[source] =
+            Item::Value(package_inline(requirement).into());
+    }
+
+    pub fn remove_package(&mut self, source: &str) {
+        if let Some(table) = existing_table_mut(&mut self.doc, "packages") {
+            table.remove(source);
+        }
+    }
+
+    pub fn set_package_trust(&mut self, source: &str, trust: &PackageTrust) {
+        let mut table = Table::new();
+        if !trust.mcp.is_empty() {
+            table["mcp"] = Item::Value(string_array(&trust.mcp).into());
+        }
+        table_mut_or_insert(&mut self.doc, "package-trust")[source] = Item::Table(table);
+    }
+
+    pub fn remove_package_trust(&mut self, source: &str) {
+        if let Some(table) = existing_table_mut(&mut self.doc, "package-trust") {
+            table.remove(source);
+        }
+    }
+
     pub fn bytes(&self) -> Vec<u8> {
         self.doc.to_string().into_bytes()
     }
@@ -488,6 +646,26 @@ fn skill_inline(requirement: &SkillRequirement) -> InlineTable {
         }
         table.insert("paths", Value::InlineTable(paths));
     }
+    if let Some(targets) = &requirement.targets {
+        table.insert("targets", Value::Array(target_array(targets)));
+    }
+    table
+}
+
+fn package_inline(requirement: &PackageRequirement) -> InlineTable {
+    let mut table = InlineTable::new();
+    if let Some(version) = &requirement.version {
+        table.insert("version", Value::from(version.as_str()));
+    }
+    if let Some(branch) = &requirement.branch {
+        table.insert("branch", Value::from(branch.as_str()));
+    }
+    if let Some(revision) = &requirement.rev {
+        table.insert("rev", Value::from(revision.as_str()));
+    }
+    if let Some(targets) = &requirement.targets {
+        table.insert("targets", Value::Array(target_array(targets)));
+    }
     table
 }
 
@@ -509,6 +687,9 @@ fn mcp_table(requirement: &McpRequirement) -> Table {
     }
     if !requirement.args.is_empty() {
         table["args"] = Item::Value(string_array(&requirement.args).into());
+    }
+    if let Some(targets) = &requirement.targets {
+        table["targets"] = Item::Value(target_array(targets).into());
     }
     table
 }
@@ -609,271 +790,46 @@ pub fn validate_https_url(value: &str, kind: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_dependency_targets(
+    targets: Option<&[Target]>,
+    project_targets: &[Target],
+    resource: &str,
+    supports: impl Fn(Target) -> bool,
+    capability: &str,
+) -> Result<()> {
+    let Some(targets) = targets else {
+        return Ok(());
+    };
+    if targets.is_empty() {
+        return Err(AruError::msg(format!(
+            "{resource} dependency targets must not be empty"
+        )));
+    }
+    let unique: BTreeSet<_> = targets.iter().collect();
+    if unique.len() != targets.len() {
+        return Err(AruError::msg(format!(
+            "{resource} dependency targets contains duplicates"
+        )));
+    }
+    for target in targets {
+        if !project_targets.contains(target) {
+            return Err(AruError::msg(format!(
+                "{resource} dependency target {target} is not declared in project.targets"
+            )));
+        }
+        if !supports(*target) {
+            return Err(AruError::msg(format!(
+                "{resource} dependency target {target} does not support {capability}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn sort_dedup(values: &mut Vec<String>) {
     values.sort();
     values.dedup();
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mutation_preserves_unrelated_comments() {
-        let text = "# heading\nfuture = 1\n\n[project]\ntargets = [\"codex\"] # keep\n\n[skills]\n# package note\n\"owner/repo\" = { include = [\"old\"] }\n\n[custom]\nanswer = 42\n";
-        let doc = text.parse::<DocumentMut>().unwrap();
-        let mut document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc,
-        };
-        document.set_skill(
-            "owner/repo",
-            &SkillRequirement {
-                include: vec!["new".into()],
-                ..SkillRequirement::default()
-            },
-        );
-        let output = String::from_utf8(document.bytes()).unwrap();
-        assert!(output.contains("# heading"));
-        assert!(output.contains("# package note"));
-        assert!(output.contains("[custom]\nanswer = 42"));
-        assert!(output.contains("include = [\"new\"]"));
-    }
-
-    #[test]
-    fn optional_tables_are_created_only_when_mutated() {
-        let text =
-            "# keep\nfuture = 1\n\n[project]\ntargets = [\"codex\"]\n\n[custom]\nanswer = 42\n";
-        let document = || ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-
-        let mut instructions = document();
-        instructions.set_instruction_sources(&[InstructionSource {
-            files: vec!["AGENTS.md".into()],
-            exclude: Vec::new(),
-            scope: Some(InstructionSourceScope::SourceDirectory),
-            apply_to: Vec::new(),
-            targets: Vec::new(),
-        }]);
-        let instructions_output = String::from_utf8(instructions.bytes()).unwrap();
-        assert!(instructions_output.contains("[[instructions.sources]]"));
-        assert!(!instructions_output.contains("[skills]"));
-        assert!(!instructions_output.contains("[mcp]"));
-        assert!(instructions_output.contains("[custom]\nanswer = 42"));
-        assert_eq!(
-            instructions.manifest().unwrap().instructions.sources.len(),
-            1
-        );
-
-        let mut skills = document();
-        skills.set_skill("owner/repo", &SkillRequirement::default());
-        let skills_output = String::from_utf8(skills.bytes()).unwrap();
-        assert!(skills_output.contains("[skills]"));
-        assert!(!skills_output.contains("[instructions]"));
-        assert!(!skills_output.contains("[mcp]"));
-        assert!(skills_output.contains("[custom]\nanswer = 42"));
-        assert_eq!(skills.manifest().unwrap().skills.len(), 1);
-
-        let mut mcp = document();
-        mcp.set_mcp(
-            "demo",
-            &McpRequirement {
-                registry: None,
-                server: None,
-                version: None,
-                transport: None,
-                package_registry: None,
-                url: None,
-                command: Some("demo-mcp".into()),
-                args: Vec::new(),
-                bearer_token_env: None,
-            },
-        );
-        let mcp_output = String::from_utf8(mcp.bytes()).unwrap();
-        assert!(mcp_output.contains("[mcp.demo]"));
-        assert!(!mcp_output.contains("[instructions]"));
-        assert!(!mcp_output.contains("[skills]"));
-        assert!(mcp_output.contains("[custom]\nanswer = 42"));
-        assert_eq!(mcp.manifest().unwrap().mcp.len(), 1);
-    }
-
-    #[test]
-    fn removing_from_absent_optional_tables_is_a_noop() {
-        let text =
-            "# keep\nfuture = 1\n\n[project]\ntargets = [\"codex\"]\n\n[custom]\nanswer = 42\n";
-        let mut document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-
-        document.remove_skill("missing");
-        document.remove_mcp("missing");
-
-        assert_eq!(document.bytes(), text.as_bytes());
-        assert!(document.manifest().is_ok());
-    }
-
-    #[test]
-    fn target_mutation_preserves_the_key_comment_and_unrelated_content() {
-        let text = "# heading\nfuture = 1\n\n[project]\ntargets = [\"codex\"] # why this set exists\n\n[custom]\nanswer = 42\n";
-        let mut document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-
-        document.set_targets(&[Target::Codex, Target::Claude]);
-
-        let output = String::from_utf8(document.bytes()).unwrap();
-        assert!(output.contains("targets = [\"codex\", \"claude\"] # why this set exists"));
-        assert!(output.starts_with("# heading\nfuture = 1"));
-        assert!(output.contains("[custom]\nanswer = 42"));
-    }
-
-    #[test]
-    fn branch_fixture_round_trips_without_manifest_schema() {
-        let fixture = include_str!("../tests/fixtures/contracts/aru-branch.toml");
-        let document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: fixture.parse().unwrap(),
-        };
-        let manifest = document.manifest().unwrap();
-        assert_eq!(
-            manifest.skills["owner/repository"].branch.as_deref(),
-            Some("main")
-        );
-        assert_eq!(document.bytes(), fixture.as_bytes());
-        assert!(!fixture.contains("schema ="));
-        assert!(
-            !String::from_utf8(ManifestDocument::new(&[Target::Codex]).bytes())
-                .unwrap()
-                .contains("schema =")
-        );
-    }
-
-    #[test]
-    fn branch_mutation_preserves_comments_and_reference_kinds_are_exclusive() {
-        let text = "# keep\nfuture = 999\n\n[project]\ntargets = [\"codex\"]\n\n[skills]\n";
-        let mut document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-        document.set_skill(
-            "owner/repo",
-            &SkillRequirement {
-                branch: Some("main".into()),
-                ..SkillRequirement::default()
-            },
-        );
-        assert!(document.manifest().is_ok());
-        let output = String::from_utf8(document.bytes()).unwrap();
-        assert!(output.starts_with("# keep\nfuture = 999"));
-        assert!(output.contains("branch = \"main\""));
-
-        let invalid = SkillRequirement {
-            version: Some("1.0.0".into()),
-            branch: Some("main".into()),
-            ..SkillRequirement::default()
-        };
-        assert!(invalid.validate("owner/repo").is_err());
-    }
-
-    #[test]
-    fn instruction_sources_parse_and_validate_scope_and_targets() {
-        let text = r#"
-[project]
-targets = ["codex", "claude", "copilot", "pi", "opencode"]
-
-[[instructions.sources]]
-files = ["AGENTS.md", "src/**/AGENTS.md"]
-exclude = ["target/**"]
-scope = "source-directory"
-
-[[instructions.sources]]
-files = ["docs/rust.md"]
-apply-to = ["**/*.rs"]
-targets = ["claude", "copilot"]
-"#;
-        let document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-        let manifest = document.manifest().unwrap();
-        assert_eq!(manifest.instructions.sources.len(), 2);
-        assert_eq!(
-            manifest.instructions.sources[1].targets,
-            [Target::Claude, Target::Copilot]
-        );
-        assert_eq!(document.bytes(), text.as_bytes());
-    }
-
-    #[test]
-    fn instruction_source_rejects_ambiguous_scope_and_undeclared_target() {
-        let source = InstructionSource {
-            files: vec!["AGENTS.md".into()],
-            exclude: Vec::new(),
-            scope: Some(InstructionSourceScope::SourceDirectory),
-            apply_to: vec!["**/*.rs".into()],
-            targets: Vec::new(),
-        };
-        assert!(
-            source
-                .validate(&[Target::Codex, Target::Claude])
-                .unwrap_err()
-                .to_string()
-                .contains("exactly one")
-        );
-        let source = InstructionSource {
-            scope: None,
-            apply_to: vec!["**/*.rs".into()],
-            targets: vec![Target::Copilot],
-            ..source
-        };
-        assert!(
-            source
-                .validate(&[Target::Claude])
-                .unwrap_err()
-                .to_string()
-                .contains("not declared")
-        );
-    }
-
-    #[test]
-    fn instruction_mutation_preserves_unrelated_manifest_content() {
-        let text = "# keep\n[project]\ntargets = [\"claude\"]\n\n[instructions]\n# replace only sources\n\n[custom]\nanswer = 42\n";
-        let mut document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: text.parse().unwrap(),
-        };
-        document.set_instruction_sources(&[InstructionSource {
-            files: vec!["AGENTS.md".into()],
-            exclude: Vec::new(),
-            scope: Some(InstructionSourceScope::SourceDirectory),
-            apply_to: Vec::new(),
-            targets: Vec::new(),
-        }]);
-        let output = String::from_utf8(document.bytes()).unwrap();
-        assert!(output.starts_with("# keep"));
-        assert!(output.contains("# replace only sources"));
-        assert!(output.contains("[custom]\nanswer = 42"));
-        assert!(output.contains("files = [\"AGENTS.md\"]"));
-        assert!(document.manifest().is_ok());
-    }
-
-    #[test]
-    fn manifest_fixture_parses_and_preserves_comments() {
-        let fixture = include_str!("../tests/fixtures/contracts/aru.toml");
-        let document = ManifestDocument {
-            path: PathBuf::from("aru.toml"),
-            doc: fixture.parse().unwrap(),
-        };
-        let manifest = document.manifest().unwrap();
-        assert_eq!(manifest.project.targets.len(), 2);
-        assert_eq!(
-            manifest.skills["owner/repository"].paths["writing-plans"],
-            "skills/writing-plans"
-        );
-        assert_eq!(document.bytes(), fixture.as_bytes());
-    }
-}
+mod tests;

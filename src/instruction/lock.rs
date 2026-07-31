@@ -12,6 +12,7 @@ pub fn locked_sources(units: &[DiscoveredInstruction]) -> Vec<LockedInstructionS
             scope: instruction.unit.scope.clone(),
             targets: instruction.unit.targets.iter().copied().collect(),
             sha256: instruction.unit.source_sha256.clone(),
+            managed: instruction.unit.managed,
         })
         .collect::<Vec<_>>();
     output.sort_by(|left, right| left.source.cmp(&right.source));

@@ -10,6 +10,8 @@ use crate::source::git::{self, GitSource};
 #[derive(Debug)]
 pub struct Cache {
     root: PathBuf,
+    fallback: Option<PathBuf>,
+    invalidated_fallback: std::sync::Mutex<std::collections::BTreeSet<(String, String)>>,
     _ephemeral: Option<tempfile::TempDir>,
 }
 
@@ -17,16 +19,28 @@ impl Cache {
     pub fn project(project: &Path) -> Self {
         Self {
             root: project.join(".aru/cache"),
+            fallback: None,
+            invalidated_fallback: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             _ephemeral: None,
         }
     }
 
     pub fn ephemeral() -> Result<Self> {
+        Self::ephemeral_with_fallback(None)
+    }
+
+    pub fn ephemeral_for_project(project: &Path) -> Result<Self> {
+        Self::ephemeral_with_fallback(Some(project.join(".aru/cache")))
+    }
+
+    fn ephemeral_with_fallback(fallback: Option<PathBuf>) -> Result<Self> {
         let temporary = tempfile::tempdir()
             .map_err(|error| AruError::msg(format!("could not create dry-run cache: {error}")))?;
         let root = temporary.path().join("cache");
         Ok(Self {
             root,
+            fallback,
+            invalidated_fallback: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             _ephemeral: Some(temporary),
         })
     }
@@ -42,6 +56,20 @@ impl Cache {
         offline: bool,
     ) -> Result<PathBuf> {
         let source_hash = source_hash(&source.identity);
+        if let Some(fallback) = &self.fallback {
+            let invalidated = self
+                .invalidated_fallback
+                .lock()
+                .map_err(|_| AruError::msg("dry-run cache invalidation lock was poisoned"))?;
+            if !invalidated.contains(&(source_hash.clone(), revision.to_owned())) {
+                let shard = fallback.join("git").join(&source_hash).join(revision);
+                let marker = shard.join(".complete");
+                let content = shard.join("content");
+                if marker.is_file() && content.is_dir() {
+                    return Ok(content);
+                }
+            }
+        }
         let source_root = self.root.join("git").join(&source_hash);
         std::fs::create_dir_all(&source_root).at(&source_root)?;
         let lock_path = source_root.join(format!(".{revision}.lock"));
@@ -96,7 +124,14 @@ impl Cache {
     }
 
     pub fn invalidate(&self, source: &GitSource, revision: &str) -> Result<()> {
-        let source_root = self.root.join("git").join(source_hash(&source.identity));
+        let hash = source_hash(&source.identity);
+        if self.fallback.is_some() {
+            self.invalidated_fallback
+                .lock()
+                .map_err(|_| AruError::msg("dry-run cache invalidation lock was poisoned"))?
+                .insert((hash.clone(), revision.to_owned()));
+        }
+        let source_root = self.root.join("git").join(hash);
         let lock_path = source_root.join(format!(".{revision}.lock"));
         let lock = open_lock(&lock_path)?;
         lock.lock_exclusive()

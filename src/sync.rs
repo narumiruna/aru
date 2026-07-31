@@ -1,3 +1,6 @@
+mod plan;
+
+use plan::{lock_details, lock_diff_plan, update_previews};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -25,6 +28,8 @@ pub struct SyncOptions<'a> {
     pub manifest_bytes: Option<Vec<u8>>,
     pub update_skills: &'a BTreeSet<String>,
     pub update_mcp: &'a BTreeSet<String>,
+    pub update_packages: &'a BTreeSet<String>,
+    pub precise_packages: &'a BTreeMap<String, String>,
     pub skill_hints: &'a BTreeMap<String, SkillResolutionHint>,
 }
 
@@ -32,6 +37,7 @@ pub struct SyncResult {
     pub lock: Lockfile,
     pub operations: Vec<Operation>,
     pub plan: Vec<String>,
+    pub previews: Vec<String>,
     pub details: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -51,6 +57,8 @@ pub fn prepare(
             materialize_skills: options.materialize_skills,
             update_skills: options.update_skills,
             update_mcp: options.update_mcp,
+            update_packages: options.update_packages,
+            precise_packages: options.precise_packages,
             dry_run: options.dry_run,
             skill_hints: options.skill_hints,
         },
@@ -116,11 +124,19 @@ pub fn prepare(
     plan.sort();
     warnings.sort();
     warnings.dedup();
+    let previews = update_previews(
+        options.previous,
+        &resolution.lock,
+        options.update_skills,
+        options.update_mcp,
+        options.update_packages,
+    );
     let details = lock_details(&resolution.lock);
     Ok(SyncResult {
         lock: resolution.lock,
         operations,
         plan,
+        previews,
         details,
         warnings,
     })
@@ -146,9 +162,9 @@ fn prepare_projections(
     let mut next_state = Vec::new();
     let mut processed = BTreeSet::new();
 
-    let projects_codex = manifest.project.targets.contains(&Target::Codex);
-    let projects_claude = manifest.project.targets.contains(&Target::Claude);
     for package in &lock.skill_packages {
+        let projects_codex = package.targets.contains(&Target::Codex);
+        let projects_claude = package.targets.contains(&Target::Claude);
         for skill in &package.skills {
             let source = skill_sources.get(&skill.name).ok_or_else(|| {
                 AruError::msg(format!("missing materialized skill {:?}", skill.name))
@@ -700,120 +716,6 @@ fn push_file_if_changed(
     Ok(())
 }
 
-fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
-    let mut plan = Vec::new();
-    let previous_instructions: BTreeMap<_, _> = previous
-        .into_iter()
-        .flat_map(|lock| &lock.instruction_sources)
-        .map(|source| (source.source.as_str(), source))
-        .collect();
-    for source in &next.instruction_sources {
-        match previous_instructions.get(source.source.as_str()) {
-            None => plan.push(format!("lock instruction {}", source.source)),
-            Some(previous) if *previous != source && previous.sha256 == source.sha256 => {
-                plan.push(format!(
-                    "refresh instruction {} projection intent",
-                    source.source
-                ));
-            }
-            Some(previous) if *previous != source => {
-                let _ = previous;
-                plan.push(format!("lock instruction {}", source.source));
-            }
-            _ => {}
-        }
-    }
-    let next_instruction_sources = next
-        .instruction_sources
-        .iter()
-        .map(|source| source.source.as_str())
-        .collect::<BTreeSet<_>>();
-    for source in previous_instructions
-        .keys()
-        .filter(|source| !next_instruction_sources.contains(**source))
-    {
-        plan.push(format!("unlock removed instruction {source}"));
-    }
-    let previous_skills: BTreeMap<_, _> = previous
-        .into_iter()
-        .flat_map(|lock| &lock.skill_packages)
-        .flat_map(|package| {
-            package.skills.iter().map(move |skill| {
-                (
-                    skill.name.as_str(),
-                    (package.version.as_str(), skill.sha256.as_str()),
-                )
-            })
-        })
-        .collect();
-    for package in &next.skill_packages {
-        for skill in &package.skills {
-            match previous_skills.get(skill.name.as_str()) {
-                None => plan.push(format!("lock skill {} {}", skill.name, package.version)),
-                Some((version, digest))
-                    if *version != package.version || *digest != skill.sha256 =>
-                {
-                    plan.push(format!(
-                        "lock skill {} {} -> {}",
-                        skill.name, version, package.version
-                    ));
-                }
-                _ => {}
-            }
-        }
-    }
-    let next_names: BTreeSet<_> = next
-        .skill_packages
-        .iter()
-        .flat_map(|package| package.skills.iter().map(|skill| skill.name.as_str()))
-        .collect();
-    for name in previous_skills
-        .keys()
-        .filter(|name| !next_names.contains(**name))
-    {
-        plan.push(format!("unlock removed skill {name}"));
-    }
-    let previous_mcp: BTreeMap<_, _> = previous
-        .into_iter()
-        .flat_map(|lock| &lock.mcp_servers)
-        .map(|server| (server.name.as_str(), server.version.as_str()))
-        .collect();
-    for server in &next.mcp_servers {
-        match previous_mcp.get(server.name.as_str()) {
-            None => plan.push(format!("lock MCP {} {}", server.name, server.version)),
-            Some(version) if *version != server.version => plan.push(format!(
-                "lock MCP {} {} -> {}",
-                server.name, version, server.version
-            )),
-            _ => {}
-        }
-    }
-    plan
-}
-
-fn lock_details(lock: &Lockfile) -> Vec<String> {
-    let mut details = Vec::new();
-    for source in &lock.instruction_sources {
-        details.push(format!("instruction {} {}", source.source, source.sha256));
-    }
-    for package in &lock.skill_packages {
-        for skill in &package.skills {
-            details.push(format!(
-                "skill {} {} {} {} from {}",
-                skill.name, package.version, package.revision, skill.sha256, package.source
-            ));
-        }
-    }
-    for server in &lock.mcp_servers {
-        details.push(format!(
-            "MCP {} {} {}",
-            server.name, server.version, server.metadata_sha256
-        ));
-    }
-    details.sort();
-    details
-}
-
 fn state_identity(entry: &StateEntry) -> (String, String, String) {
     (
         entry.kind.clone(),
@@ -843,6 +745,11 @@ pub fn garbage_collect(project: &Path, lock: &Lockfile) -> Result<()> {
         .skill_packages
         .iter()
         .map(|package| (package.source.clone(), package.revision.clone()))
+        .chain(
+            lock.aru_packages
+                .iter()
+                .map(|package| (package.source.clone(), package.revision.clone())),
+        )
         .collect::<Vec<_>>();
     Cache::project(project).garbage_collect(&referenced)
 }

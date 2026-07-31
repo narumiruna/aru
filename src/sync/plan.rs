@@ -1,0 +1,271 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::lockfile::Lockfile;
+
+pub(super) fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Vec<String> {
+    let mut plan = Vec::new();
+    let previous_packages = previous
+        .into_iter()
+        .flat_map(|lock| &lock.aru_packages)
+        .map(|package| (package.source.as_str(), package))
+        .collect::<BTreeMap<_, _>>();
+    for package in &next.aru_packages {
+        match previous_packages.get(package.source.as_str()) {
+            None => plan.push(format!(
+                "lock aru package {} {}",
+                package.name, package.package_version
+            )),
+            Some(previous)
+                if previous.package_version != package.package_version
+                    || previous.revision != package.revision =>
+            {
+                plan.push(format!(
+                    "lock aru package {} {} -> {}",
+                    package.name, previous.package_version, package.package_version
+                ));
+            }
+            Some(previous) if *previous != package => {
+                plan.push(format!("refresh aru package {} graph intent", package.name));
+            }
+            _ => {}
+        }
+    }
+    let next_package_sources = next
+        .aru_packages
+        .iter()
+        .map(|package| package.source.as_str())
+        .collect::<BTreeSet<_>>();
+    for package in previous_packages
+        .values()
+        .filter(|package| !next_package_sources.contains(package.source.as_str()))
+    {
+        plan.push(format!("unlock removed aru package {}", package.name));
+    }
+    let previous_instructions: BTreeMap<_, _> = previous
+        .into_iter()
+        .flat_map(|lock| &lock.instruction_sources)
+        .map(|source| (source.source.as_str(), source))
+        .collect();
+    for source in &next.instruction_sources {
+        match previous_instructions.get(source.source.as_str()) {
+            None => plan.push(format!("lock instruction {}", source.source)),
+            Some(previous) if *previous != source && previous.sha256 == source.sha256 => {
+                plan.push(format!(
+                    "refresh instruction {} projection intent",
+                    source.source
+                ));
+            }
+            Some(previous) if *previous != source => {
+                let _ = previous;
+                plan.push(format!("lock instruction {}", source.source));
+            }
+            _ => {}
+        }
+    }
+    let next_instruction_sources = next
+        .instruction_sources
+        .iter()
+        .map(|source| source.source.as_str())
+        .collect::<BTreeSet<_>>();
+    for source in previous_instructions
+        .keys()
+        .filter(|source| !next_instruction_sources.contains(**source))
+    {
+        plan.push(format!("unlock removed instruction {source}"));
+    }
+    let previous_skills: BTreeMap<_, _> = previous
+        .into_iter()
+        .flat_map(|lock| &lock.skill_packages)
+        .flat_map(|package| {
+            package.skills.iter().map(move |skill| {
+                (
+                    skill.name.as_str(),
+                    (package.version.as_str(), skill.sha256.as_str()),
+                )
+            })
+        })
+        .collect();
+    for package in &next.skill_packages {
+        for skill in &package.skills {
+            match previous_skills.get(skill.name.as_str()) {
+                None => plan.push(format!("lock skill {} {}", skill.name, package.version)),
+                Some((version, digest))
+                    if *version != package.version || *digest != skill.sha256 =>
+                {
+                    plan.push(format!(
+                        "lock skill {} {} -> {}",
+                        skill.name, version, package.version
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    let next_names: BTreeSet<_> = next
+        .skill_packages
+        .iter()
+        .flat_map(|package| package.skills.iter().map(|skill| skill.name.as_str()))
+        .collect();
+    for name in previous_skills
+        .keys()
+        .filter(|name| !next_names.contains(**name))
+    {
+        plan.push(format!("unlock removed skill {name}"));
+    }
+    let previous_mcp: BTreeMap<_, _> = previous
+        .into_iter()
+        .flat_map(|lock| &lock.mcp_servers)
+        .map(|server| (server.name.as_str(), server.version.as_str()))
+        .collect();
+    for server in &next.mcp_servers {
+        match previous_mcp.get(server.name.as_str()) {
+            None => plan.push(format!("lock MCP {} {}", server.name, server.version)),
+            Some(version) if *version != server.version => plan.push(format!(
+                "lock MCP {} {} -> {}",
+                server.name, version, server.version
+            )),
+            _ => {}
+        }
+    }
+    plan
+}
+
+pub(super) fn update_previews(
+    previous: Option<&Lockfile>,
+    next: &Lockfile,
+    update_skills: &BTreeSet<String>,
+    update_mcp: &BTreeSet<String>,
+    update_packages: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut previews = Vec::new();
+    for source in update_packages {
+        let Some(candidate) = next
+            .aru_packages
+            .iter()
+            .find(|package| package.source == *source)
+        else {
+            continue;
+        };
+        let next_label = format!(
+            "{}@{}",
+            candidate.package_version,
+            short_digest(&candidate.revision)
+        );
+        let previous = previous.and_then(|lock| {
+            lock.aru_packages
+                .iter()
+                .find(|package| package.source == *source)
+        });
+        let transition = match previous {
+            Some(previous)
+                if previous.package_version == candidate.package_version
+                    && previous.revision == candidate.revision =>
+            {
+                format!("{next_label} (unchanged)")
+            }
+            Some(previous) => format!(
+                "{}@{} -> {next_label}",
+                previous.package_version,
+                short_digest(&previous.revision)
+            ),
+            None => format!("unlocked -> {next_label}"),
+        };
+        previews.push(format!("aru package {} {transition}", candidate.name));
+    }
+    for source in update_skills {
+        let Some(candidate) = next
+            .skill_packages
+            .iter()
+            .find(|package| package.source == *source)
+        else {
+            continue;
+        };
+        let next_label = format!(
+            "{}@{}",
+            candidate.version,
+            short_digest(&candidate.revision)
+        );
+        let previous = previous.and_then(|lock| {
+            lock.skill_packages
+                .iter()
+                .find(|package| package.source == *source)
+        });
+        let transition = match previous {
+            Some(previous)
+                if previous.version == candidate.version
+                    && previous.revision == candidate.revision =>
+            {
+                format!("{next_label} (unchanged)")
+            }
+            Some(previous) => format!(
+                "{}@{} -> {next_label}",
+                previous.version,
+                short_digest(&previous.revision)
+            ),
+            None => format!("unlocked -> {next_label}"),
+        };
+        previews.push(format!("skill {} {transition}", candidate.repository_name));
+    }
+    for name in update_mcp {
+        let Some(candidate) = next.mcp_servers.iter().find(|server| server.name == *name) else {
+            continue;
+        };
+        let previous =
+            previous.and_then(|lock| lock.mcp_servers.iter().find(|server| server.name == *name));
+        let transition = match previous {
+            Some(previous)
+                if previous.version == candidate.version
+                    && previous.metadata_sha256 == candidate.metadata_sha256 =>
+            {
+                format!("{} (unchanged)", candidate.version)
+            }
+            Some(previous) if previous.version != candidate.version => {
+                format!("{} -> {}", previous.version, candidate.version)
+            }
+            Some(previous) => format!(
+                "{} metadata {} -> {}",
+                candidate.version,
+                short_digest(&previous.metadata_sha256),
+                short_digest(&candidate.metadata_sha256)
+            ),
+            None => format!("unlocked -> {}", candidate.version),
+        };
+        previews.push(format!("MCP {} {transition}", candidate.name));
+    }
+    previews.sort();
+    previews
+}
+
+fn short_digest(value: &str) -> &str {
+    let value = value.strip_prefix("sha256:").unwrap_or(value);
+    &value[..value.len().min(7)]
+}
+
+pub(super) fn lock_details(lock: &Lockfile) -> Vec<String> {
+    let mut details = Vec::new();
+    for package in &lock.aru_packages {
+        details.push(format!(
+            "aru package {} {} {} from {}",
+            package.name, package.package_version, package.revision, package.source
+        ));
+    }
+    for source in &lock.instruction_sources {
+        details.push(format!("instruction {} {}", source.source, source.sha256));
+    }
+    for package in &lock.skill_packages {
+        for skill in &package.skills {
+            details.push(format!(
+                "skill {} {} {} {} from {}",
+                skill.name, package.version, package.revision, skill.sha256, package.source
+            ));
+        }
+    }
+    for server in &lock.mcp_servers {
+        details.push(format!(
+            "MCP {} {} {}",
+            server.name, server.version, server.metadata_sha256
+        ));
+    }
+    details.sort();
+    details
+}

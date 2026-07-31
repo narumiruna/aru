@@ -1,0 +1,10 @@
+[package]
+name = "agent-kit"
+version = "1.2.0"
+
+[[instructions.sources]]
+files = ["AGENTS.md"]
+scope = "source-directory"
+
+[skills]
+review = "skills/review"
