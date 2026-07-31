@@ -144,6 +144,34 @@ fn help_exposes_the_v1_command_contract_and_rejects_conflicting_refs() {
 }
 
 #[test]
+fn generates_bash_zsh_and_fish_completions_without_a_project() {
+    let temporary = tempfile::tempdir().unwrap();
+    for (shell, marker) in [
+        ("bash", "_aru()"),
+        ("zsh", "#compdef aru"),
+        ("fish", "complete -c aru"),
+    ] {
+        cargo_bin_cmd!("aru")
+            .current_dir(temporary.path())
+            .args(["generate-shell-completion", shell])
+            .assert()
+            .success()
+            .stderr("")
+            .stdout(
+                predicate::str::contains(marker)
+                    .and(predicate::str::contains("generate-shell-completion")),
+            );
+    }
+
+    cargo_bin_cmd!("aru")
+        .current_dir(temporary.path())
+        .args(["generate-shell-completion", "powershell"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("possible values: bash, zsh, fish"));
+}
+
+#[test]
 fn init_uses_target_contract() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");

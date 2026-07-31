@@ -61,6 +61,35 @@ Verify the installation:
 aru --help
 ```
 
+### Shell completions
+
+Generate a completion script from the current command tree and install it in your shell's user completion directory:
+
+**Bash** (requires `bash-completion`):
+
+```console
+mkdir -p ~/.local/share/bash-completion/completions
+aru generate-shell-completion bash > ~/.local/share/bash-completion/completions/aru
+```
+
+**Zsh**:
+
+```console
+mkdir -p ~/.zfunc
+aru generate-shell-completion zsh > ~/.zfunc/_aru
+```
+
+Add `fpath=(~/.zfunc $fpath)` to `.zshrc` before `autoload -Uz compinit && compinit`.
+
+**Fish**:
+
+```console
+mkdir -p ~/.config/fish/completions
+aru generate-shell-completion fish > ~/.config/fish/completions/aru.fish
+```
+
+The command writes only the script to stdout and does not require an `aru.toml` project.
+
 Aru passes Git arguments directly and uses your existing SSH or credential-helper configuration. It never invokes a shell for Git operations.
 
 <a id="quick-start"></a>
