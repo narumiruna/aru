@@ -1,5 +1,5 @@
 [project]
-name = "aru-docs"
+name = "aru"
 version = "0.0.0"
 description = "Documentation toolchain for aru"
 requires-python = ">=3.12"
