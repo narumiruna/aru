@@ -27,6 +27,22 @@ test:
 # Run all repository quality gates.
 check: fmt-check lint test
 
+# Install locked documentation dependencies.
+docs-sync:
+    uv sync --frozen --group docs
+
+# Serve the documentation with live reload.
+docs-serve: docs-sync
+    uv run --frozen --group docs mkdocs serve
+
+# Build the documentation with warnings treated as errors.
+docs-build: docs-sync
+    uv run --frozen --group docs mkdocs build --strict
+
+# Remove generated documentation output.
+docs-clean:
+    rm -rf site
+
 # Install aru to Cargo's default bin directory (~/.cargo/bin).
 install:
     cargo install --path . --locked
