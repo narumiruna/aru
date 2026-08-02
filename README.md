@@ -7,6 +7,8 @@
 
 Declare what your project needs in `aru.toml`, pin the exact result in `aru.lock`, then use `aru sync` to safely reconcile each agent's project files.
 
+[Read the documentation](https://narumiruna.github.io/aru/) · [View the source](https://github.com/narumiruna/aru)
+
 ## ✨ At a glance
 
 | Resource | Source of truth | Target result |
@@ -672,7 +674,14 @@ Representative output is deterministic:
 
 ## 🛠️ Development
 
-Run the CI-equivalent checks:
+Serve or build the documentation with its locked toolchain:
+
+```console
+just docs-serve
+just docs-build
+```
+
+Run the CI-equivalent Rust checks:
 
 ```console
 cargo fmt --all -- --check
