@@ -32,7 +32,9 @@ For explanation, review, diagnosis, or planning requests, inspect and report wit
 
 ## Verification
 
-Use focused tests while iterating, then run the CI-equivalent gates for Rust, manifest, lockfile, or fixture changes:
+During implementation, use the narrowest useful compiler and test feedback: default to `cargo check --locked`, add only flags for the relevant target or feature, and run focused tests after a coherent change. Do not use `--all-targets --all-features` after every small edit.
+
+For final verification of Rust, manifest, lockfile, or fixture changes, run the CI-equivalent gates below. Do not add a separate full `cargo check`; Clippy already performs compilation checks.
 
 ```console
 cargo fmt --all -- --check
