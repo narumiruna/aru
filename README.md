@@ -77,7 +77,7 @@ Prebuilt wheels support x86-64 glibc Linux and Apple Silicon macOS.
 Install from [crates.io](https://crates.io/crates/aru) with a Rust toolchain:
 
 ```console
-cargo install aru
+cargo install aru --locked
 ```
 
 Verify the installation:
