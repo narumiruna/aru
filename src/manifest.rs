@@ -11,6 +11,7 @@ pub const MANIFEST_FILE: &str = "aru.toml";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Target {
+    Agents,
     Codex,
     Claude,
     Copilot,
@@ -21,6 +22,7 @@ pub enum Target {
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Agents => write!(f, "agents"),
             Self::Codex => write!(f, "codex"),
             Self::Claude => write!(f, "claude"),
             Self::Copilot => write!(f, "copilot"),
@@ -35,13 +37,14 @@ impl std::str::FromStr for Target {
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
+            "agents" => Ok(Self::Agents),
             "codex" => Ok(Self::Codex),
             "claude" => Ok(Self::Claude),
             "copilot" => Ok(Self::Copilot),
             "pi" => Ok(Self::Pi),
             "opencode" => Ok(Self::Opencode),
             _ => Err(format!(
-                "unknown target {value:?}; expected codex, claude, copilot, opencode, or pi"
+                "unknown target {value:?}; expected agents, codex, claude, copilot, opencode, or pi"
             )),
         }
     }

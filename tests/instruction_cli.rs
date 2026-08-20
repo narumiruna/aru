@@ -182,8 +182,8 @@ fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
 
     aru(project)
         .args([
-            "init", "--target", "codex", "--target", "claude", "--target", "copilot", "--target",
-            "pi", "--target", "opencode",
+            "init", "--target", "agents", "--target", "codex", "--target", "claude", "--target",
+            "copilot", "--target", "pi", "--target", "opencode",
         ])
         .assert()
         .success();
@@ -191,7 +191,7 @@ fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
         .args(["target", "list"])
         .assert()
         .success()
-        .stdout("codex\nclaude\ncopilot\nopencode\npi\n");
+        .stdout("agents\ncodex\nclaude\ncopilot\nopencode\npi\n");
 
     let manifest_before = std::fs::read(project.join("aru.toml")).unwrap();
     aru(project)
@@ -211,6 +211,23 @@ fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
         .args(["instruction", "add", "--discover"])
         .assert()
         .success();
+
+    let lock = aru::lockfile::Lockfile::load_optional(project)
+        .unwrap()
+        .unwrap();
+    for source in &lock.instruction_sources {
+        assert_eq!(
+            source.targets,
+            [
+                aru::manifest::Target::Agents,
+                aru::manifest::Target::Codex,
+                aru::manifest::Target::Claude,
+                aru::manifest::Target::Copilot,
+                aru::manifest::Target::Opencode,
+                aru::manifest::Target::Pi,
+            ]
+        );
+    }
 
     assert_eq!(
         std::fs::read_to_string(project.join("AGENTS.md")).unwrap(),

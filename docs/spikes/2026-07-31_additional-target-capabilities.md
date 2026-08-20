@@ -4,6 +4,12 @@
 
 This note records the official project-local contracts used to extend aru's existing targets beyond Codex and Claude. Evidence was checked on 2026-07-31. aru continues to reject any representation that would require a secret value, shell expansion, global configuration write, or lossy target conversion.
 
+## Agents
+
+- The generic Agents target consumes directory-scoped `AGENTS.md` sources and projects skills to the cross-agent `.agents/skills/<name>` location.
+- No generic project MCP format is defined for this target, so aru rejects MCP declarations when Agents is the only effective target.
+- Agents and Codex share one owned `.agents/skills/<name>` projection when both are selected.
+
 ## GitHub Copilot
 
 - [GitHub's Agent Skills documentation](https://docs.github.com/en/copilot/concepts/agents/about-agent-skills) accepts project skills under `.github/skills`, `.claude/skills`, or `.agents/skills`. aru uses the target-native `.github/skills/<name>` destination.
@@ -25,7 +31,8 @@ This note records the official project-local contracts used to extend aru's exis
 ## Fail-closed decisions
 
 - Existing Codex and Claude paths and formats do not change.
-- Skills use one independently owned native destination per selected target. On Unix, non-Codex paths may link to the selected Codex `.agents` copy; other platforms receive verified copies.
+- Skills use one independently owned native destination per selected target, except Agents and Codex intentionally share `.agents/skills/<name>`.
+- On Unix, other target paths may link to a selected Agents or Codex `.agents` copy; other platforms receive verified copies.
 - Copilot, Claude, Codex, and OpenCode support aru's stdio and streamable-HTTP MCP abstractions. pi does not.
 - Existing target config roots and MCP containers must have the documented object shape. Malformed, ambiguous, unmanaged same-name, or drifted managed entries block the complete transaction.
 - The adapter capability schema changes whenever these projection semantics change, invalidating stale projection hashes without changing package resolution identity.

@@ -11,7 +11,7 @@ hide:
 
 # One manifest. Every agent in sync.
 
-Aru keeps instructions, Agent Skills, and MCP servers consistent across Codex, Claude Code, GitHub Copilot CLI, pi, and OpenCode—without taking ownership of content it cannot safely manage.
+Aru keeps instructions, Agent Skills, and MCP servers consistent across generic Agents, Codex, Claude Code, GitHub Copilot CLI, pi, and OpenCode—without taking ownership of content it cannot safely manage.
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
 [See how sync works](sync.md){ .md-button }

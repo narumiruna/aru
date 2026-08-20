@@ -225,7 +225,7 @@ fn branch_mutation_preserves_comments_and_reference_kinds_are_exclusive() {
 fn instruction_sources_parse_and_validate_scope_and_targets() {
     let text = r#"
 [project]
-targets = ["codex", "claude", "copilot", "pi", "opencode"]
+targets = ["agents", "codex", "claude", "copilot", "pi", "opencode"]
 
 [[instructions.sources]]
 files = ["AGENTS.md", "src/**/AGENTS.md"]

@@ -63,7 +63,8 @@ Or initialize another directory:
 aru init ../my-project --target codex
 ```
 
-Supported target names are `codex`, `claude`, `copilot`, `pi`, and `opencode`. Initialization creates:
+Supported target names are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+Initialization creates:
 
 - `aru.toml` for human-maintained intent;
 - `aru.lock` for exact, reproducible resolution and projection data;

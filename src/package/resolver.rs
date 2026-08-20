@@ -168,6 +168,7 @@ pub fn validate_archive_graph(
         .to_owned();
     let targets = if manifest.skills.is_empty() && manifest.mcp.is_empty() {
         vec![
+            Target::Agents,
             Target::Codex,
             Target::Claude,
             Target::Copilot,

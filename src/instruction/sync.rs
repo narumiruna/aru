@@ -32,10 +32,22 @@ pub fn prepare(
     let mut files = Vec::new();
     for projection in projections {
         match projection.mode {
-            ProjectionMode::SharedBlock => shared
-                .entry(projection.destination.clone())
-                .or_default()
-                .push(projection),
+            ProjectionMode::SharedBlock => {
+                let desired = shared.entry(projection.destination.clone()).or_default();
+                if let Some(existing) = desired
+                    .iter()
+                    .find(|existing| existing.source == projection.source)
+                {
+                    if existing.content != projection.content {
+                        return Err(AruError::msg(format!(
+                            "conflicting instruction projections for {:?}",
+                            projection.source
+                        )));
+                    }
+                    continue;
+                }
+                desired.push(projection);
+            }
             ProjectionMode::File => files.push(projection),
         }
     }
@@ -358,17 +370,15 @@ pub fn warn_unowned_removed(
     let Some(previous) = previous else {
         return Ok(());
     };
-    let current_baselines = current
-        .projection_baselines
-        .iter()
-        .filter(|baseline| baseline.kind == "instruction")
-        .map(|baseline| (baseline.target, baseline.key.as_str()))
-        .collect::<BTreeSet<_>>();
+    let current_projections = projections_from_locked(&current.instruction_sources)?
+        .into_iter()
+        .map(|projection| Ok((projection.source, portable(&projection.destination)?)))
+        .collect::<Result<BTreeSet<_>>>()?;
     for projection in projections_from_locked(&previous.instruction_sources)? {
-        if current_baselines.contains(&(projection.target, projection.source.as_str())) {
+        let destination = portable(&projection.destination)?;
+        if current_projections.contains(&(projection.source.clone(), destination.clone())) {
             continue;
         }
-        let destination = portable(&projection.destination)?;
         let identity = (
             "instruction".into(),
             projection.source.clone(),

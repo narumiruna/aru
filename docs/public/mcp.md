@@ -73,6 +73,7 @@ aru mcp remove docs
 
 ## Target support
 
-Project MCP is supported for Codex, Claude Code, GitHub Copilot CLI, and OpenCode. pi has no built-in MCP and is rejected as an MCP dependency target.
+Project MCP is supported for Codex, Claude Code, GitHub Copilot CLI, and OpenCode.
+Agents and pi have no built-in MCP and are rejected as MCP dependency targets.
 
 Copilot uses `.github/mcp.json`; aru does not emit VS Code's incompatible `.vscode/mcp.json` or modify GitHub.com repository settings.

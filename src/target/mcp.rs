@@ -22,7 +22,7 @@ impl McpConfig {
             Target::Claude => ClaudeConfig::load(project).map(Self::Claude),
             Target::Copilot => CopilotConfig::load(project).map(Self::Copilot),
             Target::Opencode => OpencodeConfig::load(project).map(Self::Opencode),
-            Target::Pi => Err(AruError::msg(format!(
+            Target::Agents | Target::Pi => Err(AruError::msg(format!(
                 "internal error: MCP projection reached unsupported target {target}"
             ))),
         }
@@ -74,7 +74,7 @@ pub(crate) fn destination(target: Target) -> Option<&'static str> {
         Target::Claude => Some(crate::target::claude::CONFIG_PATH),
         Target::Copilot => Some(crate::target::copilot::CONFIG_PATH),
         Target::Opencode => Some(crate::target::opencode::CONFIG_PATH),
-        Target::Pi => None,
+        Target::Agents | Target::Pi => None,
     }
 }
 
@@ -105,6 +105,7 @@ mod tests {
                 Some(target)
             );
         }
+        assert_eq!(destination(Target::Agents), None);
         assert_eq!(destination(Target::Pi), None);
     }
 }

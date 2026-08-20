@@ -174,8 +174,12 @@ fn prepare_projections(
             let source = skill_sources.get(&skill.name).ok_or_else(|| {
                 AruError::msg(format!("missing materialized skill {:?}", skill.name))
             })?;
+            let mut destinations = BTreeSet::new();
             for target in &package.targets {
                 let layout = skill_adapter::layout(*target, &package.targets, &skill.name)?;
+                if !destinations.insert(layout.destination.clone()) {
+                    continue;
+                }
                 prepare_skill_entry(
                     project,
                     lock,
@@ -344,14 +348,6 @@ fn warn_unowned_removed_projections(
         return;
     };
     for baseline in &previous.projection_baselines {
-        let remains_desired = lock.projection_baselines.iter().any(|desired| {
-            desired.target == baseline.target
-                && desired.kind == baseline.kind
-                && desired.key == baseline.key
-        });
-        if remains_desired {
-            continue;
-        }
         let destination = match baseline.kind.as_str() {
             "skill" => skill_adapter::destination(baseline.target, &baseline.key)
                 .and_then(|path| portable(&path).ok()),
@@ -361,6 +357,24 @@ fn warn_unowned_removed_projections(
         let Some(destination) = destination else {
             continue;
         };
+        let remains_desired = lock.projection_baselines.iter().any(|desired| {
+            if desired.kind != baseline.kind || desired.key != baseline.key {
+                return false;
+            }
+            match desired.kind.as_str() {
+                "skill" => {
+                    skill_adapter::destination(desired.target, &desired.key)
+                        .and_then(|path| portable(&path).ok())
+                        .as_deref()
+                        == Some(destination.as_str())
+                }
+                "mcp" => mcp_adapter::destination(desired.target) == Some(destination.as_str()),
+                _ => false,
+            }
+        });
+        if remains_desired {
+            continue;
+        }
         let identity = (
             baseline.kind.clone(),
             baseline.key.clone(),

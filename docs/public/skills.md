@@ -59,10 +59,13 @@ Ordinary `sync` and `sync --locked` retain a branch's locked commit. Run `skill 
 
 | Target | Project path |
 | --- | --- |
+| Agents | `.agents/skills/<name>` |
 | Codex | `.agents/skills/<name>` |
 | Claude Code | `.claude/skills/<name>` |
 | GitHub Copilot | `.github/skills/<name>` |
 | pi | `.pi/skills/<name>` |
 | OpenCode | `.opencode/skills/<name>` |
 
-On Unix, when Codex receives the same skill, other native paths link to the canonical `.agents` copy when possible. Platforms without project symlinks receive verified copies.
+Agents and Codex share one canonical `.agents` copy when both are selected.
+On Unix, other native paths link to that copy when possible.
+Platforms without project symlinks receive verified copies.
