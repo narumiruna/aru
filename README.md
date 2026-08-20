@@ -318,6 +318,9 @@ aru skill add owner/repository --all --target codex  # narrow deployment
 
 In a pipe, redirected shell, or CI runner, a bare `skill add` fails before fetching. Pass `--all`, `--skill`, or `--path` explicitly. At least one skill must be selected.
 
+Aru discovers a skill at the repository root (`./SKILL.md`) or in any nested directory (`**/SKILL.md`) within the discovery limits.
+A skill's `name` must match the directory that directly contains its `SKILL.md`; a root skill must match the repository name.
+
 Selection behavior is deliberate:
 
 - `--all` stores wildcard intent and tracks valid exports added by future versions.
@@ -620,7 +623,7 @@ Aru rejects configurations that a selected target cannot represent rather than s
 
 Aru treats instruction content, skill content, and Registry metadata as untrusted.
 
-- Conventional discovery scans only the source root and `skills/**/SKILL.md`, up to depth 6, 2,000 directories, and 20,000 entries.
+- Skill discovery scans `./SKILL.md` and `**/SKILL.md`, up to depth 6, 2,000 directories, and 20,000 entries.
 - `SKILL.md` is limited to 1 MiB, each selected regular file to 10 MiB, and each skill tree to 100 MiB.
 - Symlinks, devices, sockets, FIFOs, non-UTF-8 paths, case-folding collisions, Windows reserved names, and escaping selectors are rejected.
 - Digests include a format version, portable path, executable marker, byte length, and raw bytes for every sorted regular file.
