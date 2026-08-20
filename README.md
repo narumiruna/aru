@@ -71,7 +71,7 @@ uv tool install arust
 
 The PyPI distribution is named `arust` because `aru` was already taken, but it installs and runs the `aru` command.
 Update this installation with `uv tool upgrade arust`.
-Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
+Prebuilt wheels support x86-64 glibc Linux and Apple Silicon macOS.
 
 You can also install the latest release from [crates.io](https://crates.io/crates/aru) with a Rust toolchain:
 
