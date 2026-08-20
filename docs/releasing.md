@@ -6,18 +6,17 @@ Choose the SemVer component to bump; after the release commit passes formatting,
 The tag independently triggers:
 
 - `Release` (`.github/workflows/release.yml`), which publishes GitHub archives and `SHA256SUMS`;
-- `Publish` (`.github/workflows/publish.yml`), which publishes the `aru` crate to crates.io;
-- `Publish PyPI` (`.github/workflows/pypi.yml`), which publishes `arust` binary wheels that expose the `aru` command;
+- `Publish` (`.github/workflows/publish.yml`), which publishes the `aru` crate to crates.io and `arust` binary wheels that expose the `aru` command;
 - `Installer scripts` (`.github/workflows/installers.yml`), which runs isolated Unix and Windows installer tests.
 A manual installer run additionally installs the latest published release through the hosted scripts.
 
-The Release, Publish, and Publish PyPI workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
+The Release and Publish workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
 Release archive builds set `ARU_BUILD_DISTRIBUTION=standalone` and verify the marker before packaging, enabling `aru self update`.
 PyPI wheel and ordinary Cargo builds remain package-manager-owned and reject self-update.
-The PyPI workflow publishes two wheels: manylinux2014 for x86_64 and macOS for Apple silicon.
-Manual PyPI workflow runs build and test all wheels without entering the `release` environment or requesting an OIDC publish token.
-Only a validated stable tag push can run the PyPI publish job.
-A failed workflow can be rerun independently.
+The Publish workflow publishes two wheels: manylinux2014 for x86_64 and macOS for Apple silicon.
+A manual Publish workflow run builds and tests all wheels without entering the `release` environment or requesting an OIDC publish token.
+Only a validated stable tag push can run the crates.io and PyPI publish jobs.
+A failed publish job can be rerun independently.
 
 ## One-time repository configuration
 
@@ -55,7 +54,7 @@ Before the first release, add a pending Trusted Publisher for `arust` from the P
 | PyPI project name | `arust` |
 | Repository owner | `narumiruna` |
 | Repository name | `aru` |
-| Workflow filename | `pypi.yml` |
+| Workflow filename | `publish.yml` |
 | Environment | `release` |
 
 The PyPI publish job uses GitHub OIDC and does not require a long-lived PyPI API token.
@@ -64,9 +63,9 @@ The PyPI publish job uses GitHub OIDC and does not require a long-lived PyPI API
 
 - If GitHub Release creation fails, rerun `Release` for the same tag.
   A published release is treated as complete, while an existing draft is resumed.
-- If crates.io publishing fails before the version exists, rerun `Publish` for the same tag.
+- If crates.io publishing fails before the version exists, rerun the failed job in `Publish` for the same tag.
 - If the crate version already exists, `Publish` verifies the package and exits successfully without trying to overwrite it.
-- If PyPI publishing fails, fix the Trusted Publisher or workflow issue and rerun `Publish PyPI` for the same tag.
+- If PyPI publishing fails, fix the Trusted Publisher or workflow issue and rerun the failed job in `Publish` for the same tag.
   Before using `skip-existing`, the workflow requires every existing PyPI filename and SHA-256 digest to match the locally rebuilt artifact.
   An exact matching subset is accepted as a partial release, and the workflow uploads the missing distributions.
   A digest conflict, unexpected remote filename, malformed response, or PyPI transport failure stops publication.
