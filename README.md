@@ -45,17 +45,7 @@ Aru is designed to be reproducible and fail closed: it validates the complete op
 
 You need a system `git` executable to use aru.
 
-Install the PyPI distribution with uv:
-
-```console
-uv tool install arust
-```
-
-The PyPI distribution is named `arust` because `aru` was already taken, but it installs and runs the `aru` command.
-Update this installation with `uv tool upgrade arust`.
-Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
-
-The standalone installers download a prebuilt, checksum-verified binary and do not require Rust.
+The recommended installation uses a standalone script to download a prebuilt, checksum-verified binary and does not require Rust.
 On macOS or Linux, install the latest release into `~/.local/bin/aru` with either curl or wget:
 
 ```console
@@ -69,9 +59,21 @@ On 64-bit Windows, install into `~/.local/bin/aru.exe` with Windows PowerShell:
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/install.ps1 | iex"
 ```
 
-The installers currently support x86-64 Linux, Intel and Apple Silicon macOS, and x86-64 Windows. Set `ARU_VERSION` to install a specific stable version or `ARU_INSTALL_DIR` to choose another directory. If the destination is not already on `PATH`, the installer prints the path to add.
+The installers currently support x86-64 Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
+Set `ARU_VERSION` to install a specific stable version or `ARU_INSTALL_DIR` to choose another directory.
+If the destination is not already on `PATH`, the installer prints the path to add.
 
-Alternatively, install the latest release from [crates.io](https://crates.io/crates/aru) with a Rust toolchain:
+Alternatively, install the PyPI distribution with uv:
+
+```console
+uv tool install arust
+```
+
+The PyPI distribution is named `arust` because `aru` was already taken, but it installs and runs the `aru` command.
+Update this installation with `uv tool upgrade arust`.
+Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
+
+You can also install the latest release from [crates.io](https://crates.io/crates/aru) with a Rust toolchain:
 
 ```console
 cargo install aru
