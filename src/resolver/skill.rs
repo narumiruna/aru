@@ -342,6 +342,7 @@ fn resolve_skill_reference(
         git::ReferencePolicy {
             update,
             offline,
+            fallback_branch: Some("main"),
             ..git::ReferencePolicy::default()
         },
         &format!("Git source {}", source.identity),

@@ -73,7 +73,7 @@ fn public_interactive_git_select_and_cancel_smoke() {
         .success();
     let source = Path::new("narumiruna/skills");
 
-    let mut select = interactive_add(&project, source, &["--branch", "main"]);
+    let mut select = interactive_add(&project, source, &[]);
     select.expect("Select skills to install").unwrap();
     select.send("designing-user-experiences").unwrap();
     select.send(" ").unwrap();
@@ -87,7 +87,7 @@ fn public_interactive_git_select_and_cancel_smoke() {
     let parsed_lock = aru::lockfile::Lockfile::load_optional(&project)
         .unwrap()
         .unwrap();
-    assert_eq!(parsed_lock.skill_packages[0].requirement, "branch:main");
+    assert_eq!(parsed_lock.skill_packages[0].requirement, "version:*");
     assert_eq!(parsed_lock.skill_packages[0].version, "main");
     assert_eq!(parsed_lock.skill_packages[0].revision.len(), 40);
 
