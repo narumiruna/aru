@@ -229,7 +229,7 @@ fn init_uses_target_contract() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "unknown target \"claude-code\"; expected codex, claude, copilot, opencode, or pi",
+            "unknown target \"claude-code\"; expected agents, codex, claude, copilot, opencode, or pi",
         ));
 }
 

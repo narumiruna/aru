@@ -333,6 +333,7 @@ fn reject_keys(
 
 fn all_targets() -> Vec<Target> {
     vec![
+        Target::Agents,
         Target::Codex,
         Target::Claude,
         Target::Copilot,

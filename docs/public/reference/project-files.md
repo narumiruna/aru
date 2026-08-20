@@ -28,18 +28,20 @@ Aru owns only the entries or marker blocks it created. Unrelated configuration a
 
 ## Target capabilities
 
-| Capability | Codex | Claude Code | Copilot CLI | pi | OpenCode |
-| --- | --- | --- | --- | --- | --- |
-| Directory `AGENTS.md` | Native | Sibling import | Root/path projection | Native | Native |
-| Explicit instruction globs | No | Path rules | Path rules | No | No |
-| Project skills | `.agents/skills/` | `.claude/skills/` | `.github/skills/` | `.pi/skills/` | `.opencode/skills/` |
-| stdio MCP | Yes | Yes | Yes | No | Yes |
-| Streamable HTTP MCP | Yes | Yes | Yes | No | Yes |
-| Environment-backed HTTP auth/headers | Yes | Yes | Yes | No | Yes |
+| Capability | Agents | Codex | Claude Code | Copilot CLI | pi | OpenCode |
+| --- | --- | --- | --- | --- | --- | --- |
+| Directory `AGENTS.md` | Native | Native | Sibling import | Root/path projection | Native | Native |
+| Explicit instruction globs | No | No | Path rules | Path rules | No | No |
+| Project skills | `.agents/skills/` | `.agents/skills/` | `.claude/skills/` | `.github/skills/` | `.pi/skills/` | `.opencode/skills/` |
+| stdio MCP | No | Yes | Yes | Yes | No | Yes |
+| Streamable HTTP MCP | No | Yes | Yes | Yes | No | Yes |
+| Environment-backed HTTP auth/headers | No | Yes | Yes | Yes | No | Yes |
 
 Aru rejects configurations that a selected target cannot represent rather than silently broadening or dropping behavior.
 
 ## Change targets
+
+Supported target names are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
 
 ```console
 aru target list

@@ -52,16 +52,18 @@ mod tests {
                 scope: InstructionScope::SourceDirectory {
                     directory: ".".into(),
                 },
-                targets: BTreeSet::from([Target::Codex]),
+                targets: BTreeSet::from([Target::Agents, Target::Codex]),
                 source_sha256: sha256_bytes(b"package"),
                 managed: true,
             },
             content: "package\n".into(),
         };
-        let projection = render(Target::Codex, &instruction).unwrap().unwrap();
-        assert_eq!(projection.destination, PathBuf::from("AGENTS.md"));
-        assert_eq!(projection.mode, ProjectionMode::SharedBlock);
-        assert_eq!(projection.content, "package\n");
+        for target in [Target::Agents, Target::Codex] {
+            let projection = render(target, &instruction).unwrap().unwrap();
+            assert_eq!(projection.destination, PathBuf::from("AGENTS.md"));
+            assert_eq!(projection.mode, ProjectionMode::SharedBlock);
+            assert_eq!(projection.content, "package\n");
+        }
     }
 
     #[test]
@@ -72,13 +74,18 @@ mod tests {
                 scope: InstructionScope::SourceDirectory {
                     directory: ".".into(),
                 },
-                targets: BTreeSet::from([Target::Codex, Target::Pi, Target::Opencode]),
+                targets: BTreeSet::from([
+                    Target::Agents,
+                    Target::Codex,
+                    Target::Pi,
+                    Target::Opencode,
+                ]),
                 source_sha256: sha256_bytes(b"root"),
                 managed: false,
             },
             content: "root\n".into(),
         };
-        for target in [Target::Codex, Target::Pi, Target::Opencode] {
+        for target in [Target::Agents, Target::Codex, Target::Pi, Target::Opencode] {
             assert!(render(target, &instruction).unwrap().is_none());
         }
     }

@@ -48,6 +48,7 @@ The optional `targets` list defaults to every configured project target and must
 
 | Target | Instruction behavior |
 | --- | --- |
+| Agents | Consumes directory-scoped `AGENTS.md` directly |
 | Codex | Consumes directory-scoped `AGENTS.md` directly |
 | pi | Consumes directory-scoped `AGENTS.md` directly |
 | OpenCode | Consumes directory-scoped `AGENTS.md` directly |

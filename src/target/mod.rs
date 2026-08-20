@@ -29,6 +29,11 @@ pub struct TargetCapabilities {
 
 pub fn capabilities(target: Target) -> TargetCapabilities {
     match target {
+        Target::Agents => TargetCapabilities {
+            instructions: InstructionCapability::NativeAgents,
+            skills: true,
+            mcp: false,
+        },
         Target::Codex => TargetCapabilities {
             instructions: InstructionCapability::NativeAgents,
             skills: true,
@@ -261,6 +266,18 @@ mod tests {
             bearer_token_env: (transport == "streamable-http").then(|| "DEMO_TOKEN".into()),
             package: None,
         }
+    }
+
+    #[test]
+    fn agents_supports_native_instructions_and_skills_without_mcp() {
+        assert_eq!(
+            capabilities(Target::Agents),
+            TargetCapabilities {
+                instructions: InstructionCapability::NativeAgents,
+                skills: true,
+                mcp: false,
+            }
+        );
     }
 
     #[test]

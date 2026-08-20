@@ -6,7 +6,7 @@ All files are UTF-8. `aru.toml` is edited with `toml_edit` so unrelated comments
 
 ```toml
 [project]
-targets = ["codex", "claude", "copilot", "opencode", "pi"]
+targets = ["agents", "codex", "claude", "copilot", "opencode", "pi"]
 
 [[instructions.sources]]
 files = ["AGENTS.md", "src/**/AGENTS.md"]
@@ -48,7 +48,10 @@ Source `targets` default to the complete project target set and otherwise must b
 
 Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target. All current targets support skills through their native project directories.
 
-An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Registry stdio candidates support npm with an absent or `npx` runtime hint and PyPI with an explicit `uvx` runtime hint; exact command/argv and `{registry, identifier, version}` package identity are locked. Other package types or hints, secret arguments, and unresolved required arguments fail closed. Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; optional `env-vars` is a non-empty-name, duplicate-free list that is valid only with `command`. Direct remote `env-http-headers` maps validated, case-insensitively unique HTTP field names to environment names and is valid only with `url`; it cannot define `Authorization` when `bearer-token-env` is also present. Environment names use uppercase letters, digits, and underscores and begin with an uppercase letter or underscore. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets: Codex, Claude, Copilot, or OpenCode. pi has no built-in MCP and is rejected. aru records and projects direct commands but never executes them, and secret-bearing fields contain environment names only. Codex retains names, Claude and Copilot emit `${ENV}` placeholders, and OpenCode emits `{env:ENV}` placeholders.
+An MCP entry has exactly one of `server` (Registry), `url` (direct remote), or `command` (direct stdio). Registry stdio candidates support npm with an absent or `npx` runtime hint and PyPI with an explicit `uvx` runtime hint; exact command/argv and `{registry, identifier, version}` package identity are locked. Other package types or hints, secret arguments, and unresolved required arguments fail closed. Direct stdio `args` preserve ordered argv, default to `transport = "stdio"`, and cannot combine with Registry selectors, `version`, or `bearer-token-env`; optional `env-vars` is a non-empty-name, duplicate-free list that is valid only with `command`. Direct remote `env-http-headers` maps validated, case-insensitively unique HTTP field names to environment names and is valid only with `url`; it cannot define `Authorization` when `bearer-token-env` is also present. Environment names use uppercase letters, digits, and underscores and begin with an uppercase letter or underscore. Optional MCP `targets` obey the same subset rule and may contain only MCP-capable targets: Codex, Claude, Copilot, or OpenCode.
+Agents and pi have no built-in MCP and are rejected.
+aru records and projects direct commands but never executes them, and secret-bearing fields contain environment names only.
+Codex retains names, Claude and Copilot emit `${ENV}` placeholders, and OpenCode emits `{env:ENV}` placeholders.
 
 `package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes project targets, dependency targets, and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
 
@@ -106,6 +109,7 @@ Archive entries are sorted portable paths with raw file bytes, uid/gid and names
 
 | Target | Directory-scoped AGENTS source | Explicit `apply-to` source |
 | --- | --- | --- |
+| Agents | Native source; no generated output | Rejected |
 | Codex | Native source; no generated output | Rejected |
 | pi | Native source; no generated output | Rejected |
 | OpenCode | Native source; no generated output | Rejected |
@@ -128,13 +132,16 @@ Generated path-specific files are wholly aru-owned. Removing a source or target 
 
 | Target | Project skill destination | Project MCP destination |
 | --- | --- | --- |
+| Agents | `.agents/skills/<name>` | Rejected; no generic MCP format |
 | Codex | `.agents/skills/<name>` | `.codex/config.toml` |
 | Claude Code | `.claude/skills/<name>` | `.mcp.json` |
 | GitHub Copilot CLI | `.github/skills/<name>` | `.github/mcp.json` |
 | pi | `.pi/skills/<name>` | Rejected; no built-in MCP |
 | OpenCode | `.opencode/skills/<name>` | `opencode.json` |
 
-When the same skill selects Codex and another target on a platform with project symlink support, the other target-native path links to the canonical `.agents/skills/<name>` copy. Otherwise each destination is a verified copy with the same semantic digest and an independent ownership entry.
+Agents and Codex share one independently owned `.agents/skills/<name>` projection when both are selected.
+When the same skill selects Agents or Codex and another target on a platform with project symlink support, the other target-native path links to the canonical `.agents` copy.
+Otherwise each destination is a verified copy with the same semantic digest and an independent ownership entry.
 
 Copilot MCP uses the `mcpServers` project format, `stdio` / `http` transport names, `${ENV}` references, and `tools = ["*"]`. This contract targets Copilot CLI; `.vscode/mcp.json` and GitHub.com repository MCP settings are not projections. OpenCode MCP uses `mcp` entries with `local` command arrays or `remote` URLs, `{env:ENV}` references, and `enabled = true`. Header-authenticated OpenCode remotes set `oauth = false` to avoid an unintended OAuth flow. `opencode.json` is parsed and edited as JSONC; unrelated keys, MCP entries, comments, trailing commas, and surrounding formatting survive.
 

@@ -35,8 +35,10 @@ pub(crate) fn layout(
             "internal error: skill projection reached unsupported target {target}"
         ))
     })?;
-    let link_target = (target != Target::Codex
-        && selected_targets.contains(&Target::Codex)
+    let has_shared_agents_root =
+        selected_targets.contains(&Target::Agents) || selected_targets.contains(&Target::Codex);
+    let link_target = (!matches!(target, Target::Agents | Target::Codex)
+        && has_shared_agents_root
         && supports_project_symlink())
     .then(|| shared_link_target(name));
     Ok(SkillLayout {
@@ -52,7 +54,7 @@ pub(crate) fn layout(
 
 pub(crate) fn destination(target: Target, name: &str) -> Option<PathBuf> {
     let root = match target {
-        Target::Codex => ".agents/skills",
+        Target::Agents | Target::Codex => ".agents/skills",
         Target::Claude => ".claude/skills",
         Target::Copilot => ".github/skills",
         Target::Pi => ".pi/skills",
@@ -82,6 +84,7 @@ mod tests {
     #[test]
     fn target_layouts_own_their_native_projection_topology() {
         for (target, expected) in [
+            (Target::Agents, ".agents/skills/review"),
             (Target::Codex, ".agents/skills/review"),
             (Target::Claude, ".claude/skills/review"),
             (Target::Copilot, ".github/skills/review"),
@@ -94,18 +97,20 @@ mod tests {
         }
 
         #[cfg(unix)]
-        for target in [
-            Target::Claude,
-            Target::Copilot,
-            Target::Pi,
-            Target::Opencode,
-        ] {
-            let shared = layout(target, &[Target::Codex, target], "review").unwrap();
-            assert_eq!(shared.mode, SkillDeploymentMode::Symlink);
-            assert_eq!(
-                shared.link_target,
-                Some(PathBuf::from("../../.agents/skills/review"))
-            );
+        for canonical in [Target::Agents, Target::Codex] {
+            for target in [
+                Target::Claude,
+                Target::Copilot,
+                Target::Pi,
+                Target::Opencode,
+            ] {
+                let shared = layout(target, &[canonical, target], "review").unwrap();
+                assert_eq!(shared.mode, SkillDeploymentMode::Symlink);
+                assert_eq!(
+                    shared.link_target,
+                    Some(PathBuf::from("../../.agents/skills/review"))
+                );
+            }
         }
     }
 }
