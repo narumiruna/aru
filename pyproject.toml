@@ -1,14 +1,36 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
 [project]
-name = "aru"
-version = "0.0.0"
-description = "Documentation toolchain for aru"
-requires-python = ">=3.12"
+name = "arust"
+dynamic = ["version"]
+description = "A project manager for coding-agent instructions, skills, and MCP servers, written in Rust."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+keywords = ["agents", "cli", "mcp", "skills"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Rust",
+]
 dependencies = []
+
+[project.urls]
+Documentation = "https://narumiruna.github.io/aru/"
+Repository = "https://github.com/narumiruna/aru"
 
 [dependency-groups]
 docs = [
   "mkdocs-material>=9.6.23,<10",
 ]
+
+[tool.maturin]
+bindings = "bin"
+locked = true
+strip = true
 
 [tool.uv]
 package = false

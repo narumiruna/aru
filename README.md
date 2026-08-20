@@ -43,8 +43,19 @@ Aru is designed to be reproducible and fail closed: it validates the complete op
 
 ## 📦 Install
 
-You need a system `git` executable to use aru. The standalone installers download a prebuilt, checksum-verified binary and do not require Rust.
+You need a system `git` executable to use aru.
 
+Install the PyPI distribution with uv:
+
+```console
+uv tool install arust
+```
+
+The PyPI distribution is named `arust` because `aru` was already taken, but it installs and runs the `aru` command.
+Update this installation with `uv tool upgrade arust`.
+Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
+
+The standalone installers download a prebuilt, checksum-verified binary and do not require Rust.
 On macOS or Linux, install the latest release into `~/.local/bin/aru` with either curl or wget:
 
 ```console
@@ -92,7 +103,9 @@ Download and checksum-verify the complete update without replacing the current e
 aru self update --dry-run
 ```
 
-Self-update is disabled for Cargo-built binaries so aru does not overwrite package-manager-owned files. Update those installations with `cargo install aru --locked` instead. `--offline` and `--frozen` reject self-update before network access.
+Self-update is disabled for uv- and Cargo-managed binaries so aru does not overwrite package-manager-owned files.
+Update those installations with `uv tool upgrade arust` or `cargo install aru --locked` instead.
+`--offline` and `--frozen` reject self-update before network access.
 
 ### Shell completions
 

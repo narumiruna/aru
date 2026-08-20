@@ -4,9 +4,22 @@ Install aru, initialize a project, and replay its locked state.
 
 ## Install
 
-Aru requires a system `git` executable. The standalone installers download a prebuilt, checksum-verified binary and do not require Rust.
+Aru requires a system `git` executable.
+
+=== "uv"
+
+    Install the PyPI distribution named `arust`:
+
+    ```console
+    uv tool install arust
+    ```
+
+    The distribution name differs because `aru` was already taken on PyPI, but the installed command remains `aru`.
+    Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
 
 === "macOS and Linux"
+
+    The standalone installer downloads a prebuilt, checksum-verified binary and does not require Rust.
 
     ```console
     curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
@@ -43,11 +56,19 @@ Standalone installations can update themselves:
 aru self update
 ```
 
-Cargo-built binaries should be updated through Cargo instead:
+Package-manager installations should be updated through the same package manager instead:
 
-```console
-cargo install aru --locked
-```
+=== "uv"
+
+    ```console
+    uv tool upgrade arust
+    ```
+
+=== "Cargo"
+
+    ```console
+    cargo install aru --locked
+    ```
 
 ## Initialize a project
 
