@@ -254,7 +254,7 @@ fn execute_with(
 
 fn standalone_error() -> AruError {
     AruError::msg(
-        "self-update is only available for standalone aru installations; update this installation with `cargo install aru --locked`",
+        "self-update is only available for standalone aru installations; update this installation with its package manager (`uv tool upgrade arust` or `cargo install aru --locked`)",
     )
 }
 

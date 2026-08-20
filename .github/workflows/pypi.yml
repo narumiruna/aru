@@ -1,0 +1,175 @@
+name: Publish PyPI
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate tag, version, and main ancestry
+        id: release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must match vX.Y.Z, got: $TAG" >&2
+            exit 1
+          fi
+          version="${TAG#v}"
+          manifest_version="$(
+            cargo metadata --locked --no-deps --format-version 1 |
+              jq --raw-output '.packages[] | select(.name == "aru") | .version'
+          )"
+          if [[ "$version" != "$manifest_version" ]]; then
+            echo "Tag $TAG does not match Cargo.toml version $manifest_version" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-list --max-count=1 "$TAG")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Tag $TAG does not point to a commit on main" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }} wheel
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      ARU_BUILD_DISTRIBUTION: pypi
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist
+          manylinux: 2014
+          sccache: "true"
+
+      - name: Verify uv tool installation
+        shell: bash
+        run: |
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          if [[ -z "$wheel" ]]; then
+            echo "Maturin did not produce a wheel" >&2
+            exit 1
+          fi
+          UV_TOOL_DIR="$PWD/.uv-tools" UV_TOOL_BIN_DIR="$PWD/.uv-bin" \
+            uv tool install "$wheel"
+          executable="$PWD/.uv-bin/aru"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable="${executable}.exe"
+          fi
+          output="$("$executable" --version)"
+          if [[ "$output" != "aru $VERSION" ]]; then
+            echo "Expected aru $VERSION, got: $output" >&2
+            exit 1
+          fi
+          if update_output="$("$executable" --offline self update 2>&1)"; then
+            echo "Package-manager wheel unexpectedly allowed self-update" >&2
+            exit 1
+          fi
+          printf '%s\n' "$update_output" | grep --fixed-strings "uv tool upgrade arust"
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: pypi-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish arust to PyPI
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pypi-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify wheel set
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          mapfile -t wheels < <(find dist -maxdepth 1 -name "arust-${VERSION}-*.whl" -print | sort)
+          if [[ "${#wheels[@]}" -ne 4 ]]; then
+            printf 'Expected 4 arust %s wheels, found %s\n' "$VERSION" "${#wheels[@]}" >&2
+            printf '%s\n' "${wheels[@]}" >&2
+            exit 1
+          fi
+
+      - name: Publish wheels with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
+
+      - name: Write summary
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          {
+            echo "## PyPI Publish"
+            echo
+            echo "- Distribution: \`arust\`"
+            echo "- Command: \`aru\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- URL: https://pypi.org/project/arust/$VERSION/"
+          } >> "$GITHUB_STEP_SUMMARY"

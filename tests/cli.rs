@@ -193,6 +193,7 @@ fn self_update_is_project_independent_and_rejects_non_standalone_builds() {
                 predicate::str::contains(
                     "self-update is only available for standalone aru installations",
                 )
+                .and(predicate::str::contains("uv tool upgrade arust"))
                 .and(predicate::str::contains("cargo install aru --locked"))
                 .and(predicate::str::contains("aru.toml").not()),
             );
