@@ -2,9 +2,9 @@ name: Installer scripts
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*.*.*"
+  # push:
+  #   tags:
+  #     - "v*.*.*"
 
 permissions:
   contents: read
