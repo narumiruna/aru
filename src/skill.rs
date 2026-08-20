@@ -38,13 +38,7 @@ pub fn discover_candidates(
 ) -> Result<Vec<DiscoveredSkill>> {
     let mut candidates = BTreeMap::<String, PathBuf>::new();
 
-    if root.join("SKILL.md").is_file() {
-        insert_candidate(&mut candidates, root_name, root.to_path_buf())?;
-    }
-    let conventional = root.join("skills");
-    if conventional.exists() {
-        discover_conventional(&conventional, &mut candidates)?;
-    }
+    discover_recursively(root, root_name, &mut candidates)?;
     for (expected_name, relative) in explicit_paths {
         let relative_path = validate_relative_selector(relative)?;
         let selected = root.join(&relative_path);
@@ -64,7 +58,7 @@ pub fn discover_candidates(
 
     if candidates.is_empty() {
         return Err(AruError::msg(
-            "Git source exports no valid skills (expected SKILL.md or skills/**/SKILL.md)",
+            "Git source exports no valid skills (expected ./SKILL.md or **/SKILL.md)",
         ));
     }
 
@@ -150,9 +144,14 @@ pub fn discover_and_select(
     select_candidates(candidates, requirement)
 }
 
-fn discover_conventional(root: &Path, candidates: &mut BTreeMap<String, PathBuf>) -> Result<()> {
-    discover_conventional_with_limits(
+fn discover_recursively(
+    root: &Path,
+    root_name: &str,
+    candidates: &mut BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    discover_recursively_with_limits(
         root,
+        root_name,
         candidates,
         DISCOVERY_MAX_DEPTH,
         DISCOVERY_MAX_DIRECTORIES,
@@ -160,15 +159,16 @@ fn discover_conventional(root: &Path, candidates: &mut BTreeMap<String, PathBuf>
     )
 }
 
-fn discover_conventional_with_limits(
+fn discover_recursively_with_limits(
     root: &Path,
+    root_name: &str,
     candidates: &mut BTreeMap<String, PathBuf>,
     max_depth: usize,
     max_directories: usize,
     max_entries: usize,
 ) -> Result<()> {
     if !root.is_dir() {
-        return Err(AruError::msg("source skills path is not a directory"));
+        return Err(AruError::msg("skill source root is not a directory"));
     }
     let mut directories = 0usize;
     let mut entries = 0usize;
@@ -192,8 +192,14 @@ fn discover_conventional_with_limits(
                 return Err(limit_error("directories", max_directories));
             }
             if depth <= max_depth && item.path().join("SKILL.md").is_file() {
-                let name = parse_skill_name(&item.path().join("SKILL.md"))?;
-                insert_candidate(candidates, &name, item.path().to_path_buf())?;
+                let expected_name = if depth == 0 {
+                    root_name
+                } else {
+                    item.file_name()
+                        .to_str()
+                        .ok_or_else(|| AruError::msg("skill directory name is not valid UTF-8"))?
+                };
+                insert_candidate(candidates, expected_name, item.path().to_path_buf())?;
             }
         }
     }
@@ -455,16 +461,36 @@ mod tests {
     }
 
     #[test]
-    fn nested_collection_and_explicit_selection_are_stable() {
+    fn repository_wide_discovery_and_explicit_selection_are_stable() {
         let temporary = tempfile::tempdir().unwrap();
-        write_skill(&temporary.path().join("skills/a/nested/alpha"), "alpha");
+        write_skill(
+            &temporary.path().join("collections/a/nested/alpha"),
+            "alpha",
+        );
         let requirement = SkillRequirement {
             include: vec!["alpha".into()],
             ..SkillRequirement::default()
         };
         let selected = discover_and_select(temporary.path(), "repository", &requirement).unwrap();
-        assert_eq!(selected[0].relative_path, "skills/a/nested/alpha");
+        assert_eq!(selected[0].relative_path, "collections/a/nested/alpha");
         assert_eq!(selected[0].sha256.len(), 71);
+    }
+
+    #[test]
+    fn repository_wide_discovery_includes_root_and_top_level_skills() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("repository");
+        write_skill(&root, "repository");
+        write_skill(&root.join("benchmark-model"), "benchmark-model");
+
+        let candidates = discover_candidates(&root, "repository", &BTreeMap::new()).unwrap();
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.name.as_str(), candidate.relative_path.as_str()))
+                .collect::<Vec<_>>(),
+            [("benchmark-model", "benchmark-model"), ("repository", ".")]
+        );
     }
 
     #[test]
@@ -534,9 +560,10 @@ mod tests {
         }
         std::fs::create_dir_all(&deep).unwrap();
         let mut candidates = BTreeMap::new();
-        let error = discover_conventional(&temporary.path().join("skills"), &mut candidates)
-            .unwrap_err()
-            .to_string();
+        let error =
+            discover_recursively(&temporary.path().join("skills"), "skills", &mut candidates)
+                .unwrap_err()
+                .to_string();
         assert!(error.contains("depth limit"));
         assert!(candidates.is_empty());
     }
@@ -548,8 +575,9 @@ mod tests {
         std::fs::create_dir_all(temporary.path().join("skills/b")).unwrap();
         let mut candidates = BTreeMap::new();
         assert!(
-            discover_conventional_with_limits(
+            discover_recursively_with_limits(
                 &temporary.path().join("skills"),
+                "skills",
                 &mut candidates,
                 DISCOVERY_MAX_DEPTH,
                 1,
@@ -559,8 +587,9 @@ mod tests {
         );
         candidates.clear();
         assert!(
-            discover_conventional_with_limits(
+            discover_recursively_with_limits(
                 &temporary.path().join("skills"),
+                "skills",
                 &mut candidates,
                 DISCOVERY_MAX_DEPTH,
                 DISCOVERY_MAX_DIRECTORIES,
