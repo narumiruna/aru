@@ -13,10 +13,9 @@ A manual installer run additionally installs the latest published release throug
 
 The Release, Publish, and Publish PyPI workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
 Release archive builds set `ARU_BUILD_DISTRIBUTION=standalone` and verify the marker before packaging, enabling `aru self update`.
-PyPI wheel, source-distribution, and ordinary Cargo builds remain package-manager-owned and reject self-update.
-The PyPI workflow publishes seven wheels: manylinux2014 and musllinux 1.2 for x86_64 and ARM64, macOS for Intel and Apple silicon, and Windows for x86_64.
-It also publishes a source distribution for platforms that have a Rust toolchain but no compatible wheel.
-Pull requests that change PyPI distribution inputs and manual workflow runs build and test all artifacts without entering the `release` environment or requesting an OIDC publish token.
+PyPI wheel and ordinary Cargo builds remain package-manager-owned and reject self-update.
+The PyPI workflow publishes two wheels: manylinux2014 for x86_64 and macOS for Apple silicon.
+Manual PyPI workflow runs build and test all wheels without entering the `release` environment or requesting an OIDC publish token.
 Only a validated stable tag push can run the PyPI publish job.
 A failed workflow can be rerun independently.
 

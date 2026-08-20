@@ -11,13 +11,7 @@ mkdir -p "$valid_dist"
 
 artifacts=(
   "arust-${version}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
-  "arust-${version}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
-  "arust-${version}-py3-none-musllinux_1_2_x86_64.whl"
-  "arust-${version}-py3-none-musllinux_1_2_aarch64.whl"
-  "arust-${version}-py3-none-macosx_10_12_x86_64.whl"
   "arust-${version}-py3-none-macosx_11_0_arm64.whl"
-  "arust-${version}-py3-none-win_amd64.whl"
-  "arust-${version}.tar.gz"
 )
 for artifact in "${artifacts[@]}"; do
   printf 'fixture for %s\n' "$artifact" > "$valid_dist/$artifact"
@@ -53,7 +47,7 @@ expect_failure() {
 
 manifest="$temporary/manifest"
 "$checker" local "$valid_dist" "$version" > "$manifest"
-[[ "$(wc -l < "$manifest")" -eq 8 ]]
+[[ "$(wc -l < "$manifest")" -eq 2 ]]
 cut --fields 3 "$manifest" | sort --check
 
 absent="$temporary/absent.json"
@@ -63,7 +57,7 @@ expect_failure "PyPI is missing expected artifact" \
   "$checker" postpublish "$valid_dist" "$version" "$absent"
 
 subset="$temporary/subset.json"
-make_json "$subset" "${artifacts[0]}" "${artifacts[1]}"
+make_json "$subset" "${artifacts[0]}"
 "$checker" prepublish "$valid_dist" "$version" "$subset" >/dev/null
 expect_failure "PyPI is missing expected artifact" \
   "$checker" postpublish "$valid_dist" "$version" "$subset"
@@ -113,8 +107,8 @@ expect_failure "expected exactly one manylinux-x86_64 artifact, found 0" \
 
 duplicate_local="$temporary/duplicate-local"
 cp -R "$valid_dist" "$duplicate_local"
-printf duplicate > "$duplicate_local/arust-${version}-py3-none-macosx_10_13_x86_64.whl"
-expect_failure "expected exactly one macos-x86_64 artifact, found 2" \
+printf duplicate > "$duplicate_local/arust-${version}-py3-none-macosx_12_0_arm64.whl"
+expect_failure "expected exactly one macos-arm64 artifact, found 2" \
   "$checker" local "$duplicate_local" "$version"
 
 extra_local="$temporary/extra-local"

@@ -2,15 +2,6 @@ name: Publish PyPI
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/pypi.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "pyproject.toml"
-      - "scripts/check-pypi-artifacts.sh"
-      - "src/**"
-      - "tests/check-pypi-artifacts.sh"
   push:
     tags:
       - "v*.*.*"
@@ -83,32 +74,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             manylinux: "2014"
             python-platform: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            manylinux: "2014"
-            python-platform: aarch64-unknown-linux-gnu
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            manylinux: musllinux_1_2
-            python-platform: x86_64-unknown-linux-musl
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            manylinux: musllinux_1_2
-            python-platform: aarch64-unknown-linux-musl
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            manylinux: "auto"
-            python-platform: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
             manylinux: "auto"
             python-platform: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            manylinux: "auto"
-            python-platform: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 30
     env:
       ARU_BUILD_DISTRIBUTION: pypi
       VERSION: ${{ needs.validate.outputs.version }}
@@ -142,9 +113,6 @@ jobs:
           UV_TOOL_DIR="$PWD/.uv-tools" UV_TOOL_BIN_DIR="$PWD/.uv-bin" \
             uv tool install --offline --python-platform "$PYTHON_PLATFORM" "${wheels[0]}"
           executable="$PWD/.uv-bin/aru"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            executable="${executable}.exe"
-          fi
           output="$("$executable" --version)"
           if [[ "$output" != "aru $VERSION" ]]; then
             echo "Expected aru $VERSION, got: $output" >&2
@@ -164,80 +132,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  sdist:
-    name: Build source distribution
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      ARU_BUILD_DISTRIBUTION: pypi
-      VERSION: ${{ needs.validate.outputs.version }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
-
-      - name: Build source distribution
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
-        with:
-          maturin-version: v1.11.5
-          command: sdist
-          args: --out dist
-
-      - name: Verify source distribution contents
-        run: |
-          mapfile -t archives < <(find dist -maxdepth 1 -type f -name '*.tar.gz' -print)
-          if [[ "${#archives[@]}" -ne 1 ]]; then
-            printf 'Expected exactly one source distribution, found %s\n' "${#archives[@]}" >&2
-            printf '%s\n' "${archives[@]}" >&2
-            exit 1
-          fi
-          expected="arust-${VERSION}.tar.gz"
-          if [[ "${archives[0]##*/}" != "$expected" ]]; then
-            echo "Expected $expected, got: ${archives[0]##*/}" >&2
-            exit 1
-          fi
-          root="arust-${VERSION}"
-          tar --list --gzip --file "${archives[0]}" > "$RUNNER_TEMP/sdist-contents"
-          for path in pyproject.toml Cargo.toml Cargo.lock LICENSE README.md; do
-            grep --fixed-strings --line-regexp "$root/$path" "$RUNNER_TEMP/sdist-contents"
-          done
-          grep --extended-regexp --line-regexp "$root/src/.+" "$RUNNER_TEMP/sdist-contents" >/dev/null
-
-      - name: Verify source installation
-        run: |
-          archive="dist/arust-${VERSION}.tar.gz"
-          UV_TOOL_DIR="$PWD/.uv-tools" UV_TOOL_BIN_DIR="$PWD/.uv-bin" \
-            uv tool install "$archive"
-          executable="$PWD/.uv-bin/aru"
-          output="$("$executable" --version)"
-          if [[ "$output" != "aru $VERSION" ]]; then
-            echo "Expected aru $VERSION, got: $output" >&2
-            exit 1
-          fi
-          if update_output="$("$executable" --offline self update 2>&1)"; then
-            echo "Package-manager source distribution unexpectedly allowed self-update" >&2
-            exit 1
-          fi
-          printf '%s\n' "$update_output" | grep --fixed-strings "uv tool upgrade arust"
-
-      - name: Upload source distribution
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: pypi-sdist
-          path: dist/*.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-
   publish:
     name: Publish arust to PyPI
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs:
       - validate
       - build
-      - sdist
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: release

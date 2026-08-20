@@ -15,7 +15,7 @@ Aru requires a system `git` executable.
     ```
 
     The distribution name differs because `aru` was already taken on PyPI, but the installed command remains `aru`.
-    Prebuilt wheels support x86-64 glibc Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
+    Prebuilt wheels support x86-64 glibc Linux and Apple Silicon macOS.
 
 === "macOS and Linux"
 

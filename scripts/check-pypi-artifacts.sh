@@ -35,13 +35,7 @@ fi
 
 expected_categories=(
   manylinux-x86_64
-  manylinux-aarch64
-  musllinux-x86_64
-  musllinux-aarch64
-  macos-x86_64
   macos-arm64
-  windows-x86_64
-  sdist
 )
 declare -A category_counts=()
 declare -A local_digests=()
@@ -53,10 +47,6 @@ done
 classify_artifact() {
   local filename="$1"
   local version_pattern="${version//./\\.}"
-  if [[ "$filename" =~ ^arust-${version_pattern}-py3-none-macosx_[0-9]+_[0-9]+_x86_64\.whl$ ]]; then
-    printf '%s\n' macos-x86_64
-    return
-  fi
   if [[ "$filename" =~ ^arust-${version_pattern}-py3-none-macosx_[0-9]+_[0-9]+_arm64\.whl$ ]]; then
     printf '%s\n' macos-arm64
     return
@@ -64,21 +54,6 @@ classify_artifact() {
   case "$filename" in
     "arust-${version}-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl")
       printf '%s\n' manylinux-x86_64
-      ;;
-    "arust-${version}-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl")
-      printf '%s\n' manylinux-aarch64
-      ;;
-    "arust-${version}-py3-none-musllinux_1_2_x86_64.whl")
-      printf '%s\n' musllinux-x86_64
-      ;;
-    "arust-${version}-py3-none-musllinux_1_2_aarch64.whl")
-      printf '%s\n' musllinux-aarch64
-      ;;
-    "arust-${version}-py3-none-win_amd64.whl")
-      printf '%s\n' windows-x86_64
-      ;;
-    "arust-${version}.tar.gz")
-      printf '%s\n' sdist
       ;;
     *)
       return 1
