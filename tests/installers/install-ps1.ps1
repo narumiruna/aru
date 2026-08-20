@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 3.0
 
 $repoRoot = (Resolve-Path (Join-Path (Join-Path $PSScriptRoot "..") "..")).Path
-$installer = Join-Path $repoRoot "install.ps1"
+$installer = Join-Path (Join-Path $repoRoot "scripts") "install.ps1"
 $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ("aru-installer-test-" + [Guid]::NewGuid().ToString("N"))
 $version = "1.2.3"
 $target = "x86_64-pc-windows-msvc"

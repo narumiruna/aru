@@ -22,19 +22,19 @@ Aru requires a system `git` executable.
     The standalone installer downloads a prebuilt, checksum-verified binary and does not require Rust.
 
     ```console
-    curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
+    curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.sh | sh
     ```
 
     You can use `wget` instead:
 
     ```console
-    wget -qO- https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
+    wget -qO- https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.sh | sh
     ```
 
 === "Windows PowerShell"
 
     ```powershell
-    powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/install.ps1 | iex"
+    powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.ps1 | iex"
     ```
 
 === "Cargo"

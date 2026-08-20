@@ -30,7 +30,7 @@ jobs:
         env:
           ARU_INSTALL_DIR: ${{ runner.temp }}/aru-bin
         run: |
-          curl -LsSf "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/install.sh" | sh
+          curl -LsSf "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/install.sh" | sh
           "$ARU_INSTALL_DIR/aru" --version
 
   windows:
@@ -50,5 +50,5 @@ jobs:
         shell: powershell
         run: |
           $env:ARU_INSTALL_DIR = Join-Path $env:RUNNER_TEMP "aru-bin"
-          Invoke-RestMethod "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/install.ps1" | Invoke-Expression
+          Invoke-RestMethod "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/install.ps1" | Invoke-Expression
           & (Join-Path $env:ARU_INSTALL_DIR "aru.exe") --version

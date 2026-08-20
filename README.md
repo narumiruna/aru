@@ -49,14 +49,14 @@ The recommended installation uses a standalone script to download a prebuilt, ch
 On macOS or Linux, install the latest release into `~/.local/bin/aru` with either curl or wget:
 
 ```console
-curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
-wget -qO- https://raw.githubusercontent.com/narumiruna/aru/main/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.sh | sh
+wget -qO- https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.sh | sh
 ```
 
 On 64-bit Windows, install into `~/.local/bin/aru.exe` with Windows PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/install.ps1 | iex"
+powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/narumiruna/aru/main/scripts/install.ps1 | iex"
 ```
 
 The installers currently support x86-64 Linux, Intel and Apple Silicon macOS, and x86-64 Windows.
