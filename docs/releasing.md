@@ -13,7 +13,11 @@ A manual installer run additionally installs the latest published release throug
 
 The Release, Publish, and Publish PyPI workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
 Release archive builds set `ARU_BUILD_DISTRIBUTION=standalone` and verify the marker before packaging, enabling `aru self update`.
-PyPI wheel and ordinary Cargo builds remain package-manager-owned and reject self-update.
+PyPI wheel, source-distribution, and ordinary Cargo builds remain package-manager-owned and reject self-update.
+The PyPI workflow publishes seven wheels: manylinux2014 and musllinux 1.2 for x86_64 and ARM64, macOS for Intel and Apple silicon, and Windows for x86_64.
+It also publishes a source distribution for platforms that have a Rust toolchain but no compatible wheel.
+Pull requests that change PyPI distribution inputs and manual workflow runs build and test all artifacts without entering the `release` environment or requesting an OIDC publish token.
+Only a validated stable tag push can run the PyPI publish job.
 A failed workflow can be rerun independently.
 
 ## One-time repository configuration
@@ -64,6 +68,9 @@ The PyPI publish job uses GitHub OIDC and does not require a long-lived PyPI API
 - If crates.io publishing fails before the version exists, rerun `Publish` for the same tag.
 - If the crate version already exists, `Publish` verifies the package and exits successfully without trying to overwrite it.
 - If PyPI publishing fails, fix the Trusted Publisher or workflow issue and rerun `Publish PyPI` for the same tag.
-  The workflow skips wheels that PyPI already accepted and uploads any missing wheels.
+  Before using `skip-existing`, the workflow requires every existing PyPI filename and SHA-256 digest to match the locally rebuilt artifact.
+  An exact matching subset is accepted as a partial release, and the workflow uploads the missing distributions.
+  A digest conflict, unexpected remote filename, malformed response, or PyPI transport failure stops publication.
+  After upload, the workflow waits for a bounded period and verifies that PyPI exposes the complete expected filename and digest set.
 - Published crates.io and PyPI versions cannot be overwritten.
   Yank a bad version if necessary, then publish a new version without moving or reusing the old tag.

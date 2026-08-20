@@ -1,6 +1,16 @@
 name: Publish PyPI
 
 on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/pypi.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "pyproject.toml"
+      - "scripts/check-pypi-artifacts.sh"
+      - "src/**"
+      - "tests/check-pypi-artifacts.sh"
   push:
     tags:
       - "v*.*.*"
@@ -10,50 +20,55 @@ permissions:
 
 concurrency:
   group: pypi-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   validate:
-    name: Validate release tag
+    name: Validate distribution source
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Check out tagged source
-        uses: actions/checkout@v7
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - name: Validate tag, version, and main ancestry
+      - name: Validate source version and release tag
         id: release
         env:
+          EVENT_NAME: ${{ github.event_name }}
           TAG: ${{ github.ref_name }}
         run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Release tag must match vX.Y.Z, got: $TAG" >&2
-            exit 1
-          fi
-          version="${TAG#v}"
           manifest_version="$(
             cargo metadata --locked --no-deps --format-version 1 |
               jq --raw-output '.packages[] | select(.name == "aru") | .version'
           )"
-          if [[ "$version" != "$manifest_version" ]]; then
-            echo "Tag $TAG does not match Cargo.toml version $manifest_version" >&2
-            exit 1
-          fi
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          tag_commit="$(git rev-list --max-count=1 "$TAG")"
-          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
-            echo "Tag $TAG does not point to a commit on main" >&2
-            exit 1
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release tag must match vX.Y.Z, got: $TAG" >&2
+              exit 1
+            fi
+            version="${TAG#v}"
+            if [[ "$version" != "$manifest_version" ]]; then
+              echo "Tag $TAG does not match Cargo.toml version $manifest_version" >&2
+              exit 1
+            fi
+            git fetch --no-tags origin main:refs/remotes/origin/main
+            tag_commit="$(git rev-list --max-count=1 "$TAG")"
+            if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+              echo "Tag $TAG does not point to a commit on main" >&2
+              exit 1
+            fi
+          else
+            version="$manifest_version"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -66,42 +81,66 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            manylinux: "2014"
+            python-platform: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: "2014"
+            python-platform: aarch64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            python-platform: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            manylinux: musllinux_1_2
+            python-platform: aarch64-unknown-linux-musl
           - os: macos-15-intel
             target: x86_64-apple-darwin
+            manylinux: "auto"
+            python-platform: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
+            manylinux: "auto"
+            python-platform: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            manylinux: "auto"
+            python-platform: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       ARU_BUILD_DISTRIBUTION: pypi
       VERSION: ${{ needs.validate.outputs.version }}
     steps:
-      - name: Check out tagged source
-        uses: actions/checkout@v7
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - name: Build wheel
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
+          maturin-version: v1.11.5
           target: ${{ matrix.target }}
-          args: --release --locked --out dist
-          manylinux: 2014
+          args: --release --locked --compatibility pypi --out dist
+          manylinux: ${{ matrix.manylinux }}
           sccache: "true"
 
       - name: Verify uv tool installation
         shell: bash
+        env:
+          PYTHON_PLATFORM: ${{ matrix.python-platform }}
         run: |
-          wheel="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
-          if [[ -z "$wheel" ]]; then
-            echo "Maturin did not produce a wheel" >&2
+          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name '*.whl' -print)
+          if [[ "${#wheels[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one wheel, found %s\n' "${#wheels[@]}" >&2
+            printf '%s\n' "${wheels[@]}" >&2
             exit 1
           fi
           UV_TOOL_DIR="$PWD/.uv-tools" UV_TOOL_BIN_DIR="$PWD/.uv-bin" \
-            uv tool install "$wheel"
+            uv tool install --offline --python-platform "$PYTHON_PLATFORM" "${wheels[0]}"
           executable="$PWD/.uv-bin/aru"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             executable="${executable}.exe"
@@ -118,52 +157,187 @@ jobs:
           printf '%s\n' "$update_output" | grep --fixed-strings "uv tool upgrade arust"
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pypi-${{ matrix.target }}
+          name: pypi-wheel-${{ matrix.target }}
           path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
+  sdist:
+    name: Build source distribution
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ARU_BUILD_DISTRIBUTION: pypi
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: Build source distribution
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        with:
+          maturin-version: v1.11.5
+          command: sdist
+          args: --out dist
+
+      - name: Verify source distribution contents
+        run: |
+          mapfile -t archives < <(find dist -maxdepth 1 -type f -name '*.tar.gz' -print)
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            printf 'Expected exactly one source distribution, found %s\n' "${#archives[@]}" >&2
+            printf '%s\n' "${archives[@]}" >&2
+            exit 1
+          fi
+          expected="arust-${VERSION}.tar.gz"
+          if [[ "${archives[0]##*/}" != "$expected" ]]; then
+            echo "Expected $expected, got: ${archives[0]##*/}" >&2
+            exit 1
+          fi
+          root="arust-${VERSION}"
+          tar --list --gzip --file "${archives[0]}" > "$RUNNER_TEMP/sdist-contents"
+          for path in pyproject.toml Cargo.toml Cargo.lock LICENSE README.md; do
+            grep --fixed-strings --line-regexp "$root/$path" "$RUNNER_TEMP/sdist-contents"
+          done
+          grep --extended-regexp --line-regexp "$root/src/.+" "$RUNNER_TEMP/sdist-contents" >/dev/null
+
+      - name: Verify source installation
+        run: |
+          archive="dist/arust-${VERSION}.tar.gz"
+          UV_TOOL_DIR="$PWD/.uv-tools" UV_TOOL_BIN_DIR="$PWD/.uv-bin" \
+            uv tool install "$archive"
+          executable="$PWD/.uv-bin/aru"
+          output="$("$executable" --version)"
+          if [[ "$output" != "aru $VERSION" ]]; then
+            echo "Expected aru $VERSION, got: $output" >&2
+            exit 1
+          fi
+          if update_output="$("$executable" --offline self update 2>&1)"; then
+            echo "Package-manager source distribution unexpectedly allowed self-update" >&2
+            exit 1
+          fi
+          printf '%s\n' "$update_output" | grep --fixed-strings "uv tool upgrade arust"
+
+      - name: Upload source distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pypi-sdist
+          path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish arust to PyPI
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     needs:
       - validate
       - build
+      - sdist
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment: release
     permissions:
       contents: read
       id-token: write
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
     steps:
-      - name: Download wheels
-        uses: actions/download-artifact@v8
+      - name: Check out release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: pypi-*
           path: dist
           merge-multiple: true
 
-      - name: Verify wheel set
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          mapfile -t wheels < <(find dist -maxdepth 1 -name "arust-${VERSION}-*.whl" -print | sort)
-          if [[ "${#wheels[@]}" -ne 4 ]]; then
-            printf 'Expected 4 arust %s wheels, found %s\n' "$VERSION" "${#wheels[@]}" >&2
-            printf '%s\n' "${wheels[@]}" >&2
-            exit 1
-          fi
+      - name: Verify distribution set
+        run: scripts/check-pypi-artifacts.sh local dist "$VERSION" > "$RUNNER_TEMP/pypi-artifacts.tsv"
 
-      - name: Publish wheels with Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Fetch existing PyPI release
+        run: |
+          response="$RUNNER_TEMP/pypi-release.json"
+          status="$(
+            curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --max-filesize 10485760 \
+              --header "User-Agent: aru-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+              --output "$response" \
+              --write-out '%{http_code}' \
+              "https://pypi.org/pypi/arust/${VERSION}/json"
+          )"
+          case "$status" in
+            200) ;;
+            404)
+              jq --null-input --arg version "$VERSION" \
+                '{info: {version: $version}, urls: []}' > "$response"
+              ;;
+            *)
+              echo "PyPI returned HTTP $status" >&2
+              head --bytes 4096 "$response" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify existing PyPI artifacts
+        run: scripts/check-pypi-artifacts.sh prepublish dist "$VERSION" "$RUNNER_TEMP/pypi-release.json" > /dev/null
+
+      - name: Publish distributions with Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist/
           skip-existing: true
 
+      - name: Verify published PyPI artifacts
+        run: |
+          response="$RUNNER_TEMP/pypi-release.json"
+          for attempt in {1..12}; do
+            status="$(
+              curl --silent --show-error \
+                --connect-timeout 10 \
+                --max-time 30 \
+                --max-filesize 10485760 \
+                --header "User-Agent: aru-release-workflow ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY)" \
+                --output "$response" \
+                --write-out '%{http_code}' \
+                "https://pypi.org/pypi/arust/${VERSION}/json"
+            )"
+            if [[ "$status" == "404" ]]; then
+              result=3
+              diagnostic="PyPI release $VERSION is not visible yet"
+            elif [[ "$status" == "200" ]]; then
+              set +e
+              diagnostic="$(scripts/check-pypi-artifacts.sh postpublish dist "$VERSION" "$response" 2>&1 > /dev/null)"
+              result=$?
+              set -e
+            else
+              echo "PyPI returned HTTP $status" >&2
+              head --bytes 4096 "$response" >&2
+              exit 1
+            fi
+            if [[ "$result" -eq 0 ]]; then
+              exit 0
+            fi
+            if [[ "$result" -ne 3 ]]; then
+              printf '%s\n' "$diagnostic" >&2
+              exit "$result"
+            fi
+            if [[ "$attempt" -eq 12 ]]; then
+              printf '%s\n' "$diagnostic" >&2
+              echo "PyPI did not expose the complete release before the verification deadline" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
       - name: Write summary
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           {
             echo "## PyPI Publish"
@@ -172,4 +346,12 @@ jobs:
             echo "- Command: \`aru\`"
             echo "- Version: \`$VERSION\`"
             echo "- URL: https://pypi.org/project/arust/$VERSION/"
+            echo
+            echo "### Verified artifacts"
+            echo
+            echo "| SHA-256 | Bytes | Filename |"
+            echo "| --- | ---: | --- |"
+            while IFS=$'\t' read -r digest size filename; do
+              printf '| `%s` | %s | `%s` |\n' "$digest" "$size" "$filename"
+            done < "$RUNNER_TEMP/pypi-artifacts.tsv"
           } >> "$GITHUB_STEP_SUMMARY"
