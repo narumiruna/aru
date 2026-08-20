@@ -364,6 +364,7 @@ impl GraphResolver<'_> {
                     .precise
                     .get(&source.identity)
                     .map(String::as_str),
+                fallback_branch: None,
             },
             &format!("aru package {}", source.identity),
         )?;

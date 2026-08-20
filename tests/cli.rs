@@ -288,6 +288,43 @@ fn all_long_and_short_flags_install_wildcard_without_a_prompt() {
 }
 
 #[test]
+fn skill_add_without_a_reference_falls_back_to_main_when_no_semver_tag_exists() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha"]);
+    git(&repository, &["tag", "--delete", "1.0.0"]);
+    git(&repository, &["branch", "--move", "main"]);
+    let revision = git_output(&repository, &["rev-parse", "HEAD"]);
+    aru(&project)
+        .args(["init", "--target", "codex"])
+        .assert()
+        .success();
+
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "alpha",
+        ])
+        .assert()
+        .success();
+
+    let manifest = std::fs::read_to_string(project.join("aru.toml")).unwrap();
+    assert!(!manifest.contains("branch ="));
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lock.skill_packages[0].requirement, "version:*");
+    assert_eq!(lock.skill_packages[0].version, "main");
+    assert_eq!(lock.skill_packages[0].revision, revision);
+    assert!(project.join(".agents/skills/alpha").is_dir());
+}
+
+#[test]
 fn skill_add_upgrade_installs_new_source_and_refreshes_existing_semver() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

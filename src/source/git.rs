@@ -85,6 +85,7 @@ pub(crate) struct ReferencePolicy<'a> {
     pub(crate) update: bool,
     pub(crate) offline: bool,
     pub(crate) precise: Option<&'a str>,
+    pub(crate) fallback_branch: Option<&'a str>,
 }
 
 pub(crate) fn select_reference(
@@ -121,11 +122,12 @@ pub(crate) fn select_reference(
         )));
     }
     let exact = precise_requirement(spec, policy.precise)?;
-    resolve(
+    resolve_with_fallback(
         source,
         exact.as_deref().or(spec.version),
         spec.branch,
         spec.revision,
+        policy.fallback_branch,
     )
 }
 
@@ -232,6 +234,16 @@ pub fn resolve(
     branch: Option<&str>,
     rev: Option<&str>,
 ) -> Result<GitResolution> {
+    resolve_with_fallback(source, version, branch, rev, None)
+}
+
+fn resolve_with_fallback(
+    source: &GitSource,
+    version: Option<&str>,
+    branch: Option<&str>,
+    rev: Option<&str>,
+    fallback_branch: Option<&str>,
+) -> Result<GitResolution> {
     let references =
         usize::from(version.is_some()) + usize::from(branch.is_some()) + usize::from(rev.is_some());
     if references > 1 {
@@ -265,15 +277,23 @@ pub fn resolve(
         .filter(|(candidate, _, _)| requirement.matches(candidate))
         .collect::<Vec<_>>();
     matches.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    let (selected, _tag, revision) = matches.pop().ok_or_else(|| {
-        AruError::msg(format!(
-            "Git source has no SemVer tag matching {requirement_text:?}; use --rev for an unversioned source"
-        ))
-    })?;
-    Ok(GitResolution {
-        version: selected.to_string(),
-        revision,
-    })
+    if let Some((selected, _tag, revision)) = matches.pop() {
+        return Ok(GitResolution {
+            version: selected.to_string(),
+            revision,
+        });
+    }
+    if version.is_none()
+        && let Some(branch) = fallback_branch
+    {
+        return Ok(GitResolution {
+            version: branch.to_owned(),
+            revision: resolve_branch(source, branch)?,
+        });
+    }
+    Err(AruError::msg(format!(
+        "Git source has no SemVer tag matching {requirement_text:?}; use --branch or --rev for an unversioned source"
+    )))
 }
 
 pub fn locked_version_matches(requirement: Option<&str>, version: &str) -> bool {
@@ -715,6 +735,29 @@ mod tests {
         for invalid in ["-main", "bad..name", "wild*card", "@{upstream}"] {
             assert!(resolve(&source, None, Some(invalid), None).is_err());
         }
+    }
+
+    #[test]
+    fn missing_semver_tags_can_fall_back_to_main_only_without_an_explicit_version() {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("repository");
+        std::fs::create_dir(&repository).unwrap();
+        git(&repository, &["init", "--quiet"]);
+        git(&repository, &["config", "user.email", "test@example.com"]);
+        git(&repository, &["config", "user.name", "Test"]);
+        git(&repository, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(repository.join("file"), "content").unwrap();
+        git(&repository, &["add", "."]);
+        git(&repository, &["commit", "--quiet", "-m", "initial"]);
+        git(&repository, &["branch", "--move", "main"]);
+        let revision = git_output(&repository, &["rev-parse", "HEAD"]);
+        let source = canonicalize(temporary.path(), "repository").unwrap();
+
+        let fallback = resolve_with_fallback(&source, None, None, None, Some("main")).unwrap();
+        assert_eq!(fallback.version, "main");
+        assert_eq!(fallback.revision, revision.trim());
+        assert!(resolve_with_fallback(&source, Some("*"), None, None, Some("main")).is_err());
+        assert!(resolve(&source, None, None, None).is_err());
     }
 
     #[test]

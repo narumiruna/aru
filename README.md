@@ -323,13 +323,17 @@ aru skill add ssh://git@example.com/team/skills.git \
 
 | Option | Resolution behavior |
 | --- | --- |
-| No reference option | Latest matching SemVer tag; never the default branch |
+| No reference option | Latest matching SemVer tag; falls back to `main` when none exists |
 | `--version 0.5.0` | Cargo caret semantics: `^0.5.0` |
 | `--version '=0.5.0'` | Exact tag |
 | `--branch main` | Current branch head, pinned to an exact commit in `aru.lock` |
 | `--rev <SHA>` | Immutable 7–40 character commit |
 
-`--version`, `--branch`, and `--rev` are mutually exclusive. Source arguments contain neither a path selector nor a reference, so SCP-like `git@host:path` sources remain unambiguous. Equivalent canonical Git sources do not create duplicate packages.
+`--version`, `--branch`, and `--rev` are mutually exclusive.
+Source arguments contain neither a path selector nor a reference, so SCP-like `git@host:path` sources remain unambiguous.
+Equivalent canonical Git sources do not create duplicate packages.
+The `main` fallback applies only when no reference option is provided; an explicit `--version` remains strict.
+The fallback commit is pinned in `aru.lock`, and a later update prefers a matching SemVer tag if the repository adds one.
 
 Use `--upgrade` / `-U` during add to re-resolve an existing source instead of reusing its lock:
 

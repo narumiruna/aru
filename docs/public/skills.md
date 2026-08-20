@@ -34,11 +34,15 @@ aru skill add owner/repository --rev 67cd354 --skill review
 
 | Option | Resolution behavior |
 | --- | --- |
-| No reference | Latest matching SemVer tag, never the default branch |
+| No reference | Latest matching SemVer tag, falling back to `main` when none exists |
 | `--version 0.5.0` | Cargo caret semantics: `^0.5.0` |
 | `--version '=0.5.0'` | Exact tag |
 | `--branch main` | Current branch head pinned to an exact commit in `aru.lock` |
 | `--rev 67cd354` | Exact immutable commit |
+
+The `main` fallback applies only when no reference option is provided.
+An explicit `--version` remains strict and never falls back to a branch.
+The fallback commit is pinned in `aru.lock`; a later update prefers a matching SemVer tag if the repository adds one.
 
 Use `--upgrade` during `add` to re-resolve an existing source instead of reusing its compatible lock.
 
