@@ -289,6 +289,53 @@ fn all_long_and_short_flags_install_wildcard_without_a_prompt() {
 }
 
 #[test]
+fn skill_add_discovers_top_level_skill_directories() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    create_repository(&repository, &["conventional"]);
+    let skill = repository.join("benchmark-model");
+    std::fs::create_dir(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: benchmark-model\ndescription: Test benchmark model\n---\n# Benchmark model\n",
+    )
+    .unwrap();
+    git(&repository, &["add", "benchmark-model/SKILL.md"]);
+    git(
+        &repository,
+        &["commit", "--quiet", "-m", "add top-level skill"],
+    );
+    git(&repository, &["tag", "1.1.0"]);
+    std::fs::create_dir(&project).unwrap();
+    aru(&project)
+        .args(["init", "--target", "codex"])
+        .assert()
+        .success();
+
+    aru(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "benchmark-model",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        project
+            .join(".agents/skills/benchmark-model/SKILL.md")
+            .is_file()
+    );
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lock.skill_packages[0].skills[0].path, "benchmark-model");
+}
+
+#[test]
 fn skill_add_without_a_reference_falls_back_to_main_when_no_semver_tag_exists() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

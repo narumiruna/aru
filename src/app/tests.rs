@@ -154,7 +154,7 @@ fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
     )
     .unwrap();
     let mut preserve = FakeChooser {
-        response: Some(vec!["alpha".into(), "beta".into()]),
+        response: Some(vec!["alpha".into(), "beta".into(), "custom".into()]),
         ..FakeChooser::default()
     };
     skill_add_with_mode(
@@ -164,7 +164,7 @@ fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
         &mut preserve,
     )
     .unwrap();
-    assert_eq!(preserve.seen_defaults, ["alpha", "beta"]);
+    assert_eq!(preserve.seen_defaults, ["alpha", "beta", "custom"]);
     let manifest = ManifestDocument::load(&project)
         .unwrap()
         .manifest()
@@ -193,7 +193,7 @@ fn interactive_selection_replaces_explicit_intent_and_can_narrow_wildcard() {
         &mut narrowed,
     )
     .unwrap();
-    assert_eq!(narrowed.seen_defaults, ["beta"]);
+    assert_eq!(narrowed.seen_defaults, ["beta", "custom"]);
     let manifest = ManifestDocument::load(&project)
         .unwrap()
         .manifest()

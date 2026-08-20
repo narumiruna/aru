@@ -235,6 +235,10 @@ A bare `skill add` opens an interactive selector.
 
 Non-interactive environments must use `--skill`, `--all`, or `--path`.
 
+Aru discovers skills from `SKILL.md` files at the repository root or in nested directories within its discovery limits.
+
+Each skill's `name` must match the directory containing its `SKILL.md`, or the repository name for a root skill.
+
 See the [Agent Skills guide](https://narumiruna.github.io/aru/skills/) for revision pinning, target selection, and non-standard layouts.
 
 ### Manage MCP servers
