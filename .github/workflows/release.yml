@@ -117,12 +117,15 @@ jobs:
         shell: pwsh
         run: |
           $output = & "target/$env:TARGET/release/aru.exe" --offline self update 2>&1
-          if ($LASTEXITCODE -eq 0) {
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -eq 0) {
             throw "Offline self-update unexpectedly succeeded"
           }
           if (($output | Out-String) -notmatch "self-update is unavailable in offline mode") {
             throw "Release binary is missing the standalone self-update marker: $output"
           }
+          # GitHub's pwsh wrapper otherwise propagates the expected non-zero native exit.
+          exit 0
 
       - name: Create Unix archive
         if: matrix.archive == 'tar'
