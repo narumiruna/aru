@@ -394,8 +394,15 @@ pub enum TargetCommand {
     Remove(TargetRemoveArgs),
     /// Replace the configured target set exactly.
     Set(TargetSetArgs),
-    /// List configured targets.
-    List,
+    /// List configured or available targets.
+    List(TargetListArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TargetListArgs {
+    /// List every available canonical target, capability, path, and alias.
+    #[arg(long)]
+    pub available: bool,
 }
 
 #[derive(Debug, Args)]

@@ -17,7 +17,7 @@ pub fn render(instruction: &DiscoveredInstruction) -> Result<InstructionProjecti
             };
             let has_native_projection = instruction.unit.targets.iter().any(|target| {
                 crate::target::capabilities(*target).instructions
-                    == crate::target::InstructionCapability::NativeAgents
+                    == Some(crate::target::InstructionCapability::NativeAgents)
             });
             let content = if instruction.unit.managed && !has_native_projection {
                 normalized_markdown(&instruction.content)

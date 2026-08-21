@@ -21,34 +21,41 @@ Depending on configured resources and targets, aru may reconcile:
 
 - `CLAUDE.md` and `.claude/rules/aru/**`;
 - `.github/copilot-instructions.md` and `.github/instructions/aru/**`;
-- `.agents/skills/**`, `.claude/skills/**`, `.github/skills/**`, `.pi/skills/**`, and `.opencode/skills/**`;
+- target skill directories listed in the [skill target registry](skill-targets.md), including `.agents/skills/**`, `.claude/skills/**`, `.github/skills/**`, `.pi/skills/**`, and `.opencode/skills/**`;
 - `.codex/config.toml`, `.mcp.json`, `.github/mcp.json`, and `opencode.json`.
 
 Aru owns only the entries or marker blocks it created. Unrelated configuration and unmanaged content remain outside its authority.
 
 ## Target capabilities
 
-| Capability | Agents | Codex | Claude Code | Copilot CLI | pi | OpenCode |
-| --- | --- | --- | --- | --- | --- | --- |
-| Directory `AGENTS.md` | Native | Native | Sibling import | Root/path projection | Native | Native |
-| Explicit instruction globs | No | No | Path rules | Path rules | No | No |
-| Project skills | `.agents/skills/` | `.agents/skills/` | `.claude/skills/` | `.github/skills/` | `.pi/skills/` | `.opencode/skills/` |
-| stdio MCP | No | Yes | Yes | Yes | No | Yes |
-| Streamable HTTP MCP | No | Yes | Yes | Yes | No | Yes |
-| Environment-backed HTTP auth/headers | No | Yes | Yes | Yes | No | Yes |
+| Capability | Agents | Codex | Claude Code | Copilot CLI | pi | OpenCode | Skill-only targets |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Directory `AGENTS.md` | Native | Native | Sibling import | Root/path projection | Native | Native | No |
+| Explicit instruction globs | No | No | Path rules | Path rules | No | No | No |
+| Project skills | `.agents/skills/` | `.agents/skills/` | `.claude/skills/` | `.github/skills/` | `.pi/skills/` | `.opencode/skills/` | Registry-defined |
+| stdio MCP | No | Yes | Yes | Yes | No | Yes | No |
+| Streamable HTTP MCP | No | Yes | Yes | Yes | No | Yes | No |
+| Environment-backed HTTP auth/headers | No | Yes | Yes | Yes | No | Yes | No |
 
 Aru rejects configurations that a selected target cannot represent rather than silently broadening or dropping behavior.
 
 ## Change targets
 
-Supported target names are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+The six instruction-capable targets are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+Additional canonical targets support project skills only.
+Use the available-target listing for the complete version-specific registry.
 
 ```console
 aru target list
+aru target list --available
 aru target add claude
+aru target add kiro-cli
 aru target remove codex
 aru target set codex claude
 ```
+
+CLI aliases normalize to canonical names before `aru.toml` and `aru.lock` are written.
+Global home-directory skill installation is not supported.
 
 - `add` performs a set union.
 - `remove` performs a set subtraction.

@@ -22,6 +22,7 @@ nav:
   - Reference:
       - Command reference: reference/commands.md
       - Project files and targets: reference/project-files.md
+      - Skill targets: reference/skill-targets.md
       - Safety and recovery: safety.md
 
 theme:

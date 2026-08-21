@@ -280,6 +280,35 @@ fn direct_package_add_locked_replay_audit_and_remove_compose_primitives() {
 }
 
 #[test]
+fn package_skills_support_skill_only_targets_and_locked_replay() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("kit");
+    let project = temporary.path().join("project");
+    init_git(&repository);
+    write_package(&repository, "kit", "1.0.0", false, Some("demo"), None, &[]);
+    commit_version(&repository, "1.0.0");
+    init_project(&project, &["kiro-cli"]);
+
+    aru(&project)
+        .args(["add", repository.to_str().unwrap(), "--version", "=1.0.0"])
+        .assert()
+        .success();
+    assert!(project.join(".kiro/skills/demo/SKILL.md").is_file());
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lock.aru_packages[0].targets, [aru::manifest::Target::Kiro]);
+    assert_eq!(
+        lock.skill_packages[0].targets,
+        [aru::manifest::Target::Kiro]
+    );
+
+    std::fs::remove_dir_all(project.join(".kiro/skills/demo")).unwrap();
+    aru(&project).args(["--frozen", "sync"]).assert().success();
+    assert!(project.join(".kiro/skills/demo/SKILL.md").is_file());
+}
+
+#[test]
 fn package_add_dry_run_and_no_sync_have_no_hidden_projection_writes() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("kit");

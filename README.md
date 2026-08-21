@@ -23,16 +23,16 @@ Aru lets you declare that setup once:
 - Pin exact revisions and projections in `aru.lock`.
 - Detect drift and unmanaged content before replacing anything.
 
-Aru supports these project targets:
+Aru supports full project adapters plus project-scoped skill-only targets.
 
-| Target name | Coding-agent layout |
-| --- | --- |
-| `agents` | Generic Agents-compatible project files |
-| `codex` | OpenAI Codex |
-| `claude` | Claude Code |
-| `copilot` | GitHub Copilot CLI |
-| `pi` | pi |
-| `opencode` | OpenCode |
+| Target class | Examples | Capability |
+| --- | --- | --- |
+| Full adapters | `codex`, `claude`, `copilot`, `opencode` | Instructions, skills, and MCP |
+| Native instruction adapters | `agents`, `pi` | Instructions and skills |
+| Skill-only adapters | `cursor`, `gemini`, `kiro`, `windsurf`, and others | Skills only |
+
+Run `aru target list --available` for every canonical target, project skill path, capability, and accepted alias.
+Aliases such as `claude-code`, `gemini-cli`, and `kiro-cli` normalize to short canonical names before persistence.
 
 ## Install
 
@@ -291,11 +291,15 @@ See the [native packages guide](https://narumiruna.github.io/aru/packages/) for 
 
 ```console
 aru target list
+aru target list --available
 aru target add copilot
+aru target add kiro-cli       # persists canonical target "kiro"
 aru target remove claude
 aru target set codex claude
 ```
 
+Skill-only targets receive skills but not instructions or MCP servers.
+All destinations are project-relative; aru does not install skills into home-directory paths.
 At least one target must remain.
 
 Use `target set` when replacing the only configured target.

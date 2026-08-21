@@ -29,9 +29,10 @@ pub fn render(units: &[DiscoveredInstruction]) -> Result<Vec<InstructionProjecti
     for unit in units {
         for target in &unit.unit.targets {
             let projection = match capabilities(*target).instructions {
-                InstructionCapability::NativeAgents => native::render(*target, unit),
-                InstructionCapability::Claude => claude::render(unit).map(Some),
-                InstructionCapability::Copilot => copilot::render(unit).map(Some),
+                Some(InstructionCapability::NativeAgents) => native::render(*target, unit),
+                Some(InstructionCapability::Claude) => claude::render(unit).map(Some),
+                Some(InstructionCapability::Copilot) => copilot::render(unit).map(Some),
+                None => Ok(None),
             }?;
             if let Some(projection) = projection {
                 output.push(projection);

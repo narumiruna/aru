@@ -64,7 +64,10 @@ Ordinary `sync` and `sync --locked` retain a branch's locked commit. Run `skill 
 
 ## Projection paths
 
-| Target | Project path |
+Aru supports full adapters and skill-only targets.
+Run `aru target list --available` or read the [skill target registry](reference/skill-targets.md) for every canonical name, alias, capability, and exact project directory.
+
+| Full or native target | Project path |
 | --- | --- |
 | Agents | `.agents/skills/<name>` |
 | Codex | `.agents/skills/<name>` |
@@ -73,6 +76,10 @@ Ordinary `sync` and `sync --locked` retain a branch's locked commit. Run `skill 
 | pi | `.pi/skills/<name>` |
 | OpenCode | `.opencode/skills/<name>` |
 
-Agents and Codex share one canonical `.agents` copy when both are selected.
-On Unix, other native paths link to that copy when possible.
+Skill-only targets include direct paths such as `.kiro/skills/<name>` and `.windsurf/skills/<name>`, shared `.agents/skills/<name>` projections, and explicit exceptions such as `.factory/skills/<name>` for `droid`.
+Aliases such as `claude-code`, `kiro-cli`, and `hermes-agent` normalize to canonical names and are never persisted.
+
+Targets that share one destination create one owned projection while retaining their complete canonical target reach in `aru.lock`.
+On Unix, other native paths link to a selected `.agents` copy when possible.
 Platforms without project symlinks receive verified copies.
+Aru does not install skills into global home-directory paths.

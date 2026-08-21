@@ -84,7 +84,9 @@ Or initialize another directory:
 aru init ../my-project --target codex
 ```
 
-Supported target names are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+The instruction-capable targets are `agents`, `codex`, `claude`, `copilot`, `pi`, and `opencode`.
+Additional canonical targets provide project-scoped Agent Skills only.
+Run `aru target list --available` for the complete registry and aliases such as `claude-code`, `gemini-cli`, and `kiro-cli`.
 Initialization creates:
 
 - `aru.toml` for human-maintained intent;

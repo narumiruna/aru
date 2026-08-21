@@ -9,7 +9,7 @@ use crate::instruction::InstructionScope;
 use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
-pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 7;
+pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -203,6 +203,15 @@ impl Lockfile {
                     "aru.lock contains duplicate instruction source target",
                 ));
             }
+            if instruction
+                .targets
+                .iter()
+                .any(|target| crate::target::capabilities(*target).instructions.is_none())
+            {
+                return Err(AruError::msg(
+                    "aru.lock contains unsupported instruction source target",
+                ));
+            }
         }
         let mut package_sources = BTreeSet::new();
         let mut package_names = BTreeSet::new();
@@ -355,6 +364,18 @@ impl Lockfile {
             if !baselines.insert((baseline.target, &baseline.kind, &baseline.key)) {
                 return Err(AruError::msg(
                     "aru.lock contains duplicate projection baseline",
+                ));
+            }
+            let capabilities = crate::target::capabilities(baseline.target);
+            let supported = match baseline.kind.as_str() {
+                "instruction" => capabilities.instructions.is_some(),
+                "skill" => capabilities.skills,
+                "mcp" => capabilities.mcp,
+                _ => false,
+            };
+            if !supported {
+                return Err(AruError::msg(
+                    "aru.lock contains unsupported projection baseline target",
                 ));
             }
         }
@@ -570,6 +591,40 @@ mod tests {
         let mut lock = Lockfile::empty();
         lock.instruction_sources = vec![source.clone(), source];
         assert!(lock.validate().is_err());
+    }
+
+    #[test]
+    fn skill_only_targets_are_rejected_for_instruction_lock_records() {
+        let mut lock = Lockfile::empty();
+        lock.instruction_sources.push(LockedInstructionSource {
+            source: "AGENTS.md".into(),
+            scope: InstructionScope::SourceDirectory {
+                directory: ".".into(),
+            },
+            targets: vec![Target::Kiro],
+            sha256: "sha256:source".into(),
+            managed: false,
+        });
+        assert!(
+            lock.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported instruction source target")
+        );
+
+        let mut lock = Lockfile::empty();
+        lock.projection_baselines.push(ProjectionBaseline {
+            target: Target::Kiro,
+            kind: "instruction".into(),
+            key: "AGENTS.md".into(),
+            sha256: "sha256:source".into(),
+        });
+        assert!(
+            lock.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported projection baseline target")
+        );
     }
 
     #[test]
