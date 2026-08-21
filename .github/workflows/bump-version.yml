@@ -98,5 +98,5 @@ jobs:
             echo "- Version: \`$VERSION\`"
             echo "- Tag: \`$TAG\`"
             echo "- Bump type: \`${{ inputs.bump }}\`"
-            echo "- Release workflows: triggered"
+            echo "- Release workflow: triggered"
           } >> "$GITHUB_STEP_SUMMARY"
