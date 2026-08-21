@@ -32,7 +32,9 @@ pub fn discover(project: &Path, manifest: &Manifest) -> Result<Vec<DiscoveredIns
         let includes = compile(&declaration.files)?;
         let excludes = compile(&declaration.exclude)?;
         let targets: BTreeSet<_> = if declaration.targets.is_empty() {
-            manifest.project.targets.iter().copied().collect()
+            crate::target::instruction_targets(&manifest.project.targets)
+                .into_iter()
+                .collect()
         } else {
             declaration.targets.iter().copied().collect()
         };
@@ -296,7 +298,7 @@ fn validate_target_scope(
 ) -> Result<()> {
     if let InstructionScope::ApplyTo { globs } = scope {
         for target in targets {
-            if capabilities(*target).instructions == InstructionCapability::NativeAgents {
+            if capabilities(*target).instructions == Some(InstructionCapability::NativeAgents) {
                 return Err(AruError::msg(format!(
                     "instruction source {source:?} uses apply-to globs unsupported by {target}; restrict its targets to claude and/or copilot"
                 )));

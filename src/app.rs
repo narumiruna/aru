@@ -16,7 +16,7 @@ use clap::Parser;
 
 use crate::cli::{
     Cli, Command, InstructionCommand, LockArgs, McpCommand, SelfCommand, SkillCommand, SyncArgs,
-    TargetAddArgs, TargetCommand, TargetRemoveArgs, TargetSetArgs,
+    TargetAddArgs, TargetCommand, TargetListArgs, TargetRemoveArgs, TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::Lockfile;
@@ -133,13 +133,16 @@ pub fn run() -> Result<()> {
                 InstructionCommand::List => instruction::list(&project),
             }
         }
+        Command::Target {
+            command: TargetCommand::List(args),
+        } if args.available => target_list_available(),
         Command::Target { command } => {
             let project = discover_project(project_option)?;
             match command {
                 TargetCommand::Add(args) => target_add(&project, args, policy),
                 TargetCommand::Remove(args) => target_remove(&project, args, policy),
                 TargetCommand::Set(args) => target_set(&project, args, policy),
-                TargetCommand::List => target_list(&project),
+                TargetCommand::List(args) => target_list(&project, args),
             }
         }
         Command::Skill { command } => {
@@ -278,12 +281,41 @@ fn check_execution(
     Ok(())
 }
 
-fn target_list(project: &Path) -> Result<()> {
+fn target_list(project: &Path, _args: TargetListArgs) -> Result<()> {
     let manifest = ManifestDocument::load(project)?.manifest()?;
     let mut targets = manifest.project.targets;
     targets.sort();
     for target in targets {
         println!("{target}");
+    }
+    Ok(())
+}
+
+fn target_list_available() -> Result<()> {
+    let mut specs = crate::target::specs().iter().collect::<Vec<_>>();
+    specs.sort_by_key(|spec| spec.name);
+    for spec in specs {
+        let capabilities = [
+            spec.capabilities
+                .instructions
+                .is_some()
+                .then_some("instructions"),
+            spec.capabilities.skills.then_some("skills"),
+            spec.capabilities.mcp.then_some("mcp"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(",");
+        let aliases = if spec.aliases.is_empty() {
+            "-".to_owned()
+        } else {
+            spec.aliases.join(",")
+        };
+        println!(
+            "{}\t{}\t{}\t{}",
+            spec.name, spec.project_skills, capabilities, aliases
+        );
     }
     Ok(())
 }

@@ -93,6 +93,223 @@ fn target_help_and_list_expose_the_persistent_command_contract() {
 }
 
 #[test]
+fn available_targets_and_aliases_are_deterministic_and_canonical() {
+    cargo_bin_cmd!("aru")
+        .args(["target", "list", "--available"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with(
+            "adal\t.adal/skills\tskills\t-\n",
+        ))
+        .stdout(predicate::str::contains(
+            "claude\t.claude/skills\tinstructions,skills,mcp\tclaude-code\n",
+        ))
+        .stdout(predicate::str::contains(
+            "kiro\t.kiro/skills\tskills\tkiro-cli\n",
+        ));
+
+    let temporary = tempfile::tempdir().unwrap();
+    init(temporary.path(), &["claude-code", "kiro-cli"]);
+    aru(temporary.path())
+        .args(["target", "list"])
+        .assert()
+        .success()
+        .stdout("claude\nkiro\n");
+    let manifest = std::fs::read_to_string(temporary.path().join("aru.toml")).unwrap();
+    assert!(manifest.contains("targets = [\"claude\", \"kiro\"]"));
+    assert!(!manifest.contains("claude-code"));
+    assert!(!manifest.contains("kiro-cli"));
+}
+
+#[test]
+fn skill_only_targets_project_skills_and_reject_unsupported_resources() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_skill_repository(&repository);
+    init(&project, &["kiro-cli"]);
+
+    add_demo_skill(&project, &repository);
+    assert!(project.join(".kiro/skills/demo").is_dir());
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        lock.skill_packages[0].targets,
+        [aru::manifest::Target::Kiro]
+    );
+    aru(&project)
+        .args(["metadata", "--format-version", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"kiro\""));
+    aru(&project)
+        .args(["export", "--format", "cyclonedx1.5"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("kiro"));
+
+    std::fs::write(project.join("AGENTS.md"), "# Instructions\n").unwrap();
+    let manifest_before = std::fs::read(project.join("aru.toml")).unwrap();
+    let lock_before = std::fs::read(project.join("aru.lock")).unwrap();
+    aru(&project)
+        .args(["instruction", "add", "AGENTS.md"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no configured target that supports instructions",
+        ));
+    assert_eq!(
+        std::fs::read(project.join("aru.toml")).unwrap(),
+        manifest_before
+    );
+    assert_eq!(
+        std::fs::read(project.join("aru.lock")).unwrap(),
+        lock_before
+    );
+
+    aru(&project)
+        .args([
+            "mcp",
+            "add",
+            "--url",
+            "https://example.com/mcp",
+            "--name",
+            "docs",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no configured target supports MCP",
+        ));
+    assert_eq!(
+        std::fs::read(project.join("aru.toml")).unwrap(),
+        manifest_before
+    );
+    assert_eq!(
+        std::fs::read(project.join("aru.lock")).unwrap(),
+        lock_before
+    );
+}
+
+#[test]
+fn explicit_skill_path_exceptions_project_to_registered_destinations() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_skill_repository(&repository);
+    init(&project, &["openclaw", "posit-assistant", "droid"]);
+    add_demo_skill(&project, &repository);
+
+    for destination in [
+        "skills/demo/SKILL.md",
+        ".posit/assistant/skills/demo/SKILL.md",
+        ".factory/skills/demo/SKILL.md",
+    ] {
+        assert!(project.join(destination).is_file(), "missing {destination}");
+    }
+}
+
+#[test]
+fn mixed_targets_filter_implicit_instruction_and_mcp_reach() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path();
+    init(project, &["claude", "kiro"]);
+    std::fs::write(project.join("AGENTS.md"), "# Instructions\n").unwrap();
+
+    aru(project)
+        .args(["instruction", "add", "AGENTS.md"])
+        .assert()
+        .success();
+    aru(project)
+        .args([
+            "mcp",
+            "add",
+            "--url",
+            "https://example.com/mcp",
+            "--name",
+            "docs",
+        ])
+        .assert()
+        .success();
+
+    let lock = aru::lockfile::Lockfile::load_optional(project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        lock.instruction_sources[0].targets,
+        [aru::manifest::Target::Claude]
+    );
+    assert_eq!(lock.mcp_servers[0].targets.len(), 1);
+    assert_eq!(
+        lock.mcp_servers[0].targets[0].target,
+        aru::manifest::Target::Claude
+    );
+}
+
+#[test]
+fn shared_skill_only_targets_coalesce_and_transition_safely() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_skill_repository(&repository);
+    init(&project, &["amp", "cursor", "kiro"]);
+    add_demo_skill(&project, &repository);
+
+    assert!(project.join(".agents/skills/demo").is_dir());
+    #[cfg(unix)]
+    assert!(
+        std::fs::symlink_metadata(project.join(".kiro/skills/demo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let lock = aru::lockfile::Lockfile::load_optional(&project)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        lock.skill_packages[0].targets,
+        [
+            aru::manifest::Target::Amp,
+            aru::manifest::Target::Cursor,
+            aru::manifest::Target::Kiro,
+        ]
+    );
+    let state: aru::ownership::State =
+        toml::from_str(&std::fs::read_to_string(project.join(".aru/state.toml")).unwrap()).unwrap();
+    assert_eq!(
+        state
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == "skill" && entry.key == "demo")
+            .count(),
+        2
+    );
+
+    aru(&project)
+        .args(["target", "remove", "amp"])
+        .assert()
+        .success();
+    assert!(project.join(".agents/skills/demo").is_dir());
+
+    aru(&project)
+        .args(["target", "remove", "cursor"])
+        .assert()
+        .success();
+    assert!(!project.join(".agents/skills/demo").exists());
+    assert!(project.join(".kiro/skills/demo").is_dir());
+    assert!(
+        !std::fs::symlink_metadata(project.join(".kiro/skills/demo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
 fn target_add_remove_and_set_apply_exact_persistent_sets() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path();

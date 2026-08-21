@@ -17,18 +17,78 @@ pub enum Target {
     Copilot,
     Opencode,
     Pi,
+    Amp,
+    Antigravity,
+    Cline,
+    Cursor,
+    Deepagents,
+    Dexto,
+    Firebender,
+    Gemini,
+    Kimi,
+    Loaf,
+    Promptscript,
+    Replit,
+    Warp,
+    Zed,
+    Adal,
+    AiderDesk,
+    Astrbot,
+    Autohand,
+    Augment,
+    Bob,
+    Openclaw,
+    Codearts,
+    Codebuddy,
+    Codemaker,
+    Codestudio,
+    Commandcode,
+    Continue,
+    Cortex,
+    Crush,
+    Devin,
+    Droid,
+    Eve,
+    Forge,
+    Goose,
+    Grok,
+    Hermes,
+    InferenceSh,
+    Jazz,
+    Junie,
+    Iflow,
+    Kilo,
+    Kimchi,
+    Kiro,
+    Kode,
+    Lingma,
+    Mcpjam,
+    Minimax,
+    Vibe,
+    Moxby,
+    Mux,
+    Openhands,
+    Ona,
+    Posit,
+    Qoder,
+    Qwen,
+    Reasonix,
+    Rovodev,
+    Roo,
+    Tabnine,
+    Terramind,
+    Tinycloud,
+    Trae,
+    Windsurf,
+    Zcode,
+    Zencoder,
+    Neovate,
+    Pochi,
 }
 
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Agents => write!(f, "agents"),
-            Self::Codex => write!(f, "codex"),
-            Self::Claude => write!(f, "claude"),
-            Self::Copilot => write!(f, "copilot"),
-            Self::Pi => write!(f, "pi"),
-            Self::Opencode => write!(f, "opencode"),
-        }
+        f.write_str(crate::target::spec(*self).name)
     }
 }
 
@@ -36,17 +96,11 @@ impl std::str::FromStr for Target {
     type Err = String;
 
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        match value {
-            "agents" => Ok(Self::Agents),
-            "codex" => Ok(Self::Codex),
-            "claude" => Ok(Self::Claude),
-            "copilot" => Ok(Self::Copilot),
-            "pi" => Ok(Self::Pi),
-            "opencode" => Ok(Self::Opencode),
-            _ => Err(format!(
-                "unknown target {value:?}; expected agents, codex, claude, copilot, opencode, or pi"
-            )),
-        }
+        crate::target::parse(value).ok_or_else(|| {
+            format!(
+                "unknown target {value:?}; run `aru target list --available` to list supported targets"
+            )
+        })
     }
 }
 
@@ -106,6 +160,17 @@ impl InstructionSource {
                     "instruction source target {target:?} is not declared in project.targets"
                 )));
             }
+            if crate::target::capabilities(*target).instructions.is_none() {
+                return Err(AruError::msg(format!(
+                    "instruction source target {target} does not support instructions"
+                )));
+            }
+        }
+        if self.targets.is_empty() && crate::target::instruction_targets(project_targets).is_empty()
+        {
+            return Err(AruError::msg(
+                "instruction source has no configured target that supports instructions",
+            ));
         }
         Ok(())
     }

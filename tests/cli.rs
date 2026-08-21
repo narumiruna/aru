@@ -223,15 +223,15 @@ fn init_uses_target_contract() {
         .failure()
         .stderr(predicate::str::contains("unexpected argument '--agent'"));
 
-    let legacy_slug_project = temporary.path().join("legacy-slug-project");
-    std::fs::create_dir(&legacy_slug_project).unwrap();
-    aru(&legacy_slug_project)
+    let alias_project = temporary.path().join("alias-project");
+    std::fs::create_dir(&alias_project).unwrap();
+    aru(&alias_project)
         .args(["init", "--target", "claude-code"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "unknown target \"claude-code\"; expected agents, codex, claude, copilot, opencode, or pi",
-        ));
+        .success();
+    let alias_manifest = std::fs::read_to_string(alias_project.join("aru.toml")).unwrap();
+    assert!(alias_manifest.contains("targets = [\"claude\"]"));
+    assert!(!alias_manifest.contains("claude-code"));
 }
 
 #[test]

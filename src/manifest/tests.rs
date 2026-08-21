@@ -282,6 +282,46 @@ fn instruction_source_rejects_ambiguous_scope_and_undeclared_target() {
 }
 
 #[test]
+fn skill_only_targets_reject_unsupported_instruction_scope() {
+    let implicit = InstructionSource {
+        files: vec!["AGENTS.md".into()],
+        exclude: Vec::new(),
+        scope: Some(InstructionSourceScope::SourceDirectory),
+        apply_to: Vec::new(),
+        targets: Vec::new(),
+    };
+    assert!(
+        implicit
+            .validate(&[Target::Kiro])
+            .unwrap_err()
+            .to_string()
+            .contains("no configured target")
+    );
+
+    let explicit = InstructionSource {
+        targets: vec![Target::Kiro],
+        ..implicit
+    };
+    assert!(
+        explicit
+            .validate(&[Target::Claude, Target::Kiro])
+            .unwrap_err()
+            .to_string()
+            .contains("does not support instructions")
+    );
+}
+
+#[test]
+fn persisted_targets_require_canonical_names() {
+    let text = "[project]\ntargets = [\"kiro-cli\"]\n";
+    let document = ManifestDocument {
+        path: PathBuf::from("aru.toml"),
+        doc: text.parse().unwrap(),
+    };
+    assert!(document.manifest().is_err());
+}
+
+#[test]
 fn instruction_mutation_preserves_unrelated_manifest_content() {
     let text = "# keep\n[project]\ntargets = [\"claude\"]\n\n[instructions]\n# replace only sources\n\n[custom]\nanswer = 42\n";
     let mut document = ManifestDocument {

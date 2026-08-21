@@ -35,12 +35,13 @@ pub(crate) fn layout(
             "internal error: skill projection reached unsupported target {target}"
         ))
     })?;
-    let has_shared_agents_root =
-        selected_targets.contains(&Target::Agents) || selected_targets.contains(&Target::Codex);
-    let link_target = (!matches!(target, Target::Agents | Target::Codex)
+    let has_shared_agents_root = selected_targets
+        .iter()
+        .any(|selected| crate::target::spec(*selected).project_skills == ".agents/skills");
+    let link_target = (crate::target::spec(target).project_skills != ".agents/skills"
         && has_shared_agents_root
         && supports_project_symlink())
-    .then(|| shared_link_target(name));
+    .then(|| shared_link_target(&destination));
     Ok(SkillLayout {
         destination,
         mode: if link_target.is_some() {
@@ -53,18 +54,27 @@ pub(crate) fn layout(
 }
 
 pub(crate) fn destination(target: Target, name: &str) -> Option<PathBuf> {
-    let root = match target {
-        Target::Agents | Target::Codex => ".agents/skills",
-        Target::Claude => ".claude/skills",
-        Target::Copilot => ".github/skills",
-        Target::Pi => ".pi/skills",
-        Target::Opencode => ".opencode/skills",
-    };
-    Some(PathBuf::from(format!("{root}/{name}")))
+    Some(PathBuf::from(format!(
+        "{}/{name}",
+        crate::target::spec(target).project_skills
+    )))
 }
 
-pub(crate) fn shared_link_target(name: &str) -> PathBuf {
-    PathBuf::from(format!("../../.agents/skills/{name}"))
+pub(crate) fn shared_link_target(destination: &std::path::Path) -> PathBuf {
+    let parent = destination
+        .parent()
+        .expect("skill destinations always have a parent");
+    let mut target = PathBuf::new();
+    for _ in parent.components() {
+        target.push("..");
+    }
+    target.push(".agents/skills");
+    target.push(
+        destination
+            .file_name()
+            .expect("skill destinations always have a name"),
+    );
+    target
 }
 
 #[cfg(unix)]
@@ -83,16 +93,12 @@ mod tests {
 
     #[test]
     fn target_layouts_own_their_native_projection_topology() {
-        for (target, expected) in [
-            (Target::Agents, ".agents/skills/review"),
-            (Target::Codex, ".agents/skills/review"),
-            (Target::Claude, ".claude/skills/review"),
-            (Target::Copilot, ".github/skills/review"),
-            (Target::Pi, ".pi/skills/review"),
-            (Target::Opencode, ".opencode/skills/review"),
-        ] {
-            let native = layout(target, &[target], "review").unwrap();
-            assert_eq!(native.destination, PathBuf::from(expected));
+        for spec in crate::target::specs() {
+            let native = layout(spec.target, &[spec.target], "review").unwrap();
+            assert_eq!(
+                native.destination,
+                PathBuf::from(spec.project_skills).join("review")
+            );
             assert_eq!(native.mode, SkillDeploymentMode::Copy);
         }
 
@@ -103,14 +109,31 @@ mod tests {
                 Target::Copilot,
                 Target::Pi,
                 Target::Opencode,
+                Target::Kiro,
+                Target::Droid,
+                Target::Posit,
             ] {
                 let shared = layout(target, &[canonical, target], "review").unwrap();
                 assert_eq!(shared.mode, SkillDeploymentMode::Symlink);
                 assert_eq!(
                     shared.link_target,
-                    Some(PathBuf::from("../../.agents/skills/review"))
+                    Some(shared_link_target(&shared.destination))
                 );
             }
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shared_link_targets_account_for_destination_depth() {
+        for (target, expected) in [
+            (Target::Claude, "../../.agents/skills/review"),
+            (Target::Openclaw, "../.agents/skills/review"),
+            (Target::Posit, "../../../.agents/skills/review"),
+            (Target::Tabnine, "../../../.agents/skills/review"),
+        ] {
+            let layout = layout(target, &[Target::Agents, target], "review").unwrap();
+            assert_eq!(layout.link_target, Some(PathBuf::from(expected)));
         }
     }
 }
