@@ -5,12 +5,11 @@ Choose the SemVer component to bump; after the release commit passes formatting,
 
 The tag independently triggers:
 
-- `Release` (`.github/workflows/release.yml`), which publishes GitHub archives and `SHA256SUMS`;
-- `Publish` (`.github/workflows/publish.yml`), which publishes the `aru` crate to crates.io and `arust` binary wheels that expose the `aru` command;
+- `Publish` (`.github/workflows/publish.yml`), which publishes GitHub archives and `SHA256SUMS`, the `aru` crate to crates.io, and `arust` binary wheels that expose the `aru` command;
 - `Installer scripts` (`.github/workflows/installers.yml`), which runs isolated Unix and Windows installer tests.
 A manual installer run additionally installs the latest published release through the hosted scripts.
 
-The Release and Publish workflows validate that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
+The Publish workflow validates that the stable SemVer tag matches `Cargo.toml` and points to a commit on `main`.
 Release archive builds set `ARU_BUILD_DISTRIBUTION=standalone` and verify the marker before packaging, enabling `aru self update`.
 PyPI wheel and ordinary Cargo builds remain package-manager-owned and reject self-update.
 The Publish workflow publishes two wheels: manylinux2014 for x86_64 and macOS for Apple silicon.
@@ -61,7 +60,7 @@ The PyPI publish job uses GitHub OIDC and does not require a long-lived PyPI API
 
 ## Recovery
 
-- If GitHub Release creation fails, rerun `Release` for the same tag.
+- If GitHub Release creation fails, rerun the failed job in `Publish` for the same tag.
   A published release is treated as complete, while an existing draft is resumed.
 - If crates.io publishing fails before the version exists, rerun the failed job in `Publish` for the same tag.
 - If the crate version already exists, `Publish` verifies the package and exits successfully without trying to overwrite it.
