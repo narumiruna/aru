@@ -20,7 +20,10 @@ repos:
         pass_filenames: false
         stages: [pre-push]
         types_or: [rust, toml]
-  - repo: https://github.com/narumiruna/aru-pre-commit
-    rev: v0.0.3
-    hooks:
       - id: aru-sync
+        name: aru sync
+        entry: cargo run --locked -- sync
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
