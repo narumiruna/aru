@@ -199,6 +199,7 @@ pub(super) fn locked_sources(
             .iter()
             .filter(|package| !package_sources.contains(package.source.as_str()))
             .flat_map(|package| package.skills.iter())
+            .filter(|skill| skill.origin.is_none())
             .map(|skill| (skill.name.clone(), PathBuf::new()))
             .collect());
     }
@@ -407,6 +408,7 @@ fn locked_skill(skill: &DiscoveredSkill) -> LockedSkill {
         name: skill.name.clone(),
         path: skill.relative_path.clone(),
         sha256: skill.sha256.clone(),
+        origin: None,
     }
 }
 

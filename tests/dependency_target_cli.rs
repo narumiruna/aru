@@ -104,7 +104,7 @@ fn skill_and_mcp_dependencies_project_only_to_explicit_targets_and_replay() {
     let lock = aru::lockfile::Lockfile::load_optional(&project)
         .unwrap()
         .unwrap();
-    assert_eq!(lock.version, 3);
+    assert_eq!(lock.version, 4);
     assert_eq!(
         lock.skill_packages[0].targets,
         [aru::manifest::Target::Codex]

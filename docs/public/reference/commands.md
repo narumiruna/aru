@@ -35,6 +35,11 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | `aru mcp list` | List configured MCP servers |
 | `aru mcp update [name]` | Update Registry-backed servers |
 | `aru mcp remove <name>` | Remove a configured server |
+| `aru plugin info <source>` | Inspect a locked or available plugin |
+| `aru plugin add <source>` | Add selected plugin resources |
+| `aru plugin list` | List configured plugins |
+| `aru plugin update [name]` | Update all or selected plugins |
+| `aru plugin remove <name>` | Remove a complete plugin declaration |
 | `aru target add <target>` | Add targets to the project set |
 | `aru target remove <target>` | Remove targets from the project set |
 | `aru target set <target>` | Replace the complete target set |
@@ -47,7 +52,8 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | --- | --- |
 | `aru tree` | Display the locked native-package dependency graph |
 | `aru info <package>` | Inspect one locked or available native package |
-| `aru metadata --format-version 1` | Emit versioned machine-readable metadata |
+| `aru metadata --format-version 1` | Emit shape-compatible machine-readable metadata |
+| `aru metadata --format-version 2` | Emit metadata with plugins and resource origins |
 | `aru export --format cyclonedx1.5` | Export deterministic CycloneDX inventory |
 
 ## Utilities

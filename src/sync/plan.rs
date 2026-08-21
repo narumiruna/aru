@@ -41,6 +41,39 @@ pub(super) fn lock_diff_plan(previous: Option<&Lockfile>, next: &Lockfile) -> Ve
     {
         plan.push(format!("unlock removed aru package {}", package.name));
     }
+    let previous_plugins = previous
+        .into_iter()
+        .flat_map(|lock| &lock.plugin_packages)
+        .map(|plugin| (plugin.name.as_str(), plugin))
+        .collect::<BTreeMap<_, _>>();
+    for plugin in &next.plugin_packages {
+        match previous_plugins.get(plugin.name.as_str()) {
+            None => plan.push(format!("lock plugin {} {}", plugin.name, plugin.version)),
+            Some(previous)
+                if previous.version != plugin.version || previous.revision != plugin.revision =>
+            {
+                plan.push(format!(
+                    "lock plugin {} {} -> {}",
+                    plugin.name, previous.version, plugin.version
+                ));
+            }
+            Some(previous) if *previous != plugin => {
+                plan.push(format!("refresh plugin {} intent", plugin.name));
+            }
+            _ => {}
+        }
+    }
+    let next_plugin_names = next
+        .plugin_packages
+        .iter()
+        .map(|plugin| plugin.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for plugin in previous_plugins
+        .values()
+        .filter(|plugin| !next_plugin_names.contains(plugin.name.as_str()))
+    {
+        plan.push(format!("unlock removed plugin {}", plugin.name));
+    }
     let previous_instructions: BTreeMap<_, _> = previous
         .into_iter()
         .flat_map(|lock| &lock.instruction_sources)
@@ -139,6 +172,38 @@ pub(super) fn update_previews(
 ) -> Vec<String> {
     let mut previews = Vec::new();
     for source in update_packages {
+        if let Some(candidate) = next
+            .plugin_packages
+            .iter()
+            .find(|plugin| plugin.name == *source)
+        {
+            let next_label = format!(
+                "{}@{}",
+                candidate.version,
+                short_digest(&candidate.revision)
+            );
+            let previous = previous.and_then(|lock| {
+                lock.plugin_packages
+                    .iter()
+                    .find(|plugin| plugin.name == *source)
+            });
+            let transition = match previous {
+                Some(previous)
+                    if previous.version == candidate.version
+                        && previous.revision == candidate.revision =>
+                {
+                    format!("{next_label} (unchanged)")
+                }
+                Some(previous) => format!(
+                    "{}@{} -> {next_label}",
+                    previous.version,
+                    short_digest(&previous.revision)
+                ),
+                None => format!("unlocked -> {next_label}"),
+            };
+            previews.push(format!("plugin {} {transition}", candidate.name));
+            continue;
+        }
         let Some(candidate) = next
             .aru_packages
             .iter()
@@ -249,6 +314,12 @@ pub(super) fn lock_details(lock: &Lockfile) -> Vec<String> {
             package.name, package.package_version, package.revision, package.source
         ));
     }
+    for plugin in &lock.plugin_packages {
+        details.push(format!(
+            "plugin {} {} {} {} from {}",
+            plugin.name, plugin.format, plugin.version, plugin.revision, plugin.source
+        ));
+    }
     for source in &lock.instruction_sources {
         details.push(format!("instruction {} {}", source.source, source.sha256));
     }
@@ -280,6 +351,7 @@ mod tests {
         let mut lock = Lockfile::empty();
         lock.mcp_servers.push(McpServer {
             name: "weather".into(),
+            origin: None,
             registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
             server_id: "io.example/weather".into(),
             requirement: "sha256:requirement".into(),

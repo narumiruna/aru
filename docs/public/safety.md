@@ -12,11 +12,13 @@ Key boundaries include:
 - project-relative portable paths with no traversal or unsafe file types;
 - deterministic ordering, serialization, hashing, and operation plans;
 - HTTPS Registry requests with credential-free URLs, bounded redirects, timeouts, pages, records, and body sizes;
-- explicit rejection of malformed metadata, duplicate exports, cycles, target incompatibility, and case-folding collisions.
+- explicit rejection of malformed metadata, duplicate exports, cycles, target incompatibility, and case-folding collisions;
+- plugin format ambiguity, unsupported whole-plugin capabilities, unsafe MCP fields, and altered cached plugin content.
 
 ## Secrets and commands
 
-MCP commands and arguments remain argv arrays. Aru does not shell-expand package metadata and never executes configured direct MCP commands during add, lock, or sync.
+MCP commands and arguments remain argv arrays.
+Aru does not shell-expand package or plugin metadata and never executes configured direct MCP commands during add, lock, sync, inspection, audit, or export.
 
 Secret-bearing configuration stores only environment-variable names or target-native placeholders. Aru does not read or persist secret values.
 
@@ -67,4 +69,5 @@ aru audit
 aru audit --format json --output audit.json
 ```
 
-Audit checks manifest/lock consistency, pending recovery, ownership references, projection drift, deployed skill content, and hidden Unicode format controls. It exits non-zero when blocking findings exist.
+Audit checks manifest/lock consistency, pending recovery, ownership references, projection drift, deployed skill content, cached plugin tree and manifest digests, and hidden Unicode format controls.
+It exits non-zero when blocking findings exist.

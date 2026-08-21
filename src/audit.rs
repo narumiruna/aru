@@ -159,6 +159,9 @@ impl Report {
         if let Some(state) = state.as_ref() {
             inspect_skill_content(project, state, &mut findings);
         }
+        if let Some(lock) = lock.as_ref() {
+            inspect_plugin_cache(project, lock, &mut findings);
+        }
         if let Some(lock) = lock.as_ref()
             && let Err(error) = crate::export::validate_exportable(lock)
         {
@@ -240,6 +243,60 @@ impl Report {
             }
         }
         output.into_bytes()
+    }
+}
+
+fn inspect_plugin_cache(project: &Path, lock: &Lockfile, findings: &mut Vec<Finding>) {
+    let cache = crate::cache::Cache::project(project);
+    for plugin in &lock.plugin_packages {
+        let Some(checkout) = cache.cached_content(&plugin.source, &plugin.revision) else {
+            findings.push(
+                Finding::error(
+                    "plugin.cache-missing",
+                    format!("cached content for plugin {:?} is missing", plugin.name),
+                )
+                .help("run `aru sync` to restore the verified plugin checkout"),
+            );
+            continue;
+        };
+        let root = match crate::plugin::plugin_root(&checkout, plugin.subdir.as_deref()) {
+            Ok(root) => root,
+            Err(error) => {
+                findings.push(Finding::error("plugin.cache-invalid", error.to_string()));
+                continue;
+            }
+        };
+        match crate::plugin::inspect_plugin_root(&root, Some(plugin.format)) {
+            Ok(inventory) => {
+                let manifests = inventory
+                    .manifests
+                    .iter()
+                    .map(|manifest| crate::lockfile::PluginManifestRecord {
+                        path: manifest.path.clone(),
+                        sha256: manifest.sha256.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                if inventory.tree_sha256 != plugin.tree_sha256 || manifests != plugin.manifests {
+                    findings.push(
+                        Finding::error(
+                            "plugin.cache-drift",
+                            format!(
+                                "cached content for plugin {:?} does not match aru.lock",
+                                plugin.name
+                            ),
+                        )
+                        .help("run `aru sync` to replace the altered immutable cache shard"),
+                    );
+                }
+            }
+            Err(error) => findings.push(
+                Finding::error(
+                    "plugin.cache-invalid",
+                    format!("plugin {:?}: {error}", plugin.name),
+                )
+                .help("run `aru sync` to restore the verified plugin checkout"),
+            ),
+        }
     }
 }
 

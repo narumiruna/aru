@@ -1,6 +1,8 @@
 # aru File Contracts
 
-All files are UTF-8. `aru.toml` is edited with `toml_edit` so unrelated comments and keys survive. Generated lock/state/journal maps and entries use lexical key order; instruction sources, packages, skills, targets, baselines, and state entries are explicitly sorted.
+All files are UTF-8.
+`aru.toml` is edited with `toml_edit` so unrelated comments and keys survive.
+Generated lock/state/journal maps and entries use lexical key order; instruction sources, packages, plugins, skills, targets, baselines, and state entries are explicitly sorted.
 
 ## `aru.toml`
 
@@ -62,7 +64,45 @@ Agents, pi, and every skill-only target have no built-in MCP and are rejected.
 aru records and projects direct commands but never executes them, and secret-bearing fields contain environment names only.
 Codex retains names, Claude and Copilot emit `${ENV}` placeholders, and OpenCode emits `{env:ENV}` placeholders.
 
-`package-input-hash` canonicalizes credential-free skill requirements and MCP requirements but excludes project targets, dependency targets, and local instructions. Target and instruction changes therefore preserve package identity. The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
+`package-input-hash` canonicalizes credential-free skill, MCP, native-package, and plugin requirements but excludes project targets, dependency targets, and local instructions.
+Target and instruction changes therefore preserve package identity.
+The projection identity covers the complete package lock, normalized instruction-source records, sorted project targets, and adapter capability schema.
+
+## Plugin dependencies
+
+A project declares plugin dependencies by stable plugin name:
+
+```toml
+[plugins.review-tools]
+source = "owner/monorepo"
+format = "openai"
+subdir = "plugins/review"
+version = "^1.2"
+components = ["skills"]
+mcp = ["docs"]
+targets = ["codex", "claude"]
+
+[plugin-trust.review-tools]
+mcp = ["docs"]
+```
+
+`format` is `agent-plugins`, `openai`, or `gemini` and is always persisted after CLI detection.
+`subdir` is a contained repository-relative plugin root.
+At most one of `version`, `branch`, or `rev` is allowed.
+Absence of `components`, `skills`, and `mcp` means whole-plugin intent.
+A wildcard component and named selections of the same type are mutually exclusive.
+Every selected MCP name requires a matching `plugin-trust` entry.
+
+Agent Plugins 1.0 uses the canonical root `plugin.json`, immediate `skills/*/SKILL.md`, and root `mcp.json` locations.
+OpenAI supports legacy `.codex-plugin/plugin.json` paths and an Agent Plugins base with a `com.openai` overlay.
+Gemini uses root `gemini-extension.json`, root `skills/`, and inline `mcpServers`.
+Detection checks only the selected plugin root and rejects independent multi-format ambiguity.
+The selected format and all contributing manifest digests are locked, so replay never redetects format.
+
+Selected remote MCP accepts only lossless Streamable HTTP with an absolute HTTPS URL and no literal headers, authentication, or variable expansion.
+Selected stdio MCP accepts only one bare executable token plus opaque ordered argv, with no `cwd`, configured environment values, plugin placeholders, absolute paths, or explicit relative path arguments.
+Apps, hooks, commands, OAuth, SSE, bundled executables, plugin data directories, disabled servers, and unknown transports are not projected.
+Aru never executes plugin code or MCP commands.
 
 ## Native aru packages
 
@@ -159,9 +199,18 @@ Copilot MCP uses the `mcpServers` project format, `stdio` / `http` transport nam
 
 ## `aru.lock`
 
-`version = 3`. Version 3 adds the native aru package graph and managed package-instruction identity; version 2 introduced explicit effective targets on skill packages. Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, source SHA-256, and whether aru must project package-owned native content. `aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
+`version = 4`.
+Version 4 adds plugin packages and explicit plugin origins on selected skill and MCP records.
+A valid version 3 lock remains readable for inspection and upgrades deterministically during an unlocked `aru lock` or `aru sync`.
+Check, locked, and frozen modes do not rewrite version 3 and report the required unlocked upgrade command.
+Each `instruction-source` locks a portable source path, normalized scope, sorted selected targets, source SHA-256, and whether aru must project package-owned native content.
+`aru sync --locked` compares discovered sources exactly and rejects changed content, scope, targets, or adapter schema.
 
-Each `aru-package` locks its canonical source, requirement descriptor, selected Git version and full revision, declared name/version, manifest and complete package-tree digests, effective targets, dependency source identities, and exported instruction/skill/MCP records. Cycles, missing nodes, incomplete flattened exports, duplicate package names, and graph limit overflow invalidate the lock.
+Each `aru-package` locks its canonical source, requirement descriptor, selected Git version and full revision, declared name/version, manifest and complete package-tree digests, effective targets, dependency source identities, and exported instruction/skill/MCP records.
+
+Each `plugin-package` locks its stable name, canonical Git source, requirement, selected source version and revision, declared plugin version, format, adapter version, subdirectory, complete plugin-tree digest, contributing manifest paths and digests, selection intent, targets, selected resources, and unsupported capability inventory.
+Plugin-derived locked skills and MCP servers carry `{kind = "plugin", name, source}` origin identity.
+Cycles, missing nodes, incomplete flattened exports, duplicate package names, and graph limit overflow invalidate the lock.
 
 Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, sorted effective targets, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each effective dependency target. Registry package projections lock npm/`npx` or approved PyPI/`uvx` command arrays plus exact package registry, identifier, and version. Direct stdio entries lock their exact command and ordered argv with `version = "direct"`; they contain no resolved package metadata.
 
@@ -184,7 +233,10 @@ Directories add no direct digest record. Symlinks and special files are rejected
 
 `aru export --format cyclonedx1.5` serializes the existing validated lock to JSON. It does not read `aru.toml`, resolve or fetch sources, rehash source trees, or claim that the lock is current for uncommitted manifest edits.
 
-The document has `bomFormat = "CycloneDX"`, `specVersion = "1.5"`, BOM `version = 1`, an `aru:root` application component, sorted components, and a root dependency relationship to every component. Native aru packages and skill packages are `library` components, instruction sources are `data` components, and MCP servers are `application` components. Package dependency edges preserve parent relationships. Stable `aru:*` properties carry only lock evidence such as kind, exact revision, requirement descriptor, exports, transports, and effective targets.
+The document has `bomFormat = "CycloneDX"`, `specVersion = "1.5"`, BOM `version = 1`, an `aru:root` application component, sorted components, and a root dependency relationship to every component.
+Native aru packages, plugin packages, and skill packages are `library` components, instruction sources are `data` components, and MCP servers are `application` components.
+Package dependency edges preserve parent relationships, and plugin edges identify selected skill and MCP resources.
+Stable `aru:*` properties carry only lock evidence such as kind, exact revision, requirement descriptor, exports, transports, and effective targets.
 
 The metadata property `aru:document-purpose = "inventory"` distinguishes the output from an attestation. Unknown license, vulnerability, provenance, and registry facts are omitted rather than inferred. External URL credentials are removed. An invalid URL, malformed lock, or missing lock fails the complete export.
 
@@ -196,7 +248,13 @@ The byte-stable contract fixture is `tests/fixtures/contracts/cyclonedx-1.5.json
 
 `aru tree --format json` emits graph `version = 1` with sorted `roots`, package `nodes`, and `{from,to}` dependency `edges`. `--depth` and `--target` filter both nodes and edges. Package source credentials are removed; malformed source URLs fail the complete output.
 
-`aru metadata --format-version 1` emits `format_version = 1`, the portable project root, declared targets, lock version, sorted package roots/nodes/edges, flattened instruction/skill/MCP inventory, and committed projection ownership identities. It validates and reads `aru.toml` and `aru.lock`: no source resolution, fetch, rehash, ownership operation, recovery, or target write occurs. URL credentials are removed and no secret values are present. `--no-deps` retains package graph roots and direct resources while omitting transitive nodes and edges. Unsupported or omitted format versions fail.
+`aru metadata --format-version 1` emits `format_version = 1`, the portable project root, declared targets, lock version, sorted package roots/nodes/edges, flattened instruction/skill/MCP inventory, and committed projection ownership identities.
+Its JSON shape remains unchanged when plugin-derived resources fit those existing fields.
+`aru metadata --format-version 2` adds sorted plugin records and explicit plugin origins on skill and MCP resources.
+Metadata validates and reads `aru.toml` and `aru.lock`: no source resolution, fetch, rehash, ownership operation, recovery, or target write occurs.
+URL credentials are removed and no secret values are present.
+`--no-deps` retains package graph roots and direct resources while omitting transitive native-package nodes and edges.
+Unsupported or omitted format versions fail.
 
 The normalized byte-stable fixture is `tests/fixtures/contracts/metadata-v1.json`, with its environment-specific `project_root` replaced by `<PROJECT>`.
 
@@ -211,6 +269,7 @@ The normalized byte-stable fixture is `tests/fixtures/contracts/metadata-v1.json
 - optional remediation `help`.
 
 Errors are blocking and make the command exit non-zero. Warnings and informational findings do not. JSON is written only to stdout or an explicit `--output` path; status remains on stderr. Audit performs no network access, creates no operation lock, does not recover pending transactions, and never changes manifest, lock, cache, ownership state, or target paths.
+It verifies locked plugin cache, tree, and contributing manifest identity directly and reports missing or altered immutable shards.
 
 Content audit treats ordinary Unicode, multilingual text, and emoji as valid. It reports bidi embedding/override/isolate controls, direction marks, zero-width format controls, invisible mathematical operators, and U+FEFF. Scanning is bounded to 100,000 deployed skill files, 64 MiB total, and 4 MiB per candidate text file. Instruction discovery retains its stricter source limits.
 

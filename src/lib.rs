@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod output;
 pub mod ownership;
 pub mod package;
+pub mod plugin;
 pub mod registry;
 pub mod resolver;
 mod self_update;

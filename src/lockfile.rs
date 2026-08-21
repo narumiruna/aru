@@ -9,7 +9,15 @@ use crate::instruction::InstructionScope;
 use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
-pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 8;
+pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 9;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct ResourceOrigin {
+    pub kind: String,
+    pub name: String,
+    pub source: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -17,6 +25,8 @@ pub struct LockedSkill {
     pub name: String,
     pub path: String,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ResourceOrigin>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +102,8 @@ pub struct McpTarget {
 pub struct McpServer {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ResourceOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<String>,
     pub server_id: String,
     pub requirement: String,
@@ -109,6 +121,55 @@ pub struct LockedInstructionSource {
     pub sha256: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PluginManifestRecord {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PluginSelection {
+    pub whole: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<crate::manifest::PluginComponent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct PluginPackage {
+    pub name: String,
+    pub source: String,
+    pub requirement: String,
+    pub version: String,
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub format: crate::manifest::PluginFormat,
+    pub adapter_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subdir: Option<String>,
+    pub tree_sha256: String,
+    pub manifests: Vec<PluginManifestRecord>,
+    pub selection: PluginSelection,
+    pub targets: Vec<Target>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<LockedSkill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsupported: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -144,6 +205,12 @@ pub struct Lockfile {
     pub mcp_servers: Vec<McpServer>,
     #[serde(
         default,
+        rename = "plugin-package",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub plugin_packages: Vec<PluginPackage>,
+    #[serde(
+        default,
         rename = "projection-baseline",
         skip_serializing_if = "Vec::is_empty"
     )]
@@ -153,13 +220,14 @@ pub struct Lockfile {
 impl Lockfile {
     pub fn empty() -> Self {
         Self {
-            version: 3,
+            version: 4,
             package_input_hash: String::new(),
             projection_input_hash: String::new(),
             instruction_sources: Vec::new(),
             aru_packages: Vec::new(),
             skill_packages: Vec::new(),
             mcp_servers: Vec::new(),
+            plugin_packages: Vec::new(),
             projection_baselines: Vec::new(),
         }
     }
@@ -179,11 +247,16 @@ impl Lockfile {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.version != 3 {
+        if !matches!(self.version, 3 | 4) {
             return Err(AruError::msg(format!(
-                "unsupported aru.lock version {}; expected 3",
+                "unsupported aru.lock version {}; expected 3 or 4",
                 self.version
             )));
+        }
+        if self.version == 3 && !self.plugin_packages.is_empty() {
+            return Err(AruError::msg(
+                "aru.lock v3 cannot contain plugin-package records",
+            ));
         }
         let mut instruction_sources = BTreeSet::new();
         for instruction in &self.instruction_sources {
@@ -359,6 +432,76 @@ impl Lockfile {
                 }
             }
         }
+        let mut plugin_names = BTreeSet::new();
+        for plugin in &self.plugin_packages {
+            if !plugin_names.insert(&plugin.name) {
+                return Err(AruError::msg("aru.lock contains duplicate plugin name"));
+            }
+            validate_revision(&plugin.revision, "plugin package")?;
+            if plugin.adapter_version != crate::plugin::ADAPTER_VERSION {
+                return Err(AruError::msg(format!(
+                    "aru.lock plugin {:?} uses unsupported adapter version {}",
+                    plugin.name, plugin.adapter_version
+                )));
+            }
+            let targets: BTreeSet<_> = plugin.targets.iter().collect();
+            if plugin.targets.is_empty() || targets.len() != plugin.targets.len() {
+                return Err(AruError::msg(
+                    "aru.lock contains empty or duplicate plugin targets",
+                ));
+            }
+            let selected = !plugin.selection.components.is_empty()
+                || !plugin.selection.skills.is_empty()
+                || !plugin.selection.mcp.is_empty();
+            if plugin.selection.whole == selected {
+                return Err(AruError::msg(
+                    "aru.lock contains inconsistent plugin selection intent",
+                ));
+            }
+            let manifests = plugin
+                .manifests
+                .iter()
+                .map(|manifest| manifest.path.as_str())
+                .collect::<BTreeSet<_>>();
+            if plugin.manifests.is_empty() || manifests.len() != plugin.manifests.len() {
+                return Err(AruError::msg(
+                    "aru.lock contains empty or duplicate plugin manifests",
+                ));
+            }
+            for skill in &plugin.skills {
+                if !skill.origin.as_ref().is_some_and(|origin| {
+                    origin.kind == "plugin"
+                        && origin.name == plugin.name
+                        && origin.source == plugin.source
+                }) {
+                    return Err(AruError::msg(
+                        "aru.lock plugin skill has invalid origin identity",
+                    ));
+                }
+                if !self.skill_packages.iter().any(|package| {
+                    package.revision == plugin.revision
+                        && package.skills.iter().any(|locked| locked == skill)
+                }) {
+                    return Err(AruError::msg(
+                        "aru.lock plugin skill is missing from the complete skill lock",
+                    ));
+                }
+            }
+            for name in &plugin.mcp {
+                if !self.mcp_servers.iter().any(|server| {
+                    server.name == *name
+                        && server.origin.as_ref().is_some_and(|origin| {
+                            origin.kind == "plugin"
+                                && origin.name == plugin.name
+                                && origin.source == plugin.source
+                        })
+                }) {
+                    return Err(AruError::msg(
+                        "aru.lock plugin MCP is missing from the complete MCP lock",
+                    ));
+                }
+            }
+        }
         let mut baselines = BTreeSet::new();
         for baseline in &self.projection_baselines {
             if !baselines.insert((baseline.target, &baseline.kind, &baseline.key)) {
@@ -419,6 +562,30 @@ impl Lockfile {
         for server in &mut self.mcp_servers {
             server.targets.sort_by_key(|target| target.target);
         }
+        self.plugin_packages
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        for plugin in &mut self.plugin_packages {
+            plugin
+                .manifests
+                .sort_by(|left, right| left.path.cmp(&right.path));
+            plugin.targets.sort();
+            plugin.targets.dedup();
+            plugin
+                .skills
+                .sort_by(|left, right| left.name.cmp(&right.name));
+            plugin.mcp.sort();
+            plugin.mcp.dedup();
+            plugin.unsupported.sort();
+            plugin.unsupported.dedup();
+            plugin.diagnostics.sort();
+            plugin.diagnostics.dedup();
+            plugin.selection.components.sort();
+            plugin.selection.components.dedup();
+            plugin.selection.skills.sort();
+            plugin.selection.skills.dedup();
+            plugin.selection.mcp.sort();
+            plugin.selection.mcp.dedup();
+        }
         self.projection_baselines.sort();
     }
 
@@ -441,11 +608,13 @@ impl Lockfile {
             packages: &'a [AruPackage],
             skills: &'a [SkillPackage],
             mcp: &'a [McpServer],
+            plugins: &'a [PluginPackage],
         }
         canonical_json_digest(&Identity {
             packages: &self.aru_packages,
             skills: &self.skill_packages,
             mcp: &self.mcp_servers,
+            plugins: &self.plugin_packages,
         })
     }
 
@@ -456,12 +625,14 @@ impl Lockfile {
             packages: &'a [AruPackage],
             skills: &'a [SkillPackage],
             mcp: &'a [McpServer],
+            plugins: &'a [PluginPackage],
         }
         canonical_json_digest(&Identity {
             instructions: &self.instruction_sources,
             packages: &self.aru_packages,
             skills: &self.skill_packages,
             mcp: &self.mcp_servers,
+            plugins: &self.plugin_packages,
         })
     }
 }
@@ -632,6 +803,7 @@ mod tests {
         let mut lock = Lockfile::empty();
         lock.mcp_servers.push(McpServer {
             name: "docs".into(),
+            origin: None,
             registry: None,
             server_id: "docs".into(),
             requirement: "sha256:requirement".into(),
@@ -716,6 +888,7 @@ mod tests {
         let mut lock = Lockfile::empty();
         lock.mcp_servers.push(McpServer {
             name: "weather".into(),
+            origin: None,
             registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
             server_id: "io.example/weather".into(),
             requirement: "sha256:requirement".into(),
@@ -732,10 +905,14 @@ mod tests {
     }
 
     #[test]
-    fn v3_golden_lock_round_trips_to_identical_bytes() {
-        let fixture = include_str!("../tests/fixtures/contracts/aru.lock");
-        let lock: Lockfile = toml::from_str(fixture).unwrap();
-        lock.validate().unwrap();
-        assert_eq!(lock.bytes().unwrap(), fixture.as_bytes());
+    fn v3_and_v4_golden_locks_round_trip_to_identical_bytes() {
+        for fixture in [
+            include_str!("../tests/fixtures/contracts/aru-v3.lock"),
+            include_str!("../tests/fixtures/contracts/aru.lock"),
+        ] {
+            let lock: Lockfile = toml::from_str(fixture).unwrap();
+            lock.validate().unwrap();
+            assert_eq!(lock.bytes().unwrap(), fixture.as_bytes());
+        }
     }
 }

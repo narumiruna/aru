@@ -100,6 +100,8 @@ struct MetadataReport {
     skills: Vec<SkillMetadata>,
     mcp: Vec<McpMetadata>,
     projections: Vec<ProjectionMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugins: Option<Vec<PluginMetadata>>,
 }
 
 #[derive(Serialize)]
@@ -118,6 +120,8 @@ struct SkillMetadata {
     revision: String,
     targets: Vec<crate::manifest::Target>,
     sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<crate::lockfile::ResourceOrigin>,
 }
 
 #[derive(Serialize)]
@@ -126,6 +130,26 @@ struct McpMetadata {
     package: String,
     version: String,
     targets: Vec<crate::manifest::Target>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin: Option<crate::lockfile::ResourceOrigin>,
+}
+
+#[derive(Serialize)]
+struct PluginMetadata {
+    name: String,
+    source: String,
+    source_version: String,
+    revision: String,
+    declared_version: Option<String>,
+    description: Option<String>,
+    format: crate::manifest::PluginFormat,
+    subdir: Option<String>,
+    manifests: Vec<crate::lockfile::PluginManifestRecord>,
+    targets: Vec<crate::manifest::Target>,
+    skills: Vec<String>,
+    mcp: Vec<String>,
+    unsupported: Vec<String>,
+    diagnostics: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -137,12 +161,13 @@ struct ProjectionMetadata {
 }
 
 pub fn metadata(project: &Path, args: MetadataArgs) -> Result<()> {
-    if args.format_version != 1 {
+    if !matches!(args.format_version, 1 | 2) {
         return Err(AruError::msg(format!(
-            "unsupported metadata format version {}; supported version: 1",
+            "unsupported metadata format version {}; supported versions: 1, 2",
             args.format_version
         )));
     }
+    let include_origins = args.format_version == 2;
     let manifest = crate::manifest::ManifestDocument::load(project)?.manifest()?;
     let lock = required_lock(project)?;
     let graph = PackageGraph::from_lock(&lock)?;
@@ -204,13 +229,19 @@ pub fn metadata(project: &Path, args: MetadataArgs) -> Result<()> {
             continue;
         }
         for skill in &package.skills {
+            let source = skill
+                .origin
+                .as_ref()
+                .map(|origin| origin.source.as_str())
+                .unwrap_or(&package.source);
             skills.push(SkillMetadata {
-                source: scrub_url(&package.source, "skill source URL")?,
+                source: scrub_url(source, "skill source URL")?,
                 name: skill.name.clone(),
                 version: package.version.clone(),
                 revision: package.revision.clone(),
                 targets: package.targets.clone(),
                 sha256: skill.sha256.clone(),
+                origin: include_origins.then(|| skill.origin.clone()).flatten(),
             });
         }
     }
@@ -230,6 +261,7 @@ pub fn metadata(project: &Path, args: MetadataArgs) -> Result<()> {
             package: server.server_id.clone(),
             version: server.version.clone(),
             targets: server.targets.iter().map(|target| target.target).collect(),
+            origin: include_origins.then(|| server.origin.clone()).flatten(),
         })
         .collect::<Vec<_>>();
     mcp.sort_by(|left, right| left.name.cmp(&right.name));
@@ -266,8 +298,37 @@ pub fn metadata(project: &Path, args: MetadataArgs) -> Result<()> {
         .to_str()
         .ok_or_else(|| AruError::msg("project root is not UTF-8"))?
         .replace(std::path::MAIN_SEPARATOR, "/");
+    let plugins = include_origins
+        .then(|| {
+            lock.plugin_packages
+                .iter()
+                .map(|plugin| {
+                    Ok(PluginMetadata {
+                        name: plugin.name.clone(),
+                        source: scrub_url(&plugin.source, "plugin source URL")?,
+                        source_version: plugin.version.clone(),
+                        revision: plugin.revision.clone(),
+                        declared_version: plugin.declared_version.clone(),
+                        description: plugin.description.clone(),
+                        format: plugin.format,
+                        subdir: plugin.subdir.clone(),
+                        manifests: plugin.manifests.clone(),
+                        targets: plugin.targets.clone(),
+                        skills: plugin
+                            .skills
+                            .iter()
+                            .map(|skill| skill.name.clone())
+                            .collect(),
+                        mcp: plugin.mcp.clone(),
+                        unsupported: plugin.unsupported.clone(),
+                        diagnostics: plugin.diagnostics.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
     let report = MetadataReport {
-        format_version: 1,
+        format_version: args.format_version,
         project_root,
         lock_version: lock.version,
         project_targets: manifest.project.targets,
@@ -278,6 +339,7 @@ pub fn metadata(project: &Path, args: MetadataArgs) -> Result<()> {
         skills,
         mcp,
         projections,
+        plugins,
     };
     let mut bytes = serde_json::to_vec_pretty(&report)
         .map_err(|error| AruError::msg(format!("could not serialize metadata: {error}")))?;

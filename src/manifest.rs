@@ -341,6 +341,11 @@ impl PackageRequirement {
     }
 }
 
+mod plugin;
+pub use plugin::{
+    PluginComponent, PluginFormat, PluginRequirement, PluginTrust, validate_plugin_name,
+};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PackageTrust {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -552,6 +557,10 @@ pub struct Manifest {
     pub packages: BTreeMap<String, PackageRequirement>,
     #[serde(default, rename = "package-trust")]
     pub package_trust: BTreeMap<String, PackageTrust>,
+    #[serde(default)]
+    pub plugins: BTreeMap<String, PluginRequirement>,
+    #[serde(default, rename = "plugin-trust")]
+    pub plugin_trust: BTreeMap<String, PluginTrust>,
 }
 
 impl Manifest {
@@ -580,6 +589,17 @@ impl Manifest {
         for (source, trust) in &self.package_trust {
             trust.validate(source)?;
         }
+        for (name, requirement) in &self.plugins {
+            requirement.validate(name, &self.project.targets)?;
+        }
+        for (name, trust) in &self.plugin_trust {
+            trust.validate(name)?;
+            if !self.plugins.contains_key(name) {
+                return Err(AruError::msg(format!(
+                    "plugin trust {name:?} has no matching plugin declaration"
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -607,6 +627,8 @@ impl ManifestDocument {
             "mcp",
             "packages",
             "package-trust",
+            "plugins",
+            "plugin-trust",
         ] {
             if doc.get(key).is_some_and(|item| !item.is_table()) {
                 return Err(AruError::msg(format!(
@@ -721,6 +743,64 @@ impl ManifestDocument {
     pub fn remove_package_trust(&mut self, source: &str) {
         if let Some(table) = existing_table_mut(&mut self.doc, "package-trust") {
             table.remove(source);
+        }
+    }
+
+    pub fn set_plugin(&mut self, name: &str, requirement: &PluginRequirement) {
+        let mut table = Table::new();
+        table["source"] = toml_edit::value(requirement.source.as_str());
+        table["format"] = toml_edit::value(requirement.format.to_string());
+        for (key, value) in [
+            ("subdir", requirement.subdir.as_ref()),
+            ("version", requirement.version.as_ref()),
+            ("branch", requirement.branch.as_ref()),
+            ("rev", requirement.rev.as_ref()),
+        ] {
+            if let Some(value) = value {
+                table[key] = toml_edit::value(value.as_str());
+            }
+        }
+        if !requirement.components.is_empty() {
+            table["components"] = Item::Value(
+                string_array(
+                    &requirement
+                        .components
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>(),
+                )
+                .into(),
+            );
+        }
+        if !requirement.skills.is_empty() {
+            table["skills"] = Item::Value(string_array(&requirement.skills).into());
+        }
+        if !requirement.mcp.is_empty() {
+            table["mcp"] = Item::Value(string_array(&requirement.mcp).into());
+        }
+        if let Some(targets) = &requirement.targets {
+            table["targets"] = Item::Value(target_array(targets).into());
+        }
+        table_mut_or_insert(&mut self.doc, "plugins")[name] = Item::Table(table);
+    }
+
+    pub fn remove_plugin(&mut self, name: &str) {
+        if let Some(table) = existing_table_mut(&mut self.doc, "plugins") {
+            table.remove(name);
+        }
+    }
+
+    pub fn set_plugin_trust(&mut self, name: &str, trust: &PluginTrust) {
+        let mut table = Table::new();
+        if !trust.mcp.is_empty() {
+            table["mcp"] = Item::Value(string_array(&trust.mcp).into());
+        }
+        table_mut_or_insert(&mut self.doc, "plugin-trust")[name] = Item::Table(table);
+    }
+
+    pub fn remove_plugin_trust(&mut self, name: &str) {
+        if let Some(table) = existing_table_mut(&mut self.doc, "plugin-trust") {
+            table.remove(name);
         }
     }
 
