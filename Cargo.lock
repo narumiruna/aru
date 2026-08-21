@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aru"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "assert_cmd",
  "clap",
