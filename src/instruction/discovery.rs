@@ -24,7 +24,7 @@ pub fn discover(project: &Path, manifest: &Manifest) -> Result<Vec<DiscoveredIns
         .sources
         .iter()
         .flat_map(|source| source.files.iter());
-    let inventory = inventory(project, false, instruction_search_roots(patterns))?;
+    let inventory = inventory(project, instruction_search_roots(patterns))?;
     let mut discovered = BTreeMap::<String, DiscoveredInstruction>::new();
     let mut folded_sources = BTreeMap::<String, String>::new();
 
@@ -141,29 +141,6 @@ pub fn discover(project: &Path, manifest: &Manifest) -> Result<Vec<DiscoveredIns
     Ok(discovered.into_values().collect())
 }
 
-pub fn discover_agents(project: &Path) -> Result<Vec<String>> {
-    let inventory = inventory(project, true, [PathBuf::new()])?;
-    let mut output = Vec::new();
-    for (relative, entry) in inventory {
-        if Path::new(&relative)
-            .file_name()
-            .and_then(|name| name.to_str())
-            != Some("AGENTS.md")
-        {
-            continue;
-        }
-        if entry.is_symlink {
-            return Err(AruError::msg(format!(
-                "instruction source {relative:?} must not be a symlink"
-            )));
-        }
-        if entry.is_file {
-            output.push(relative);
-        }
-    }
-    Ok(output)
-}
-
 #[derive(Debug)]
 struct InventoryEntry {
     is_file: bool,
@@ -199,13 +176,12 @@ fn instruction_search_roots<'a>(patterns: impl Iterator<Item = &'a String>) -> V
 
 fn inventory(
     project: &Path,
-    onboarding: bool,
     search_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<BTreeMap<String, InventoryEntry>> {
     let mut output = BTreeMap::new();
     let mut count = 0_usize;
     for search_root in search_roots {
-        if excluded_directory(&search_root, onboarding) {
+        if excluded_directory(&search_root) {
             continue;
         }
         let root_depth = search_root.components().count();
@@ -225,7 +201,7 @@ fn inventory(
                 let Ok(relative) = entry.path().strip_prefix(project) else {
                     return false;
                 };
-                relative.as_os_str().is_empty() || !excluded_directory(relative, onboarding)
+                relative.as_os_str().is_empty() || !excluded_directory(relative)
             });
         for item in walker {
             let item = item
@@ -294,13 +270,11 @@ fn safe_search_root(project: &Path, search_root: &Path) -> Result<Option<PathBuf
     Ok(Some(search_root.to_path_buf()))
 }
 
-fn excluded_directory(path: &Path, onboarding: bool) -> bool {
-    let first = path.components().next();
-    if matches!(first, Some(Component::Normal(name)) if name == ".git" || name == ".aru") {
-        return true;
-    }
-    onboarding
-        && matches!(first, Some(Component::Normal(name)) if matches!(name.to_str(), Some("target" | "third_party" | "vendor" | "node_modules")))
+fn excluded_directory(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Normal(name)) if name == ".git" || name == ".aru"
+    )
 }
 
 fn compile(patterns: &[String]) -> Result<GlobSet> {
@@ -706,17 +680,5 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("maximum depth"));
-    }
-
-    #[test]
-    fn onboarding_uses_exact_agents_name_and_skips_common_vendor_roots() {
-        assert!(validate_portable_source_path("CON.md/AGENTS.md").is_err());
-        assert!(validate_portable_source_path("src:api/AGENTS.md").is_err());
-        let project = tempfile::tempdir().unwrap();
-        std::fs::write(project.path().join("AGENTS.md"), "root\n").unwrap();
-        std::fs::write(project.path().join("NOTAGENTS.md"), "not an anchor\n").unwrap();
-        std::fs::create_dir(project.path().join("third_party")).unwrap();
-        std::fs::write(project.path().join("third_party/AGENTS.md"), "vendor\n").unwrap();
-        assert_eq!(discover_agents(project.path()).unwrap(), ["AGENTS.md"]);
     }
 }

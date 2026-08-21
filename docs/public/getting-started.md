@@ -93,23 +93,24 @@ Initialization creates:
 
 ## Adopt existing instructions
 
-Preview conventional `AGENTS.md` discovery without writing:
+Specify each existing `AGENTS.md` file explicitly and preview without writing:
 
 ```console
-aru instruction add --discover --dry-run
+aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
 ```
 
 Apply the result:
 
 ```console
-aru instruction add --discover
+aru instruction add AGENTS.md src/api/AGENTS.md
 ```
 
-If an unmanaged destination such as `CLAUDE.md` already exists, aru reports a collision. Choose an explicit policy only after reviewing the file:
+If an unmanaged destination such as `CLAUDE.md` already exists, aru reports a collision.
+Choose an explicit policy only after reviewing the file:
 
 ```console
-aru instruction add --discover --merge  # preserve Markdown around owned blocks
-aru instruction add --discover --force  # destructively take over the destination
+aru instruction add AGENTS.md src/api/AGENTS.md --merge  # preserve Markdown around owned blocks
+aru instruction add AGENTS.md src/api/AGENTS.md --force  # destructively take over the destination
 ```
 
 !!! warning

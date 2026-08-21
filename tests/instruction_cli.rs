@@ -72,7 +72,8 @@ fn instruction_help_exposes_add_remove_list_and_merge_contract() {
         .args(["instruction", "add", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("--discover"))
+        .stdout(predicate::str::contains("<FILE>..."))
+        .stdout(predicate::str::contains("--discover").not())
         .stdout(predicate::str::contains("-n, --dry-run"))
         .stdout(predicate::str::contains("--no-sync"))
         .stdout(predicate::str::contains("--merge"))
@@ -84,7 +85,7 @@ fn instruction_help_exposes_add_remove_list_and_merge_contract() {
         .stdout(predicate::str::contains("--check"))
         .stdout(predicate::str::contains("--merge"));
     cargo_bin_cmd!("aru")
-        .args(["instruction", "add", "--discover", "--merge", "--force"])
+        .args(["instruction", "add", "AGENTS.md", "--merge", "--force"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
@@ -103,7 +104,7 @@ fn instruction_add_list_and_remove_manage_declared_sources() {
     init(project, &["claude"]);
 
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
     aru(project)
@@ -149,7 +150,7 @@ fn instruction_add_accepts_manifest_without_optional_tables() {
     std::fs::write(project.join("AGENTS.md"), instructions).unwrap();
 
     aru(project)
-        .args(["instruction", "add", "--discover", "--dry-run"])
+        .args(["instruction", "add", "AGENTS.md", "--dry-run"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Would lock instruction AGENTS.md"));
@@ -170,7 +171,7 @@ fn instruction_add_accepts_manifest_without_optional_tables() {
 }
 
 #[test]
-fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
+fn instruction_add_accepts_explicit_agents_files_and_projects_all_targets() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path();
     let nested = project.join("src/api");
@@ -195,7 +196,13 @@ fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
 
     let manifest_before = std::fs::read(project.join("aru.toml")).unwrap();
     aru(project)
-        .args(["instruction", "add", "--discover", "--dry-run"])
+        .args([
+            "instruction",
+            "add",
+            "AGENTS.md",
+            "src/api/AGENTS.md",
+            "--dry-run",
+        ])
         .assert()
         .success()
         .stderr(predicate::str::contains("Would lock instruction AGENTS.md"));
@@ -208,7 +215,7 @@ fn instruction_add_discovers_existing_agents_and_projects_all_targets() {
     assert!(!project.join(".aru/state.toml").exists());
 
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md", "src/api/AGENTS.md"])
         .assert()
         .success();
 
@@ -280,7 +287,7 @@ fn merge_preserves_unmanaged_content_updates_blocks_and_cleans_owned_outputs() {
 
     let manifest_before = std::fs::read(project.join("aru.toml")).unwrap();
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md", "src/api/AGENTS.md"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("collision"));
@@ -294,7 +301,13 @@ fn merge_preserves_unmanaged_content_updates_blocks_and_cleans_owned_outputs() {
     );
 
     aru(project)
-        .args(["instruction", "add", "--discover", "--merge"])
+        .args([
+            "instruction",
+            "add",
+            "AGENTS.md",
+            "src/api/AGENTS.md",
+            "--merge",
+        ])
         .assert()
         .success();
     let claude = std::fs::read_to_string(project.join("CLAUDE.md")).unwrap();
@@ -357,7 +370,7 @@ fn missing_state_preserves_removed_instruction_projection_for_review() {
     std::fs::write(project.join("AGENTS.md"), "# Root\n").unwrap();
     init(project, &["claude"]);
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
     let projected = std::fs::read(project.join("CLAUDE.md")).unwrap();
@@ -386,7 +399,7 @@ fn drifted_instruction_block_is_preserved_even_with_force() {
     std::fs::write(project.join("AGENTS.md"), "# Root\n").unwrap();
     init(project, &["claude"]);
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
 
@@ -582,30 +595,37 @@ fn lock_records_sources_without_outputs_and_locked_sync_replays_exact_content() 
 }
 
 #[test]
-fn instruction_add_is_idempotent_and_no_match_is_actionable() {
+fn instruction_add_is_idempotent_and_missing_file_is_actionable() {
     let temporary = tempfile::tempdir().unwrap();
     let empty = temporary.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
     init(&empty, &["claude"]);
     aru(&empty)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("no AGENTS.md files found"));
+        .stderr(predicate::str::contains("matched no files"));
+    aru(&empty)
+        .args(["instruction", "add", "**/AGENTS.md"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "requires exact AGENTS.md file paths",
+        ));
 
     let project = temporary.path().join("project");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("AGENTS.md"), "# Root\n").unwrap();
     init(&project, &["claude"]);
     aru(&project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
     let manifest = std::fs::read(project.join("aru.toml")).unwrap();
     let lock = std::fs::read(project.join("aru.lock")).unwrap();
     let state = std::fs::read(project.join(".aru/state.toml")).unwrap();
     aru(&project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Project is synchronized."));
@@ -625,7 +645,7 @@ fn force_takeover_is_explicit_in_dry_run_and_apply() {
     std::fs::write(project.join("CLAUDE.md"), "# Replace me\n").unwrap();
     init(project, &["claude"]);
     aru(project)
-        .args(["instruction", "add", "--discover", "--force", "--dry-run"])
+        .args(["instruction", "add", "AGENTS.md", "--force", "--dry-run"])
         .assert()
         .success()
         .stderr(predicate::str::contains(
@@ -636,7 +656,7 @@ fn force_takeover_is_explicit_in_dry_run_and_apply() {
         "# Replace me\n"
     );
     aru(project)
-        .args(["instruction", "add", "--discover", "--force"])
+        .args(["instruction", "add", "AGENTS.md", "--force"])
         .assert()
         .success();
     let claude = std::fs::read_to_string(project.join("CLAUDE.md")).unwrap();
@@ -651,7 +671,7 @@ fn target_changes_support_merge_and_deferred_instruction_projection() {
     std::fs::write(project.join("AGENTS.md"), "# Root\n").unwrap();
     init(project, &["codex"]);
     aru(project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
     std::fs::write(project.join("CLAUDE.md"), "# Manual Claude\n").unwrap();
