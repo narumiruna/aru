@@ -31,6 +31,29 @@ fn detects_agent_plugin_and_accepts_safe_mcp() {
 }
 
 #[test]
+fn agent_mcp_without_servers_is_disabled_without_spurious_inventory() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("plugin.json"),
+        format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA}","name":"demo"}}"#),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("mcp.json"),
+        format!(r#"{{"$schema":"{AGENT_MCP_SCHEMA}"}}"#),
+    )
+    .unwrap();
+
+    let inventory = inspect_plugin_root(temp.path(), None).unwrap();
+
+    assert!(inventory.mcp.is_empty());
+    assert_eq!(
+        inventory.diagnostics,
+        ["disabled invalid mcp.json: missing required mcpServers"]
+    );
+}
+
+#[test]
 fn composite_is_openai_and_inline_extension_wins() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(

@@ -473,7 +473,21 @@ fn inspect_mcp_file(
             ));
         }
     }
-    let servers = object.get("mcpServers").unwrap_or(&value);
+    let servers = if agent_schema {
+        let Some(servers) = object.get("mcpServers") else {
+            diagnostics.push(format!(
+                "disabled invalid {relative}: missing required mcpServers"
+            ));
+            return Ok((
+                Vec::new(),
+                diagnostics,
+                Some(manifest_record(root, relative)?),
+            ));
+        };
+        servers
+    } else {
+        object.get("mcpServers").unwrap_or(&value)
+    };
     let parsed = match parse_mcp_map(servers, agent_schema) {
         Ok(parsed) => parsed,
         Err(error) if agent_schema => {
