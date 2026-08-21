@@ -533,9 +533,12 @@ mod tests {
                 path.components()
                     .all(|component| matches!(component, Component::Normal(_)))
             );
-            assert_ne!(
-                path.components().next(),
-                Some(Component::Normal(".aru".as_ref()))
+            assert!(
+                !path.components().any(
+                    |component| matches!(component, Component::Normal(name) if name == ".aru")
+                ),
+                "reserved .aru component in {}",
+                spec.project_skills
             );
             assert_eq!(
                 path.file_name().and_then(|name| name.to_str()),
