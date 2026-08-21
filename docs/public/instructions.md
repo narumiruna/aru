@@ -42,7 +42,10 @@ Each source uses exactly one scoping model:
 - `scope = "source-directory"` requires matched files named `AGENTS.md`; each file applies to its own directory tree.
 - `apply-to` declares exact repository-relative globs for targets that can preserve path-specific rules.
 
-The optional `targets` list defaults to every configured project target and must be a subset of them. Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+The optional `targets` list defaults to every configured project target and must be a subset of them.
+Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+Projects without instruction declarations skip source discovery.
+Otherwise, aru limits traversal to the fixed roots in `files`; selectors that begin with a wildcard necessarily start at the project root.
 
 ## Target projection
 
