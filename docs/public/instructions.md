@@ -2,14 +2,17 @@
 
 Existing `AGENTS.md` files remain canonical and user-owned. Aru records their paths without moving, editing, or removing them, then creates only the projections required by configured targets.
 
-## Discover conventional sources
+## Add canonical sources
 
-Preview and apply root or nested `AGENTS.md` discovery:
+Specify exact root or nested `AGENTS.md` paths when previewing or applying:
 
 ```console
-aru instruction add --discover --dry-run
-aru instruction add --discover
+aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
+aru instruction add AGENTS.md src/api/AGENTS.md
 ```
+
+The command does not search the project for instruction files.
+Configure glob selectors directly in `aru.toml` when needed.
 
 List declared selectors or remove exact selectors:
 
@@ -42,7 +45,10 @@ Each source uses exactly one scoping model:
 - `scope = "source-directory"` requires matched files named `AGENTS.md`; each file applies to its own directory tree.
 - `apply-to` declares exact repository-relative globs for targets that can preserve path-specific rules.
 
-The optional `targets` list defaults to every configured project target and must be a subset of them. Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+The optional `targets` list defaults to every configured project target and must be a subset of them.
+Patterns are project-relative; `.git/**` and `.aru/**` are always excluded.
+Projects without instruction declarations skip source resolution.
+Otherwise, aru limits traversal to the fixed roots in `files`; selectors that begin with a wildcard necessarily start at the project root.
 
 ## Target projection
 

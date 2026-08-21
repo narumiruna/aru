@@ -24,7 +24,7 @@ Run `aru <command> --help` for the complete option contract installed with your 
 
 | Command | Purpose |
 | --- | --- |
-| `aru instruction add --discover` | Discover and add conventional instruction sources |
+| `aru instruction add <file>...` | Add exact project-relative `AGENTS.md` sources |
 | `aru instruction list` | List declared instruction selectors |
 | `aru instruction remove <file>` | Remove exact instruction selectors |
 | `aru skill add <source>` | Add selected Agent Skills |

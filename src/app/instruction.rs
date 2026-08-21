@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::cli::{InstructionAddArgs, InstructionRemoveArgs};
 use crate::error::{AruError, Result};
-use crate::instruction::discovery::discover_agents;
 use crate::manifest::{InstructionSource, InstructionSourceScope, ManifestDocument};
 use crate::sync::CollisionPolicy;
 
@@ -17,34 +16,32 @@ pub(super) fn add(
     let _guard = super::begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
-    let mut discovered = discover_agents(project)?;
-    if discovered.is_empty() {
-        return Err(AruError::msg(
-            "no AGENTS.md files found; create one before running aru instruction add --discover",
-        ));
+    let mut files = args.files.clone();
+    files.sort();
+    files.dedup();
+    if let Some(pattern) = files
+        .iter()
+        .find(|file| file.contains(['*', '?', '[', '{']))
+    {
+        return Err(AruError::msg(format!(
+            "instruction add requires exact AGENTS.md file paths, not glob {pattern:?}; configure globs in aru.toml"
+        )));
     }
-    let already_declared = crate::instruction::discovery::discover(project, &manifest)?
-        .into_iter()
-        .map(|instruction| instruction.unit.source.to_string_lossy().replace('\\', "/"))
-        .collect::<BTreeSet<_>>();
-    discovered.retain(|source| !already_declared.contains(source));
 
     let original_sources = manifest.instructions.sources;
     let mut sources = original_sources.clone();
-    if !discovered.is_empty()
-        && let Some(source) = sources.iter_mut().find(|source| {
-            source.scope == Some(InstructionSourceScope::SourceDirectory)
-                && source.apply_to.is_empty()
-                && source.targets.is_empty()
-                && source.exclude.is_empty()
-        })
-    {
-        source.files.extend(discovered);
+    if let Some(source) = sources.iter_mut().find(|source| {
+        source.scope == Some(InstructionSourceScope::SourceDirectory)
+            && source.apply_to.is_empty()
+            && source.targets.is_empty()
+            && source.exclude.is_empty()
+    }) {
+        source.files.extend(files);
         source.files.sort();
         source.files.dedup();
-    } else if !discovered.is_empty() {
+    } else {
         sources.push(InstructionSource {
-            files: discovered,
+            files,
             exclude: Vec::new(),
             scope: Some(InstructionSourceScope::SourceDirectory),
             apply_to: Vec::new(),

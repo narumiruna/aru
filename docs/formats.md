@@ -44,7 +44,11 @@ Each `instructions.sources` entry has non-empty project-relative `files`, option
 - `scope = "source-directory"` requires every matched source to be named `AGENTS.md` and derives each source's directory scope independently.
 - `apply-to = [...]` declares exact repository-relative globs and is accepted only when every selected target can represent those globs without broadening.
 
-Source `targets` default to the complete project target set and otherwise must be a duplicate-free subset. Discovery always excludes `.git/**` and `.aru/**`; onboarding also skips common build/vendor roots and writes the exact files it found. Unsafe/absolute patterns, parent traversal, duplicate matches, symlinks, non-regular files, non-UTF-8 paths/content, files larger than 1 MiB, generated output paths, and reserved aru marker text fail before writes.
+Source `targets` default to the complete project target set and otherwise must be a duplicate-free subset.
+Projects without instruction declarations skip source resolution.
+Otherwise, source resolution traverses only the fixed roots implied by configured `files` selectors; a selector beginning with a wildcard necessarily starts at the project root.
+Source resolution always excludes `.git/**` and `.aru/**`.
+Unsafe/absolute patterns, parent traversal, duplicate matches, symlinks, non-regular files, non-UTF-8 paths/content, files larger than 1 MiB, generated output paths, and reserved aru marker text fail before writes.
 
 Skill `version`, `branch`, and `rev` are mutually exclusive. `branch` stores moving user intent while the lock records its resolved commit; ordinary sync stays pinned and only `skill update` re-resolves it. `include` is either `['*']` or one or more validated names. `exclude` applies only to wildcard mode. `paths` is stable user intent, not transient resolution data. Optional skill `targets` must be a non-empty, duplicate-free subset of `project.targets` whose adapters support skills; omission means every compatible project target. All current targets support skills through their native project directories.
 

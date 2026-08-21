@@ -132,7 +132,7 @@ fn audit_reports_projection_drift_and_hidden_unicode() {
     )
     .unwrap();
     aru(&project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
     add_direct_mcp(&project);
@@ -245,7 +245,7 @@ fn audit_accepts_multilingual_and_emoji_content() {
     init(&project);
     std::fs::write(project.join("AGENTS.md"), "繁體中文規則 🧭\n日本語\n").unwrap();
     aru(&project)
-        .args(["instruction", "add", "--discover"])
+        .args(["instruction", "add", "AGENTS.md"])
         .assert()
         .success();
 

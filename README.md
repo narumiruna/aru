@@ -115,26 +115,28 @@ aru init ../my-project --target codex
 
 ### 2. Adopt existing instructions
 
-If your project already has one or more `AGENTS.md` files, preview their discovery:
+Specify each existing `AGENTS.md` file explicitly and preview the result:
 
 ```console
-aru instruction add --discover --dry-run
+aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
 ```
 
 Apply the result after reviewing the plan:
 
 ```console
-aru instruction add --discover
+aru instruction add AGENTS.md src/api/AGENTS.md
 ```
 
-Aru keeps each `AGENTS.md` file in place and creates only the files required by your selected targets.
+Aru accepts exact project-relative `AGENTS.md` paths, keeps each source in place, and creates only the files required by your selected targets.
+
+Configure glob selectors directly in `aru.toml` when needed.
 
 If a destination such as `CLAUDE.md` already contains unmanaged content, aru stops instead of overwriting it.
 
 Use `--merge` only after reviewing the collision:
 
 ```console
-aru instruction add --discover --merge
+aru instruction add AGENTS.md src/api/AGENTS.md --merge
 ```
 
 > [!CAUTION]
@@ -197,11 +199,11 @@ Use `--no-sync` when you intentionally want to update only `aru.toml` and `aru.l
 
 ### Manage instructions
 
-Discover conventional root and nested `AGENTS.md` files:
+Add root and nested `AGENTS.md` files explicitly:
 
 ```console
-aru instruction add --discover --dry-run
-aru instruction add --discover
+aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
+aru instruction add AGENTS.md src/api/AGENTS.md
 ```
 
 List configured instruction selectors:

@@ -346,7 +346,7 @@ pub struct ExportArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InstructionCommand {
-    /// Discover and add existing AGENTS.md files.
+    /// Add existing AGENTS.md files.
     Add(InstructionAddArgs),
     /// Remove declared instruction source files.
     Remove(InstructionRemoveArgs),
@@ -356,9 +356,9 @@ pub enum InstructionCommand {
 
 #[derive(Debug, Args)]
 pub struct InstructionAddArgs {
-    /// Discover conventional root and nested AGENTS.md files.
-    #[arg(long, required = true)]
-    pub discover: bool,
+    /// Exact project-relative AGENTS.md file path; may be repeated.
+    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    pub files: Vec<String>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
