@@ -177,7 +177,8 @@ jobs:
         env:
           PYTHON_PLATFORM: ${{ matrix.python-platform }}
         run: |
-          mapfile -t wheels < <(find dist -maxdepth 1 -type f -name '*.whl' -print)
+          shopt -s nullglob
+          wheels=(dist/*.whl)
           if [[ "${#wheels[@]}" -ne 1 ]]; then
             printf 'Expected exactly one wheel, found %s\n' "${#wheels[@]}" >&2
             printf '%s\n' "${wheels[@]}" >&2
