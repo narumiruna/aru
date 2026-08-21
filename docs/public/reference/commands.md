@@ -38,7 +38,8 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | `aru target add <target>` | Add targets to the project set |
 | `aru target remove <target>` | Remove targets from the project set |
 | `aru target set <target>` | Replace the complete target set |
-| `aru target list` | List configured targets |
+| `aru target list` | List configured canonical targets |
+| `aru target list --available` | List canonical targets, skill paths, capabilities, and aliases |
 
 ## Inspection and export
 
