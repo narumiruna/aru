@@ -28,6 +28,8 @@ fn offline_registry_resolution_fails_before_http_resolution() {
         )]),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let error = resolve(
         temporary.path(),
@@ -69,6 +71,8 @@ fn package_hash_excludes_targets() {
         mcp: BTreeMap::new(),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let package_sources = BTreeMap::new();
     let first = package_input_hash(&manifest, &sources, &package_sources).unwrap();
@@ -146,6 +150,8 @@ fn mcp_environment_hash_normalizes_order_and_tracks_references() {
         )]),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let empty = BTreeMap::new();
     let first = package_input_hash(&manifest, &empty, &empty).unwrap();
@@ -193,6 +199,8 @@ fn locked_pypi_candidate_replays_offline_to_every_mcp_target() {
         mcp: BTreeMap::from([("weather".into(), requirement.clone())]),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let candidate = crate::registry::ResolvedCandidate {
         kind: "package".into(),
@@ -214,6 +222,7 @@ fn locked_pypi_candidate_replays_offline_to_every_mcp_target() {
         package_input_hash(&manifest, &BTreeMap::new(), &BTreeMap::new()).unwrap();
     lock.mcp_servers.push(McpServer {
         name: "weather".into(),
+        origin: None,
         registry: Some(crate::registry::DEFAULT_REGISTRY.into()),
         server_id: "io.example/weather".into(),
         requirement: canonical_json_digest(&normalized_mcp(&requirement)).unwrap(),

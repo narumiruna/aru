@@ -64,6 +64,16 @@ impl UpdateSelection {
         self
     }
 
+    pub(crate) fn plugins(
+        mut self,
+        plugins: BTreeSet<String>,
+        precise: BTreeMap<String, String>,
+    ) -> Self {
+        self.packages.extend(plugins);
+        self.precise_packages.extend(precise);
+        self
+    }
+
     pub(crate) fn skill_hints(
         mut self,
         skill_hints: BTreeMap<String, SkillResolutionHint>,
@@ -175,6 +185,10 @@ impl ReconcileRequest {
 
     pub(crate) fn dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    pub(crate) fn locked(&self) -> bool {
+        self.locked
     }
 
     pub(crate) fn projects(&self) -> bool {

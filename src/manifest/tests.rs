@@ -416,6 +416,56 @@ fn package_and_trust_mutation_preserve_unrelated_manifest_content() {
 }
 
 #[test]
+fn plugin_and_trust_round_trip_with_selection_validation() {
+    let text = "# keep\n[project]\ntargets = [\"codex\"]\n\n[custom]\nanswer = 42\n";
+    let mut document = ManifestDocument {
+        path: PathBuf::from("aru.toml"),
+        doc: text.parse().unwrap(),
+    };
+    document.set_plugin(
+        "review.tools",
+        &PluginRequirement {
+            source: "owner/monorepo".into(),
+            format: PluginFormat::Openai,
+            subdir: Some("plugins/review".into()),
+            version: Some("^1.0".into()),
+            branch: None,
+            rev: None,
+            components: vec![PluginComponent::Skills],
+            skills: Vec::new(),
+            mcp: vec!["docs".into()],
+            targets: Some(vec![Target::Codex]),
+        },
+    );
+    document.set_plugin_trust(
+        "review.tools",
+        &PluginTrust {
+            mcp: vec!["docs".into()],
+        },
+    );
+    let output = String::from_utf8(document.bytes()).unwrap();
+    assert!(output.starts_with("# keep"));
+    assert!(output.contains("[plugins.\"review.tools\"]"));
+    assert!(output.contains("format = \"openai\""));
+    let manifest = document.manifest().unwrap();
+    assert_eq!(manifest.plugins["review.tools"].mcp, ["docs"]);
+
+    let mut conflicting = manifest.plugins["review.tools"].clone();
+    conflicting.skills.push("review".into());
+    assert!(
+        conflicting
+            .validate("review.tools", &manifest.project.targets)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot combine")
+    );
+
+    document.remove_plugin("review.tools");
+    document.remove_plugin_trust("review.tools");
+    assert!(document.manifest().unwrap().plugins.is_empty());
+}
+
+#[test]
 fn manifest_fixture_parses_and_preserves_comments() {
     let fixture = include_str!("../../tests/fixtures/contracts/aru.toml");
     let document = ManifestDocument {

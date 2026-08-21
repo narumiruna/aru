@@ -15,6 +15,7 @@ nav:
   - Getting started: getting-started.md
   - Core workflows:
       - Native packages: packages.md
+      - Plugin dependencies: plugins.md
       - Instructions: instructions.md
       - Agent Skills: skills.md
       - MCP servers: mcp.md

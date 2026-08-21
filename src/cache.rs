@@ -49,6 +49,16 @@ impl Cache {
         self.checkout_with_policy(source, revision, false)
     }
 
+    pub fn cached_content(&self, identity: &str, revision: &str) -> Option<PathBuf> {
+        let shard = self
+            .root
+            .join("git")
+            .join(source_hash(identity))
+            .join(revision);
+        (shard.join(".complete").is_file() && shard.join("content").is_dir())
+            .then(|| shard.join("content"))
+    }
+
     pub fn checkout_with_policy(
         &self,
         source: &GitSource,

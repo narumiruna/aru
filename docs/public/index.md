@@ -68,6 +68,14 @@ Aru separates the configuration your team maintains from the exact state every m
 
     [Manage packages](packages.md)
 
+-   :material-connection:{ .lg .middle } **Plugin dependencies**
+
+    ---
+
+    Resolve selected portable skills and safe MCP from Agent Plugins, OpenAI plugins, and Gemini extensions.
+
+    [Manage plugins](plugins.md)
+
 </div>
 
 ## Built to fail closed

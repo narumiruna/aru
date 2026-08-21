@@ -698,6 +698,11 @@ pub fn garbage_collect(project: &Path, lock: &Lockfile) -> Result<()> {
                 .iter()
                 .map(|package| (package.source.clone(), package.revision.clone())),
         )
+        .chain(
+            lock.plugin_packages
+                .iter()
+                .map(|package| (package.source.clone(), package.revision.clone())),
+        )
         .collect::<Vec<_>>();
     Cache::project(project).garbage_collect(&referenced)
 }

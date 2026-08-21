@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
-use crate::manifest::Target;
+use crate::manifest::{PluginComponent, PluginFormat, Target};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum ColorChoice {
@@ -146,6 +146,127 @@ pub enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Manage plugin dependencies.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PluginCommand {
+    /// Inspect a locked plugin name or an available plugin source.
+    Info(PluginInfoArgs),
+    /// Add a plugin dependency and project its selected capabilities.
+    Add(PluginAddArgs),
+    /// List configured plugins.
+    List,
+    /// Update all or selected plugin dependencies.
+    Update(PluginUpdateArgs),
+    /// Remove a complete plugin declaration.
+    Remove(PluginRemoveArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
+pub struct PluginInfoArgs {
+    /// Locked plugin name, Git source, local Git repository, or plain local directory.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+    /// Select the source format instead of auto-detecting it.
+    #[arg(long, value_name = "FORMAT")]
+    pub format: Option<PluginFormat>,
+    /// Repository-relative plugin root.
+    #[arg(long, value_name = "PATH")]
+    pub subdir: Option<String>,
+    /// Cargo-style SemVer tag requirement.
+    #[arg(long, help_heading = "Source Options")]
+    pub version: Option<String>,
+    /// Moving Git branch to inspect.
+    #[arg(long, value_name = "NAME", help_heading = "Source Options")]
+    pub branch: Option<String>,
+    /// Exact Git commit.
+    #[arg(long, help_heading = "Source Options")]
+    pub rev: Option<String>,
+}
+
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
+pub struct PluginAddArgs {
+    /// GitHub owner/repo, Git URL, SSH source, or local Git repository.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+    /// Select the source format instead of auto-detecting it.
+    #[arg(long, value_name = "FORMAT")]
+    pub format: Option<PluginFormat>,
+    /// Repository-relative plugin root.
+    #[arg(long, value_name = "PATH")]
+    pub subdir: Option<String>,
+    /// Cargo-style SemVer tag requirement.
+    #[arg(long, help_heading = "Source Options")]
+    pub version: Option<String>,
+    /// Moving Git branch to resolve and pin.
+    #[arg(long, value_name = "NAME", help_heading = "Source Options")]
+    pub branch: Option<String>,
+    /// Exact Git commit.
+    #[arg(long, help_heading = "Source Options")]
+    pub rev: Option<String>,
+    /// Select every export of this component; may be repeated.
+    #[arg(long = "component", value_name = "COMPONENT", action = ArgAction::Append, help_heading = "Selection Options")]
+    pub components: Vec<PluginComponent>,
+    /// Select one skill by name; may be repeated.
+    #[arg(long = "skill", value_name = "NAME", action = ArgAction::Append, help_heading = "Selection Options")]
+    pub skills: Vec<String>,
+    /// Select one MCP server by name; may be repeated.
+    #[arg(long = "mcp", value_name = "NAME", action = ArgAction::Append, help_heading = "Selection Options")]
+    pub mcp: Vec<String>,
+    /// Configured target that should receive selected resources; may be repeated.
+    #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Selection Options")]
+    pub targets: Vec<Target>,
+    /// Explicitly trust a selected plugin MCP name; may be repeated.
+    #[arg(long = "trust-mcp", value_name = "NAME", action = ArgAction::Append, help_heading = "Trust Options")]
+    pub trust_mcp: Vec<String>,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or persistent cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long, help_heading = "Apply Options")]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginUpdateArgs {
+    /// Configured plugin name; omit to update all.
+    #[arg(value_name = "NAME")]
+    pub names: Vec<String>,
+    /// Select one exact SemVer version compatible with the declaration.
+    #[arg(long, value_name = "VERSION")]
+    pub precise: Option<String>,
+    /// Update lock intent but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or persistent cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
+    /// Destructively take over colliding unmanaged entries.
+    #[arg(long, help_heading = "Apply Options")]
+    pub force: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginRemoveArgs {
+    /// Configured plugin name.
+    #[arg(value_name = "NAME")]
+    pub name: String,
+    /// Update manifest and lock but skip target project paths.
+    #[arg(long, help_heading = "Apply Options")]
+    pub no_sync: bool,
+    /// Resolve and print the plan without writing any file or persistent cache.
+    #[arg(short = 'n', long, help_heading = "Apply Options")]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -173,7 +294,7 @@ pub struct InfoArgs {
 
 #[derive(Debug, Args)]
 pub struct MetadataArgs {
-    /// Machine contract version (currently 1).
+    /// Machine contract version (1 or 2).
     #[arg(long, value_name = "VERSION")]
     pub format_version: u32,
     /// Include only direct package dependencies.

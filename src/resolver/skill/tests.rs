@@ -57,6 +57,8 @@ fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
         mcp: BTreeMap::new(),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let empty_hints = BTreeMap::new();
     let initial = resolve(
@@ -178,6 +180,8 @@ fn branch_inspection_reuses_lock_update_moves_and_hint_pins_head() {
         mcp: BTreeMap::new(),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     let empty_hints = BTreeMap::new();
     let first = resolve(

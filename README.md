@@ -20,6 +20,7 @@ Aru lets you declare that setup once:
 - Install Agent Skills from Git repositories.
 - Configure MCP servers without storing secret values.
 - Reuse native aru packages that bundle instructions, skills, and trusted MCP declarations.
+- Resolve selected skills and safe MCP from Agent Plugins, OpenAI plugins, and Gemini extensions.
 - Pin exact revisions and projections in `aru.lock`.
 - Detect drift and unmanaged content before replacing anything.
 
@@ -287,6 +288,25 @@ Package-provided MCP servers are denied by default and require an explicit trust
 
 See the [native packages guide](https://narumiruna.github.io/aru/packages/) for package authoring, trust, and dependency behavior.
 
+### Manage plugin dependencies
+
+Inspect and import portable plugin resources without installing or executing plugin code:
+
+```console
+aru plugin info owner/review-tools
+aru plugin add owner/review-tools --component skills
+aru plugin add owner/review-tools --mcp docs --trust-mcp docs
+aru plugin update --dry-run
+aru plugin list
+aru plugin remove review-tools
+```
+
+Whole-plugin intent fails when active native capabilities cannot be represented safely.
+
+Explicit `--component`, `--skill`, and `--mcp` selectors authorize a compatible subset.
+
+See the [plugin dependencies guide](https://narumiruna.github.io/aru/plugins/) for detection, safe MCP limits, trust, and lock behavior.
+
 ### Change project targets
 
 ```console
@@ -355,7 +375,9 @@ aru sync --check
 aru audit
 aru tree
 aru info PACKAGE
+aru plugin info SOURCE
 aru metadata --format-version 1
+aru metadata --format-version 2
 ```
 
 Run `aru COMMAND --help` for command-specific options.

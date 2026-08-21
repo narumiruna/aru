@@ -5,6 +5,7 @@ mod instruction;
 mod mcp;
 mod package_archive;
 mod package_dependency;
+mod plugin;
 mod self_update;
 mod shell_completion;
 mod skill;
@@ -15,8 +16,9 @@ use std::path::{Path, PathBuf};
 use clap::Parser;
 
 use crate::cli::{
-    Cli, Command, InstructionCommand, LockArgs, McpCommand, SelfCommand, SkillCommand, SyncArgs,
-    TargetAddArgs, TargetCommand, TargetListArgs, TargetRemoveArgs, TargetSetArgs,
+    Cli, Command, InstructionCommand, LockArgs, McpCommand, PluginCommand, SelfCommand,
+    SkillCommand, SyncArgs, TargetAddArgs, TargetCommand, TargetListArgs, TargetRemoveArgs,
+    TargetSetArgs,
 };
 use crate::error::{AruError, IoContext, Result};
 use crate::lockfile::Lockfile;
@@ -163,6 +165,16 @@ pub fn run() -> Result<()> {
                 McpCommand::List => mcp::list(&project),
             }
         }
+        Command::Plugin { command } => {
+            let project = discover_project(project_option)?;
+            match command {
+                PluginCommand::Info(args) => plugin::info(&project, args, policy),
+                PluginCommand::Add(args) => plugin::add(&project, args, policy),
+                PluginCommand::List => plugin::list(&project),
+                PluginCommand::Update(args) => plugin::update(&project, args, policy),
+                PluginCommand::Remove(args) => plugin::remove(&project, args, policy),
+            }
+        }
     }
 }
 
@@ -259,6 +271,16 @@ fn check_execution(
     output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
+    if previous.as_ref().is_some_and(|lock| lock.version == 3) {
+        let command = if project_projections {
+            "aru sync"
+        } else {
+            "aru lock"
+        };
+        return Err(AruError::msg(format!(
+            "aru.lock v3 requires upgrade; run `{command}` without --check, --locked, or --frozen"
+        )));
+    }
     let request = if project_projections {
         ReconcileRequest::check_project()
     } else {
@@ -454,6 +476,11 @@ fn execute(
     output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
+    if request.locked() && previous.as_ref().is_some_and(|lock| lock.version == 3) {
+        return Err(AruError::msg(
+            "aru.lock v3 requires upgrade; run `aru lock` or `aru sync` without --locked or --frozen",
+        ));
+    }
     let dry_run = request.dry_run();
     let project_projections = request.projects();
     let deferred = !project_projections && request.changes_intent();
@@ -490,6 +517,11 @@ fn execute_target_change(
     output: Output,
 ) -> Result<()> {
     let previous = Lockfile::load_optional(project)?;
+    if request.locked() && previous.as_ref().is_some_and(|lock| lock.version == 3) {
+        return Err(AruError::msg(
+            "aru.lock v3 requires upgrade; run `aru lock` or `aru sync` without --locked or --frozen",
+        ));
+    }
     let dry_run = request.dry_run();
     let project_projections = request.projects();
     let mut prepared = prepare_request(project, manifest, previous.as_ref(), request)?;

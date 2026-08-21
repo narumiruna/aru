@@ -557,6 +557,8 @@ fn package_instructions(
         mcp: BTreeMap::new(),
         packages: BTreeMap::new(),
         package_trust: BTreeMap::new(),
+        plugins: BTreeMap::new(),
+        plugin_trust: BTreeMap::new(),
     };
     synthetic.validate()?;
     let mut discovered = crate::instruction::discovery::discover(&node.checkout, &synthetic)?;
@@ -586,6 +588,7 @@ fn locked_skill(skill: &DiscoveredSkill) -> LockedSkill {
         name: skill.name.clone(),
         path: skill.relative_path.clone(),
         sha256: skill.sha256.clone(),
+        origin: None,
     }
 }
 

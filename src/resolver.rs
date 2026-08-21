@@ -68,8 +68,14 @@ pub fn resolve(
             "no configured target supports MCP projections",
         ));
     }
-    let package_input_hash =
-        package_input_hash(manifest, skill_sources.as_map(), &package_sources)?;
+    let legacy_v3 = options.locked && options.previous.is_some_and(|lock| lock.version == 3);
+    let package_input_hash = package_input_hash_at(
+        project,
+        manifest,
+        skill_sources.as_map(),
+        &package_sources,
+        legacy_v3,
+    )?;
     let locked = if options.locked {
         let lock = options
             .previous
@@ -101,6 +107,18 @@ pub fn resolve(
             precise: options.precise_packages,
         },
     )?;
+    let plugin_resolution = crate::plugin::resolver::resolve(
+        project,
+        manifest,
+        &cache,
+        crate::plugin::resolver::ResolveOptions {
+            previous: options.previous,
+            locked: options.locked,
+            offline: options.offline,
+            updates: options.update_packages,
+            precise: options.precise_packages,
+        },
+    )?;
     instructions.extend(package_resolution.instructions.clone());
     instructions.sort_by(|left, right| left.unit.source.cmp(&right.unit.source));
     let mut combined_mcp = manifest.mcp.clone();
@@ -114,13 +132,27 @@ pub fn resolve(
             )));
         }
     }
+    for (name, requirement) in &plugin_resolution.mcp {
+        if combined_mcp
+            .insert(name.clone(), requirement.clone())
+            .is_some()
+        {
+            return Err(AruError::msg(format!(
+                "MCP name {name:?} is provided by a plugin and another source"
+            )));
+        }
+    }
 
     if let Some(lock) = locked {
         instruction::lock::validate_locked_sources(&lock.instruction_sources, &instructions)?;
-        for expected in &package_resolution.skill_packages {
+        for expected in package_resolution
+            .skill_packages
+            .iter()
+            .chain(plugin_resolution.skill_packages.iter())
+        {
             if !lock.skill_packages.contains(expected) {
                 return Err(AruError::msg(
-                    "aru.lock is stale for an aru package skill export",
+                    "aru.lock is stale for a package or plugin skill export",
                 ));
             }
         }
@@ -137,7 +169,11 @@ pub fn resolve(
             options.materialize_skills,
             options.offline,
         )?;
-        for (name, path) in package_resolution.skill_sources {
+        for (name, path) in package_resolution
+            .skill_sources
+            .into_iter()
+            .chain(plugin_resolution.skill_sources)
+        {
             if materialized_skills.insert(name.clone(), path).is_some() {
                 return Err(AruError::msg(format!(
                     "resolved skill name {name:?} is provided more than once"
@@ -164,8 +200,16 @@ pub fn resolve(
         },
     )?;
     let mut skill_packages = package_resolution.skill_packages;
+    skill_packages.extend(plugin_resolution.skill_packages);
     skill_packages.extend(direct_skills.packages);
     let mut materialized_skills = package_resolution.skill_sources;
+    for (name, path) in plugin_resolution.skill_sources {
+        if materialized_skills.insert(name.clone(), path).is_some() {
+            return Err(AruError::msg(format!(
+                "resolved skill name {name:?} is provided by more than one package or plugin"
+            )));
+        }
+    }
     for (name, path) in direct_skills.sources {
         if materialized_skills.insert(name.clone(), path).is_some() {
             return Err(AruError::msg(format!(
@@ -185,7 +229,7 @@ pub fn resolve(
         let reusable = old.filter(|server| {
             !options.update_mcp.contains(name) && server.requirement == descriptor
         });
-        let server = if let Some(old) = reusable {
+        let mut server = if let Some(old) = reusable {
             rebuild_mcp_targets(old, requirement, &targets)?
         } else {
             resolve_mcp(
@@ -197,17 +241,19 @@ pub fn resolve(
                 options.offline,
             )?
         };
+        server.origin = plugin_resolution.mcp_origins.get(name).cloned();
         mcp_servers.push(server);
     }
 
     let mut lock = Lockfile {
-        version: 3,
+        version: 4,
         package_input_hash,
         projection_input_hash: String::new(),
         instruction_sources: instruction::lock::locked_sources(&instructions),
         aru_packages: package_resolution.packages,
         skill_packages,
         mcp_servers,
+        plugin_packages: plugin_resolution.packages,
         projection_baselines: Vec::new(),
     };
     lock.normalize();
@@ -253,6 +299,8 @@ struct PackageInputs {
     packages: Vec<PackageInput>,
     skills: Vec<SkillInput>,
     mcp: BTreeMap<String, McpRequirement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_input: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -267,10 +315,12 @@ struct SkillInput {
     requirement: SkillRequirement,
 }
 
-fn package_input_hash(
+fn package_input_hash_at(
+    project: &Path,
     manifest: &Manifest,
     sources: &BTreeMap<String, GitSource>,
     package_sources: &BTreeMap<String, GitSource>,
+    legacy_v3: bool,
 ) -> Result<String> {
     let mut packages = manifest
         .packages
@@ -319,7 +369,21 @@ fn package_input_hash(
         packages,
         skills,
         mcp,
+        plugin_input: if legacy_v3 {
+            None
+        } else {
+            Some(crate::plugin::resolver::input_digest(project, manifest)?)
+        },
     })
+}
+
+#[cfg(test)]
+fn package_input_hash(
+    manifest: &Manifest,
+    sources: &BTreeMap<String, GitSource>,
+    package_sources: &BTreeMap<String, GitSource>,
+) -> Result<String> {
+    package_input_hash_at(Path::new("."), manifest, sources, package_sources, false)
 }
 
 fn normalized_mcp(requirement: &McpRequirement) -> McpRequirement {
@@ -426,6 +490,7 @@ fn resolve_mcp(
         targets_from_candidate(targets, &candidate, requirement.bearer_token_env.as_ref())?;
     Ok(McpServer {
         name: name.into(),
+        origin: None,
         registry,
         server_id,
         requirement: descriptor.into(),
@@ -548,7 +613,11 @@ fn projection_input_hash(lock: &Lockfile, targets: &[Target]) -> Result<String> 
     canonical_json_digest(&ProjectionInput {
         lock_identity: package_lock.lock_identity_digest()?,
         targets,
-        capability_schema: ADAPTER_CAPABILITY_SCHEMA,
+        capability_schema: if lock.version == 3 {
+            7
+        } else {
+            ADAPTER_CAPABILITY_SCHEMA
+        },
     })
 }
 

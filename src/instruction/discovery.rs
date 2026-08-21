@@ -395,6 +395,8 @@ mod tests {
             mcp: BTreeMap::new(),
             packages: BTreeMap::new(),
             package_trust: BTreeMap::new(),
+            plugins: BTreeMap::new(),
+            plugin_trust: BTreeMap::new(),
         }
     }
 
@@ -473,6 +475,8 @@ mod tests {
             mcp: BTreeMap::new(),
             packages: BTreeMap::new(),
             package_trust: BTreeMap::new(),
+            plugins: BTreeMap::new(),
+            plugin_trust: BTreeMap::new(),
         };
         assert!(
             discover(project.path(), &copilot_only)
@@ -618,6 +622,8 @@ mod tests {
             mcp: BTreeMap::new(),
             packages: BTreeMap::new(),
             package_trust: BTreeMap::new(),
+            plugins: BTreeMap::new(),
+            plugin_trust: BTreeMap::new(),
         };
         let mut unrelated = project.path().join("unrelated");
         for index in 0..=MAX_DEPTH {

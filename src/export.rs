@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::digest::canonical_json_digest;
 use crate::error::{AruError, Result};
-use crate::lockfile::{AruPackage, Lockfile, McpServer, SkillPackage};
+use crate::lockfile::{AruPackage, Lockfile, McpServer, PluginPackage, SkillPackage};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,6 +85,7 @@ pub fn cyclonedx_1_5(lock: &Lockfile, timestamp: Option<&str>) -> Result<Vec<u8>
     let mut skill_refs = std::collections::BTreeMap::new();
     let mut mcp_refs = std::collections::BTreeMap::new();
     let mut package_refs = std::collections::BTreeMap::new();
+    let mut plugin_refs = std::collections::BTreeMap::new();
     for source in &lock.instruction_sources {
         let bom_ref = reference(
             "instruction",
@@ -133,6 +134,11 @@ pub fn cyclonedx_1_5(lock: &Lockfile, timestamp: Option<&str>) -> Result<Vec<u8>
         package_refs.insert(package.source.clone(), component.bom_ref.clone());
         components.push(component);
     }
+    for plugin in &lock.plugin_packages {
+        let component = plugin_component(plugin)?;
+        plugin_refs.insert(plugin.name.clone(), component.bom_ref.clone());
+        components.push(component);
+    }
     components.sort_by(|left, right| left.bom_ref.cmp(&right.bom_ref));
     let root_depends_on = components
         .iter()
@@ -165,6 +171,32 @@ pub fn cyclonedx_1_5(lock: &Lockfile, timestamp: Option<&str>) -> Result<Vec<u8>
         depends_on.dedup();
         dependencies.push(Dependency {
             reference: package_refs[&package.source].clone(),
+            depends_on,
+        });
+    }
+    for plugin in &lock.plugin_packages {
+        let mut depends_on =
+            lock.skill_packages
+                .iter()
+                .filter(|package| {
+                    package.skills.iter().any(|skill| {
+                        skill.origin.as_ref().is_some_and(|origin| {
+                            origin.kind == "plugin" && origin.name == plugin.name
+                        })
+                    })
+                })
+                .filter_map(|package| skill_refs.get(&package.source).cloned())
+                .chain(
+                    plugin
+                        .mcp
+                        .iter()
+                        .filter_map(|name| mcp_refs.get(name).cloned()),
+                )
+                .collect::<Vec<_>>();
+        depends_on.sort();
+        depends_on.dedup();
+        dependencies.push(Dependency {
+            reference: plugin_refs[&plugin.name].clone(),
             depends_on,
         });
     }
@@ -236,6 +268,72 @@ fn aru_package_component(package: &AruPackage) -> Result<Component> {
     })
 }
 
+fn plugin_component(plugin: &PluginPackage) -> Result<Component> {
+    let bom_ref = reference(
+        "plugin-package",
+        &(
+            plugin.name.as_str(),
+            plugin.source.as_str(),
+            plugin.revision.as_str(),
+            plugin.format,
+        ),
+    )?;
+    Ok(Component {
+        component_type: "library",
+        bom_ref,
+        name: plugin.name.clone(),
+        version: plugin
+            .declared_version
+            .clone()
+            .or_else(|| Some(plugin.version.clone())),
+        hashes: vec![hash(&plugin.tree_sha256)],
+        external_references: vec![ExternalReference {
+            reference_type: "vcs",
+            url: scrub_url(&plugin.source, "plugin source URL")?,
+        }],
+        properties: sorted_properties([
+            ("aru:kind", "plugin-package".into()),
+            ("aru:plugin-format", plugin.format.to_string()),
+            (
+                "aru:compatibility",
+                plugin
+                    .unsupported
+                    .iter()
+                    .chain(plugin.diagnostics.iter())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            ("aru:revision", plugin.revision.clone()),
+            ("aru:requirement", plugin.requirement.clone()),
+            (
+                "aru:manifests",
+                plugin
+                    .manifests
+                    .iter()
+                    .map(|manifest| format!("{}={}", manifest.path, manifest.sha256))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            (
+                "aru:selection",
+                serde_json::to_string(&plugin.selection).map_err(|error| {
+                    AruError::msg(format!("could not export plugin selection: {error}"))
+                })?,
+            ),
+            (
+                "aru:targets",
+                plugin
+                    .targets
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+        ]),
+    })
+}
+
 fn skill_component(package: &SkillPackage) -> Result<Component> {
     let bom_ref = reference(
         "skill-package",
@@ -245,7 +343,13 @@ fn skill_component(package: &SkillPackage) -> Result<Component> {
             package.revision.as_str(),
         ),
     )?;
-    let source = scrub_url(&package.source, "skill source URL")?;
+    let source = package
+        .skills
+        .first()
+        .and_then(|skill| skill.origin.as_ref())
+        .map(|origin| origin.source.as_str())
+        .unwrap_or(&package.source);
+    let source = scrub_url(source, "skill source URL")?;
     Ok(Component {
         component_type: "library",
         bom_ref,

@@ -267,12 +267,17 @@ fn metadata_requires_a_version_is_credential_free_and_supports_no_deps() {
         .failure()
         .stderr(predicate::str::contains("--format-version"));
     aru(project)
-        .args(["metadata", "--format-version", "2"])
+        .args(["metadata", "--format-version", "3"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
             "unsupported metadata format version",
         ));
+    aru(project)
+        .args(["metadata", "--format-version", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"plugins\": []"));
 
     let full = aru(project)
         .args(["metadata", "--format-version", "1"])
