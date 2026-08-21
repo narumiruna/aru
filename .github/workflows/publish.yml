@@ -263,10 +263,17 @@ jobs:
       - name: Verify existing PyPI artifacts
         run: scripts/check-pypi-artifacts.sh prepublish dist "$VERSION" "$RUNNER_TEMP/pypi-release.json" > /dev/null
 
+      - name: Stage distributions for publishing
+        run: |
+          mkdir publish-dist
+          while IFS=$'\t' read -r _digest _size filename; do
+            cp -- "dist/$filename" "publish-dist/$filename"
+          done < "$RUNNER_TEMP/pypi-artifacts.tsv"
+
       - name: Publish distributions with Trusted Publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
-          packages-dir: dist/
+          packages-dir: publish-dist/
           skip-existing: true
 
       - name: Verify published PyPI artifacts
