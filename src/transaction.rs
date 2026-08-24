@@ -9,6 +9,10 @@ use walkdir::WalkDir;
 
 use crate::error::{AruError, IoContext, Result};
 
+mod standalone;
+
+pub use standalone::apply_standalone;
+
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
 
 #[derive(Debug)]
@@ -118,13 +122,16 @@ impl ProjectLock {
 }
 
 pub fn recover_if_needed(project: &Path) -> Result<bool> {
-    let path = project.join(JOURNAL_FILE);
+    recover_if_needed_at(project, &project.join(JOURNAL_FILE))
+}
+
+fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    let text = std::fs::read_to_string(&path).at(&path)?;
+    let text = std::fs::read_to_string(path).at(path)?;
     let mut journal: Journal = toml::from_str(&text).map_err(|source| AruError::Toml {
-        path: path.clone(),
+        path: path.to_path_buf(),
         source,
     })?;
     if journal.version != 1 {
@@ -143,20 +150,25 @@ pub fn recover_if_needed(project: &Path) -> Result<bool> {
             }
         }
     } else {
-        rollback(project, &mut journal)?;
+        rollback(project, path, &mut journal)?;
     }
     cleanup_journal_artifacts(project, &journal)?;
-    std::fs::remove_file(&path).at(&path)?;
-    sync_parent(&path)?;
+    std::fs::remove_file(path).at(path)?;
+    sync_parent(path)?;
     Ok(true)
 }
 
-pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
+pub fn apply(project: &Path, operations: Vec<Operation>) -> Result<()> {
+    apply_at(project, operations, &project.join(JOURNAL_FILE))
+}
+
+fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
     }
-    let aru_directory = project.join(".aru");
-    std::fs::create_dir_all(&aru_directory).at(&aru_directory)?;
+    if let Some(parent) = journal_path.parent() {
+        std::fs::create_dir_all(parent).at(parent)?;
+    }
     operations.sort_by(|left, right| left.destination.cmp(&right.destination));
     for pair in operations.windows(2) {
         if pair[0].destination == pair[1].destination {
@@ -165,6 +177,10 @@ pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
                 pair[0].destination.display()
             )));
         }
+    }
+    for operation in &operations {
+        validate_destination(project, &operation.destination)?;
+        validate_ancestors(project, &operation.destination)?;
     }
 
     let transaction_id = unique_suffix();
@@ -221,16 +237,16 @@ pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
         cleanup_paths(&staged_paths);
         return Err(error);
     }
-    if let Err(error) = write_journal(project, &journal) {
-        if project.join(JOURNAL_FILE).exists() {
-            return recover_after_error(project, error);
+    if let Err(error) = write_journal(journal_path, &journal) {
+        if journal_path.exists() {
+            return recover_after_error(project, journal_path, error);
         }
         cleanup_paths(&staged_paths);
         return Err(error);
     }
     journal.phase = "applying".into();
-    if let Err(error) = write_journal(project, &journal) {
-        return recover_after_error(project, error);
+    if let Err(error) = write_journal(journal_path, &journal) {
+        return recover_after_error(project, journal_path, error);
     }
 
     for index in 0..journal.entries.len() {
@@ -253,10 +269,10 @@ pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
                 sync_parent(&destination)?;
             }
             journal.entries[index].applied = true;
-            write_journal(project, &journal)
+            write_journal(journal_path, &journal)
         })();
         if let Err(error) = step {
-            return recover_after_error(project, error);
+            return recover_after_error(project, journal_path, error);
         }
         if failure_phase("ARU_TEST_CRASH_AFTER") == Some(index + 1) {
             return Err(AruError::msg(format!(
@@ -267,6 +283,7 @@ pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
         if failure_phase("ARU_TEST_FAIL_AFTER") == Some(index + 1) {
             return recover_after_error(
                 project,
+                journal_path,
                 AruError::msg(format!(
                     "simulated apply failure after transaction phase {}",
                     index + 1
@@ -276,18 +293,17 @@ pub fn apply(project: &Path, mut operations: Vec<Operation>) -> Result<()> {
     }
 
     journal.phase = "committed".into();
-    if let Err(error) = write_journal(project, &journal) {
-        return recover_after_error(project, error);
+    if let Err(error) = write_journal(journal_path, &journal) {
+        return recover_after_error(project, journal_path, error);
     }
     cleanup_journal_artifacts(project, &journal)?;
-    let journal_path = project.join(JOURNAL_FILE);
-    std::fs::remove_file(&journal_path).at(&journal_path)?;
-    sync_parent(&journal_path)?;
+    std::fs::remove_file(journal_path).at(journal_path)?;
+    sync_parent(journal_path)?;
     Ok(())
 }
 
-fn recover_after_error(project: &Path, original: AruError) -> Result<()> {
-    match recover_if_needed(project) {
+fn recover_after_error(project: &Path, journal_path: &Path, original: AruError) -> Result<()> {
+    match recover_if_needed_at(project, journal_path) {
         Ok(_) => Err(original),
         Err(recovery) => Err(AruError::msg(format!(
             "{original}; rollback also failed: {recovery}"
@@ -303,7 +319,7 @@ fn cleanup_paths(paths: &[PathBuf]) {
     }
 }
 
-fn rollback(project: &Path, journal: &mut Journal) -> Result<()> {
+fn rollback(project: &Path, journal_path: &Path, journal: &mut Journal) -> Result<()> {
     for index in (0..journal.entries.len()).rev() {
         let destination_text = journal.entries[index].destination.clone();
         let old_digest = journal.entries[index].old_digest.clone();
@@ -327,7 +343,7 @@ fn rollback(project: &Path, journal: &mut Journal) -> Result<()> {
         }
         if current_is_old && backup_digest.is_none() {
             journal.entries[index].applied = false;
-            write_journal(project, journal)?;
+            write_journal(journal_path, journal)?;
             continue;
         }
         if let Some(expected_old) = &old_digest {
@@ -356,7 +372,7 @@ fn rollback(project: &Path, journal: &mut Journal) -> Result<()> {
         }
         sync_parent(&destination)?;
         journal.entries[index].applied = false;
-        write_journal(project, journal)?;
+        write_journal(journal_path, journal)?;
     }
     Ok(())
 }
@@ -568,8 +584,7 @@ fn hash_file(hasher: &mut Sha256, path: &Path, metadata: &std::fs::Metadata) -> 
     Ok(())
 }
 
-fn write_journal(project: &Path, journal: &Journal) -> Result<()> {
-    let path = project.join(JOURNAL_FILE);
+fn write_journal(path: &Path, journal: &Journal) -> Result<()> {
     let temporary = path.with_extension("toml.tmp");
     let body = toml::to_string_pretty(journal)
         .map_err(|error| AruError::msg(format!("could not serialize journal: {error}")))?;
@@ -578,8 +593,8 @@ fn write_journal(project: &Path, journal: &Journal) -> Result<()> {
         file.write_all(body.as_bytes()).at(&temporary)?;
         file.sync_all().at(&temporary)?;
     }
-    std::fs::rename(&temporary, &path).at(&path)?;
-    sync_parent(&path)
+    std::fs::rename(&temporary, path).at(path)?;
+    sync_parent(path)
 }
 
 fn cleanup_journal_artifacts(project: &Path, journal: &Journal) -> Result<()> {
@@ -854,6 +869,29 @@ mod tests {
     }
 
     #[test]
+    fn standalone_transaction_recovers_without_project_state() {
+        let project = tempfile::tempdir().unwrap();
+        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
+        let crashed = apply_standalone(
+            project.path(),
+            vec![Operation::file("a", b"new".to_vec())],
+            true,
+        );
+        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
+        assert!(crashed.is_err());
+
+        apply_standalone(
+            project.path(),
+            vec![Operation::file("a", b"new".to_vec())],
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"new");
+        assert!(!project.path().join(".aru").exists());
+        assert!(!project.path().join(JOURNAL_FILE).exists());
+    }
+
+    #[test]
     fn recovery_stops_on_unknown_manual_content() {
         let project = tempfile::tempdir().unwrap();
         std::fs::write(project.path().join("a"), "old").unwrap();
@@ -884,7 +922,7 @@ mod tests {
                 applied: true,
             }],
         };
-        write_journal(project.path(), &journal).unwrap();
+        write_journal(&project.path().join(JOURNAL_FILE), &journal).unwrap();
         assert!(recover_if_needed(project.path()).unwrap());
         assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"new");
         assert!(!project.path().join(".backup").exists());
@@ -910,7 +948,7 @@ mod tests {
                 applied: false,
             }],
         };
-        write_journal(project.path(), &journal).unwrap();
+        write_journal(&project.path().join(JOURNAL_FILE), &journal).unwrap();
         assert!(recover_if_needed(project.path()).unwrap());
         assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"old");
     }

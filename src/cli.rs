@@ -613,7 +613,7 @@ pub struct SkillAddArgs {
     /// Exact Git commit (7-40 hexadecimal characters).
     #[arg(long, help_heading = "Source Options")]
     pub rev: Option<String>,
-    /// Configured target that should receive this dependency; may be repeated.
+    /// Target that should receive this dependency; may be repeated.
     #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Selection Options")]
     pub targets: Vec<Target>,
     /// Resolve the latest compatible tag or branch head instead of reusing the lock.

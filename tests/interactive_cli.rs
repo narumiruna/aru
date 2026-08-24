@@ -61,6 +61,59 @@ fn interactive_add(
     session
 }
 
+fn standalone_interactive_add(project: &Path, repository: &Path) -> expectrl::session::OsSession {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
+    command
+        .current_dir(project)
+        .args(["skill", "add", repository.to_str().unwrap()]);
+    let mut session = Session::spawn(command).unwrap();
+    session.set_expect_timeout(Some(Duration::from_secs(20)));
+    session
+}
+
+#[test]
+fn standalone_target_and_skill_multiselect_install_checked_combination() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+
+    let mut session = standalone_interactive_add(&project, &repository);
+    session.expect("Select targets to install to").unwrap();
+    session.send("codex").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session.expect("Select skills to install").unwrap();
+    session.send("beta").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert!(!project.join(".agents/skills/alpha").exists());
+    assert!(project.join(".agents/skills/beta/SKILL.md").is_file());
+    assert!(!project.join("aru.toml").exists());
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn standalone_target_cancel_writes_nothing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha"]);
+
+    let mut session = standalone_interactive_add(&project, &repository);
+    session.expect("Select targets to install to").unwrap();
+    session.send(ControlCode::ESC).unwrap();
+    session.expect("Target selection canceled").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+}
+
 #[test]
 #[ignore = "requires public Git network"]
 fn public_interactive_git_select_and_cancel_smoke() {

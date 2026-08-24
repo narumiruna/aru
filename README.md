@@ -228,15 +228,20 @@ For custom paths, globs, and target-specific rules, see the [instructions guide]
 aru skill list
 aru skill add owner/repository --skill review
 aru skill add owner/repository --all
+aru skill add --target codex owner/repository --all # works without aru init
 aru skill update --dry-run
 aru skill update
 aru skill remove owner/repository --skill review
 aru skill remove owner/repository
 ```
 
-A bare `skill add` opens an interactive selector.
+In an initialized project, a bare `skill add` opens an interactive skill selector and uses the configured project targets.
 
-Non-interactive environments must use `--skill`, `--all`, or `--path`.
+Without an `aru.toml` in the current directory or an ancestor, `skill add` performs a one-time installation.
+Pass `--target` explicitly or choose one or more targets from the interactive menu.
+Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
+
+Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.
 
 Aru discovers skills from `SKILL.md` files at the repository root or in nested directories within its discovery limits.
 

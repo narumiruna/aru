@@ -27,7 +27,7 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | `aru instruction add <file>...` | Add exact project-relative `AGENTS.md` sources |
 | `aru instruction list` | List declared instruction selectors |
 | `aru instruction remove <file>` | Remove exact instruction selectors |
-| `aru skill add <source>` | Add selected Agent Skills |
+| `aru skill add <source>` | Add managed skills or install them once without initialization |
 | `aru skill list` | List locked skill sources |
 | `aru skill update [source]` | Update all or selected skills |
 | `aru skill remove <source>` | Remove selected skills or a source |

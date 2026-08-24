@@ -6,6 +6,7 @@ use inquire::list_option::ListOption;
 use inquire::validator::Validation;
 
 use crate::error::{AruError, Result};
+use crate::manifest::Target;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillAddSelectionMode {
@@ -52,6 +53,98 @@ pub fn terminal_selection_mode(
 
 pub trait SkillChooser {
     fn choose(&mut self, names: &[String], defaults: &[usize]) -> Result<Option<Vec<String>>>;
+}
+
+pub trait TargetChooser {
+    fn choose(&mut self, targets: &[Target]) -> Result<Option<Vec<Target>>>;
+}
+
+pub struct InquireTargetChooser;
+
+#[derive(Clone)]
+struct TargetOption {
+    target: Target,
+    label: String,
+}
+
+impl std::fmt::Display for TargetOption {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+impl TargetChooser for InquireTargetChooser {
+    fn choose(&mut self, targets: &[Target]) -> Result<Option<Vec<Target>>> {
+        let options = targets
+            .iter()
+            .map(|target| TargetOption {
+                target: *target,
+                label: format!(
+                    "{} ({})",
+                    target,
+                    crate::target::spec(*target).project_skills
+                ),
+            })
+            .collect::<Vec<_>>();
+        MultiSelect::new("Select targets to install to", options)
+            .with_page_size(targets.len().clamp(1, 12))
+            .with_help_message(
+                "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel",
+            )
+            .with_validator(|selection: &[ListOption<&TargetOption>]| {
+                Ok(if selection.is_empty() {
+                    Validation::Invalid("select at least one target".into())
+                } else {
+                    Validation::Valid
+                })
+            })
+            .prompt_skippable()
+            .map(|selected| {
+                selected.map(|options| options.into_iter().map(|option| option.target).collect())
+            })
+            .map_err(map_prompt_error)
+    }
+}
+
+pub fn terminal_choose_targets(chooser: &mut dyn TargetChooser) -> Result<Option<Vec<Target>>> {
+    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+        return Err(AruError::msg(
+            "interactive target selection requires a terminal; pass --target",
+        ));
+    }
+    let mut targets = crate::target::specs()
+        .iter()
+        .filter(|spec| spec.capabilities.skills)
+        .map(|spec| spec.target)
+        .collect::<Vec<_>>();
+    targets.sort_by_key(|target| crate::target::spec(*target).name);
+    choose_targets(chooser, &targets)
+}
+
+pub fn choose_targets(
+    chooser: &mut dyn TargetChooser,
+    available: &[Target],
+) -> Result<Option<Vec<Target>>> {
+    let mut options = available.to_vec();
+    options.sort_by_key(|target| crate::target::spec(*target).name);
+    options.dedup();
+    if options.is_empty() {
+        return Err(AruError::msg("no targets support Agent Skills"));
+    }
+    let Some(mut selected) = chooser.choose(&options)? else {
+        return Ok(None);
+    };
+    selected.sort();
+    selected.dedup();
+    if selected.is_empty() {
+        return Err(AruError::msg("select at least one target"));
+    }
+    if selected.iter().any(|target| !options.contains(target)) {
+        return Err(AruError::msg(
+            "interactive target selection returned an unknown target",
+        ));
+    }
+    Ok(Some(selected))
 }
 
 pub struct InquireSkillChooser;
@@ -128,6 +221,19 @@ mod tests {
         seen_defaults: Vec<usize>,
     }
 
+    #[derive(Default)]
+    struct FakeTargetChooser {
+        response: Option<Result<Option<Vec<Target>>>>,
+        seen_targets: Vec<Target>,
+    }
+
+    impl TargetChooser for FakeTargetChooser {
+        fn choose(&mut self, targets: &[Target]) -> Result<Option<Vec<Target>>> {
+            self.seen_targets = targets.to_vec();
+            self.response.take().unwrap()
+        }
+    }
+
     impl SkillChooser for FakeChooser {
         fn choose(&mut self, names: &[String], defaults: &[usize]) -> Result<Option<Vec<String>>> {
             self.seen_names = names.to_vec();
@@ -171,6 +277,33 @@ mod tests {
         assert_eq!(chooser.seen_names, ["alpha", "review", "zeta"]);
         assert_eq!(chooser.seen_defaults, [1]);
         assert_eq!(selected, ["alpha", "zeta"]);
+    }
+
+    #[test]
+    fn target_chooser_receives_stable_registry_and_validates_response() {
+        let mut chooser = FakeTargetChooser {
+            response: Some(Ok(Some(vec![Target::Kiro, Target::Codex]))),
+            ..FakeTargetChooser::default()
+        };
+        let selected = choose_targets(&mut chooser, &[Target::Kiro, Target::Claude, Target::Codex])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chooser.seen_targets,
+            [Target::Claude, Target::Codex, Target::Kiro]
+        );
+        assert_eq!(selected, [Target::Codex, Target::Kiro]);
+
+        let mut unknown = FakeTargetChooser {
+            response: Some(Ok(Some(vec![Target::Pi]))),
+            ..FakeTargetChooser::default()
+        };
+        assert!(
+            choose_targets(&mut unknown, &[Target::Codex])
+                .unwrap_err()
+                .to_string()
+                .contains("unknown target")
+        );
     }
 
     #[test]

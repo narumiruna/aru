@@ -240,6 +240,29 @@ pub fn inspect_skill_source(
     dry_run: bool,
     offline: bool,
 ) -> Result<SkillSourceInspection> {
+    let cache = if dry_run {
+        Cache::ephemeral_for_project(project)?
+    } else {
+        Cache::project(project)
+    };
+    inspect_skill_source_with_cache(
+        project,
+        manifest_source,
+        requirement,
+        previous,
+        offline,
+        &cache,
+    )
+}
+
+pub(crate) fn inspect_skill_source_with_cache(
+    project: &Path,
+    manifest_source: &str,
+    requirement: &SkillRequirement,
+    previous: Option<&Lockfile>,
+    offline: bool,
+    cache: &Cache,
+) -> Result<SkillSourceInspection> {
     let source = git::canonicalize(project, manifest_source)?;
     let descriptor = skill_requirement_descriptor(requirement);
     let old = previous.and_then(|lock| {
@@ -248,11 +271,6 @@ pub fn inspect_skill_source(
             .find(|package| package.source == source.identity)
     });
     let (version, revision) = resolve_skill_reference(&source, requirement, old, false, offline)?;
-    let cache = if dry_run {
-        Cache::ephemeral_for_project(project)?
-    } else {
-        Cache::project(project)
-    };
     let mut checkout = cache.checkout_with_policy(&source, &revision, offline)?;
     let mut candidates =
         discover_candidates(&checkout, &source.repository_name, &requirement.paths)?;
