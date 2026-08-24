@@ -17,11 +17,11 @@ use crate::registry::{RegistryClient, ResolvedCandidate};
 use crate::source::git::{self, GitSource};
 use crate::target;
 
-pub(crate) use skill::declared_skill_source_key;
 pub use skill::{
     SkillResolutionHint, SkillSourceInspection, canonical_update_skill_targets,
     inspect_skill_source,
 };
+pub(crate) use skill::{declared_skill_source_key, inspect_skill_source_with_cache};
 
 #[derive(Debug)]
 pub struct Resolution {

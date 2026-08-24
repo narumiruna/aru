@@ -1,18 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::cache::Cache;
 use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillUpdateArgs};
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
-    InquireSkillChooser, SkillAddSelectionMode, SkillChooser, choose_skills,
-    terminal_selection_mode,
+    InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, choose_skills,
+    terminal_choose_targets, terminal_selection_mode,
 };
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
 use crate::resolver::{
     canonical_update_skill_targets, declared_skill_source_key, inspect_skill_source,
+    inspect_skill_source_with_cache,
 };
+use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
+use crate::transaction::{Operation, apply_standalone};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
@@ -20,6 +24,189 @@ pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     skill_add_with_policy(project, args, mode, &mut chooser, policy)
+}
+
+pub(super) fn add_standalone(
+    project: &Path,
+    mut args: SkillAddArgs,
+    policy: ExecutionPolicy,
+) -> Result<()> {
+    if args.no_sync {
+        return Err(AruError::msg(
+            "--no-sync requires an initialized aru project; standalone skill installation writes directly to target paths",
+        ));
+    }
+    if policy.locked {
+        return Err(AruError::msg(
+            "--locked and --frozen require an initialized aru project with aru.lock",
+        ));
+    }
+    if args.targets.is_empty() {
+        let mut chooser = InquireTargetChooser;
+        let Some(targets) = terminal_choose_targets(&mut chooser)? else {
+            policy
+                .output
+                .completion("Target selection canceled; no files were changed.");
+            return Ok(());
+        };
+        args.targets = targets;
+    }
+    validate_standalone_targets(&args.targets)?;
+    let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
+    let mut chooser = InquireSkillChooser;
+    standalone_add_with_policy(project, &args, mode, &mut chooser, policy)
+}
+
+fn standalone_add_with_policy(
+    project: &Path,
+    args: &SkillAddArgs,
+    mode: SkillAddSelectionMode,
+    chooser: &mut dyn SkillChooser,
+    policy: ExecutionPolicy,
+) -> Result<()> {
+    let mut requirement = standalone_requirement(args, mode)?;
+    let cache = Cache::ephemeral()?;
+    policy
+        .output
+        .progress(&format!("skill source {}", args.source));
+    let inspection = inspect_skill_source_with_cache(
+        project,
+        &args.source,
+        &requirement,
+        None,
+        policy.offline,
+        &cache,
+    )?;
+    if mode == SkillAddSelectionMode::Interactive {
+        let names = inspection
+            .candidates
+            .iter()
+            .map(|candidate| candidate.name.clone())
+            .collect::<Vec<_>>();
+        let Some(selected) = choose_skills(chooser, &names, &[])? else {
+            policy
+                .output
+                .completion("Skill selection canceled; no files were changed.");
+            return Ok(());
+        };
+        requirement.include = selected;
+        requirement.exclude.clear();
+        requirement.normalize();
+    }
+    let selected = select_candidates(inspection.candidates, &requirement)?;
+    let mut destinations = BTreeSet::new();
+    let mut operations = Vec::new();
+    let mut plan = Vec::new();
+    for skill in selected {
+        for target in &args.targets {
+            let destination = crate::target::skill::destination(*target, &skill.name)
+                .ok_or_else(|| AruError::msg(format!("target {target} does not support skills")))?;
+            if !destinations.insert(destination.clone()) {
+                continue;
+            }
+            let exists = standalone_destination_exists(&project.join(&destination))?;
+            if exists && !args.force && args.dry_run {
+                return Err(AruError::msg(format!(
+                    "collision: unmanaged skill {:?} already exists at {}; inspect it or rerun with --force",
+                    skill.name,
+                    destination.display()
+                )));
+            }
+            let verb = if exists { "force replace" } else { "create" };
+            plan.push(format!(
+                "{verb} skill {} ({})",
+                skill.name,
+                destination.display()
+            ));
+            operations.push(Operation::skill_directory(
+                destination,
+                &skill.absolute_path,
+                &skill.sha256,
+            ));
+        }
+    }
+    plan.sort();
+    if args.dry_run {
+        for item in &plan {
+            policy.output.plan(item, true);
+        }
+        policy
+            .output
+            .completion("Dry run complete; no files were changed.");
+        return Ok(());
+    }
+    apply_standalone(project, operations, args.force)?;
+    for item in &plan {
+        policy.output.plan(item, false);
+    }
+    policy
+        .output
+        .completion("Standalone skills installed; no aru project state was created.");
+    Ok(())
+}
+
+fn validate_standalone_targets(targets: &[crate::manifest::Target]) -> Result<()> {
+    if targets.is_empty() {
+        return Err(AruError::msg(
+            "standalone skill installation requires a target",
+        ));
+    }
+    if targets.iter().collect::<BTreeSet<_>>().len() != targets.len() {
+        return Err(AruError::msg(
+            "skill dependency targets contains duplicates",
+        ));
+    }
+    for target in targets {
+        if !crate::target::capabilities(*target).skills {
+            return Err(AruError::msg(format!(
+                "target {target} does not support Agent Skills"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn standalone_requirement(
+    args: &SkillAddArgs,
+    mode: SkillAddSelectionMode,
+) -> Result<SkillRequirement> {
+    let mut requirement = skill_add_base_requirement(None, args);
+    requirement.targets = None;
+    if mode == SkillAddSelectionMode::Explicit {
+        requirement.include.clear();
+        for name in &args.skills {
+            validate_name(name, "skill name")?;
+            add_skill_selector(&mut requirement, name);
+        }
+        if let Some(path) = &args.path {
+            let parsed = crate::skill::validate_relative_selector(path)?;
+            let name = parsed
+                .file_name()
+                .and_then(|part| part.to_str())
+                .ok_or_else(|| AruError::msg("skill path has no UTF-8 directory name"))?
+                .to_owned();
+            validate_name(&name, "skill name")?;
+            add_skill_selector(&mut requirement, &name);
+            requirement.paths.insert(name, path.clone());
+        }
+    } else if mode == SkillAddSelectionMode::All {
+        requirement.include = vec!["*".into()];
+        requirement.exclude.clear();
+    }
+    requirement.normalize();
+    requirement.validate(&args.source)?;
+    Ok(requirement)
+}
+
+fn standalone_destination_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AruError::msg(format!(
+            "could not inspect {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 #[cfg(test)]

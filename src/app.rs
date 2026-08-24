@@ -147,10 +147,16 @@ pub fn run() -> Result<()> {
                 TargetCommand::List(args) => target_list(&project, args),
             }
         }
+        Command::Skill {
+            command: SkillCommand::Add(args),
+        } => match discover_skill_add_root(project_option)? {
+            SkillAddRoot::Managed(project) => skill::add(&project, args, policy),
+            SkillAddRoot::Standalone(project) => skill::add_standalone(&project, args, policy),
+        },
         Command::Skill { command } => {
             let project = discover_project(project_option)?;
             match command {
-                SkillCommand::Add(args) => skill::add(&project, args, policy),
+                SkillCommand::Add(_) => unreachable!("skill add is dispatched above"),
                 SkillCommand::Remove(args) => skill::remove(&project, args, policy),
                 SkillCommand::Update(args) => skill::update(&project, args, policy),
                 SkillCommand::List => skill::list(&project),
@@ -617,6 +623,34 @@ fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
         }
         Ok(Some(guard))
     }
+}
+
+enum SkillAddRoot {
+    Managed(PathBuf),
+    Standalone(PathBuf),
+}
+
+fn discover_skill_add_root(explicit: Option<PathBuf>) -> Result<SkillAddRoot> {
+    if let Some(path) = explicit {
+        let path = path.canonicalize().at(&path)?;
+        if !path.is_dir() {
+            return Err(AruError::msg("skill installation root is not a directory"));
+        }
+        return Ok(if path.join(crate::manifest::MANIFEST_FILE).is_file() {
+            SkillAddRoot::Managed(path)
+        } else {
+            SkillAddRoot::Standalone(path)
+        });
+    }
+    let current = std::env::current_dir().at(".")?;
+    for ancestor in current.ancestors() {
+        if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
+            return Ok(SkillAddRoot::Managed(ancestor.canonicalize().at(ancestor)?));
+        }
+    }
+    Ok(SkillAddRoot::Standalone(
+        current.canonicalize().at(&current)?,
+    ))
 }
 
 fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {

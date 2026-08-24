@@ -1,6 +1,28 @@
 # Agent Skills
 
-Aru resolves skills from Git repositories and projects each selected skill into every compatible target's native project directory.
+Aru resolves skills from Git repositories and installs each selected skill into compatible targets' native project directories.
+
+In an initialized aru project, `skill add` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state.
+In a directory without an `aru.toml` in it or an ancestor, the same command performs a one-time standalone installation without creating project state.
+
+## Standalone installation
+
+Pass one or more targets to install without running `aru init`:
+
+```console
+aru skill add --target codex owner/repository --all
+aru skill add --target claude --target kiro owner/repository --skill review
+```
+
+If `--target` is omitted in an interactive terminal, aru first opens a searchable multi-select target menu.
+It then applies the normal skill selection rules, so a bare source opens the skill menu while `--all`, `--skill`, or `--path` skips it.
+Non-interactive standalone commands must provide both `--target` and an explicit skill selector.
+
+Standalone installation writes a complete independent copy to each unique target path and never creates cross-target symlinks.
+It rejects an existing same-name destination before any write unless `--force` is passed.
+It does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, and the installed copies are not managed by `skill update`, `skill remove`, or `sync`.
+`--dry-run` validates and previews the complete installation without writing.
+`--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
 
 ## Select exports
 
@@ -79,7 +101,8 @@ Run `aru target list --available` or read the [skill target registry](reference/
 Skill-only targets include direct paths such as `.kiro/skills/<name>` and `.windsurf/skills/<name>`, shared `.agents/skills/<name>` projections, and explicit exceptions such as `.factory/skills/<name>` for `droid`.
 Aliases such as `claude-code`, `kiro-cli`, and `hermes-agent` normalize to canonical names and are never persisted.
 
-Targets that share one destination create one owned projection while retaining their complete canonical target reach in `aru.lock`.
+In initialized projects, targets that share one destination create one owned projection while retaining their complete canonical target reach in `aru.lock`.
 On Unix, other native paths link to a selected `.agents` copy when possible.
 Platforms without project symlinks receive verified copies.
+Standalone installation always uses independent copies instead.
 Aru does not install skills into global home-directory paths.

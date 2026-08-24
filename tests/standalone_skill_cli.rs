@@ -1,0 +1,278 @@
+use std::path::Path;
+use std::process::Command;
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use predicates::prelude::*;
+
+fn git(repository: &Path, arguments: &[&str]) {
+    let status = Command::new("git")
+        .current_dir(repository)
+        .args(arguments)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {arguments:?} failed");
+}
+
+fn create_repository(repository: &Path, skills: &[&str]) {
+    std::fs::create_dir(repository).unwrap();
+    git(repository, &["init", "--quiet"]);
+    git(
+        repository,
+        &["config", "user.email", "standalone@example.com"],
+    );
+    git(repository, &["config", "user.name", "standalone tests"]);
+    git(repository, &["config", "commit.gpgsign", "false"]);
+    for name in skills {
+        let directory = repository.join("skills").join(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Standalone {name}\n---\n# {name}\n"),
+        )
+        .unwrap();
+    }
+    git(repository, &["add", "skills"]);
+    git(repository, &["commit", "--quiet", "-m", "initial"]);
+    git(repository, &["tag", "1.0.0"]);
+}
+
+#[test]
+fn explicit_target_installs_without_project_state() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args([
+            "skill",
+            "add",
+            "--target",
+            "codex",
+            repository.to_str().unwrap(),
+            "--all",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Standalone skills installed"));
+
+    assert!(project.join(".agents/skills/demo/SKILL.md").is_file());
+    assert!(!project.join("aru.toml").exists());
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn project_override_alias_and_explicit_skill_use_the_requested_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let elsewhere = temporary.path().join("elsewhere");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&elsewhere).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&elsewhere)
+        .args([
+            "--project",
+            project.to_str().unwrap(),
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--target",
+            "kiro-cli",
+            "--skill",
+            "beta",
+            "--version",
+            "=1.0.0",
+        ])
+        .assert()
+        .success();
+
+    assert!(!project.join(".kiro/skills/alpha").exists());
+    assert!(project.join(".kiro/skills/beta/SKILL.md").is_file());
+    assert!(!elsewhere.join(".kiro").exists());
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn collisions_fail_atomically_and_force_creates_independent_copies() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+    let collision = project.join(".claude/skills/demo");
+    std::fs::create_dir_all(&collision).unwrap();
+    std::fs::write(collision.join("manual"), "keep").unwrap();
+
+    let arguments = [
+        "skill",
+        "add",
+        repository.to_str().unwrap(),
+        "--all",
+        "--target",
+        "codex",
+        "--target",
+        "claude",
+    ];
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args(arguments)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("collision"));
+
+    assert!(!project.join(".agents/skills/demo").exists());
+    assert_eq!(std::fs::read(collision.join("manual")).unwrap(), b"keep");
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args(arguments)
+        .arg("--force")
+        .assert()
+        .success();
+
+    let agents = project.join(".agents/skills/demo");
+    let claude = project.join(".claude/skills/demo");
+    assert!(agents.join("SKILL.md").is_file());
+    assert!(claude.join("SKILL.md").is_file());
+    assert!(!claude.join("manual").exists());
+    assert!(
+        !std::fs::symlink_metadata(agents)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        !std::fs::symlink_metadata(claude)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn dry_run_and_standalone_only_option_errors_leave_no_files() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--target",
+            "codex",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Would create skill demo (.agents/skills/demo)",
+        ));
+    assert!(!project.join(".agents").exists());
+    assert!(!project.join(".aru").exists());
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args([
+            "skill",
+            "add",
+            "owner/missing",
+            "--all",
+            "--target",
+            "codex",
+            "--no-sync",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--no-sync requires"));
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args([
+            "--locked",
+            "skill",
+            "add",
+            "owner/missing",
+            "--all",
+            "--target",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "require an initialized aru project",
+        ));
+}
+
+#[test]
+fn noninteractive_standalone_add_requires_target_then_skill_selector() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args(["skill", "add", repository.to_str().unwrap(), "--all"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pass --target"));
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--target",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pass --all, --skill, or --path"));
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn nearest_initialized_ancestor_keeps_managed_behavior() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let nested = project.join("nested");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&nested).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .args([
+            "--project",
+            project.to_str().unwrap(),
+            "init",
+            "--target",
+            "codex",
+        ])
+        .assert()
+        .success();
+    cargo_bin_cmd!("aru")
+        .current_dir(&nested)
+        .args(["skill", "add", repository.to_str().unwrap(), "--all"])
+        .assert()
+        .success();
+
+    assert!(project.join("aru.toml").is_file());
+    assert!(project.join("aru.lock").is_file());
+    assert!(project.join(".aru/state.toml").is_file());
+    assert!(project.join(".agents/skills/demo").is_dir());
+    assert!(!nested.join(".agents").exists());
+}

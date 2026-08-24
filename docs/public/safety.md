@@ -38,7 +38,7 @@ Aru distinguishes owned, unowned, and drifted content:
 
 ## Atomic transactions
 
-Every mutating command:
+Every managed mutating command:
 
 1. takes `.aru/operation.lock`;
 2. rereads and validates project inputs;
@@ -46,6 +46,7 @@ Every mutating command:
 4. writes a durable journal;
 5. performs fixed-order atomic replacements with sibling backups.
 
+Standalone `skill add` uses the same staging, backup, journal, and rollback machinery with operation control stored outside the project so it leaves no aru project state.
 A normal apply error triggers immediate rollback.
 
 ## Recover an interrupted operation
