@@ -54,6 +54,50 @@ fn offline_registry_resolution_fails_before_http_resolution() {
 }
 
 #[test]
+fn single_mcp_resolution_reuses_direct_candidate_and_target_validation() {
+    let targets = [
+        Target::Codex,
+        Target::Claude,
+        Target::Copilot,
+        Target::Opencode,
+    ];
+    let requirement = McpRequirement {
+        registry: None,
+        server: None,
+        version: None,
+        transport: None,
+        package_registry: None,
+        url: None,
+        command: Some("uvx".into()),
+        args: vec!["demo@1.0.0".into()],
+        env_vars: vec!["DEMO_TOKEN".into()],
+        env_http_headers: BTreeMap::new(),
+        bearer_token_env: None,
+        targets: None,
+    };
+    let server = resolve_mcp_requirement("demo", &requirement, &targets, true).unwrap();
+    assert_eq!(server.version, "direct");
+    assert_eq!(
+        server
+            .targets
+            .iter()
+            .map(|target| target.target)
+            .collect::<Vec<_>>(),
+        targets
+    );
+    assert!(server.targets.iter().all(|target| {
+        target.command.as_deref() == Some("uvx")
+            && target.args == ["demo@1.0.0"]
+            && target.env_vars == ["DEMO_TOKEN"]
+    }));
+
+    let error = resolve_mcp_requirement("demo", &requirement, &[Target::Pi], true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unsupported by pi"));
+}
+
+#[test]
 fn package_hash_excludes_targets() {
     let source = GitSource {
         identity: "git+https://example.com/a.git".into(),

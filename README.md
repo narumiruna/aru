@@ -260,7 +260,20 @@ aru mcp add \
   --bearer-token-env DOCS_MCP_TOKEN
 ```
 
-List, update, or remove MCP declarations:
+Without an `aru.toml` in the current directory or an ancestor, pass a target to install the entry once without creating aru project state:
+
+```console
+aru mcp add \
+  --target codex \
+  --url https://docs.example.com/mcp \
+  --name docs
+```
+
+Omitting `--target` in an interactive standalone command opens a target selector for Codex, Claude Code, Copilot CLI, and OpenCode.
+Standalone installation merges the named entry into native project config, preserves unrelated entries, and requires `--force` to replace an existing same-name entry.
+The resulting entry is not managed by `mcp update`, `mcp remove`, or `sync`.
+
+List, update, or remove managed MCP declarations:
 
 ```console
 aru mcp list

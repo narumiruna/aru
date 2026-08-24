@@ -5,8 +5,8 @@ use crate::cache::Cache;
 use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillUpdateArgs};
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
-    InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, choose_skills,
-    terminal_choose_targets, terminal_selection_mode,
+    InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, TargetChoice,
+    choose_skills, terminal_choose_targets, terminal_selection_mode,
 };
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
@@ -43,7 +43,12 @@ pub(super) fn add_standalone(
     }
     if args.targets.is_empty() {
         let mut chooser = InquireTargetChooser;
-        let Some(targets) = terminal_choose_targets(&mut chooser)? else {
+        let choices = crate::target::specs()
+            .iter()
+            .filter(|spec| spec.capabilities.skills)
+            .map(|spec| TargetChoice::new(spec.target, spec.project_skills))
+            .collect::<Vec<_>>();
+        let Some(targets) = terminal_choose_targets(&mut chooser, &choices)? else {
             policy
                 .output
                 .completion("Target selection canceled; no files were changed.");

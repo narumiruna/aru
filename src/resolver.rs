@@ -409,6 +409,18 @@ fn normalize_semver_requirement(requirement: &str) -> String {
     git::normalize_version_requirement(requirement)
 }
 
+pub(crate) fn resolve_mcp_requirement(
+    name: &str,
+    requirement: &McpRequirement,
+    targets: &[Target],
+    offline: bool,
+) -> Result<McpServer> {
+    requirement.validate(name)?;
+    let descriptor = canonical_json_digest(&normalized_mcp(requirement))?;
+    let client = RegistryClient::new()?;
+    resolve_mcp(&client, name, requirement, targets, &descriptor, offline)
+}
+
 fn resolve_mcp(
     client: &RegistryClient,
     name: &str,
