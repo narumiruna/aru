@@ -31,7 +31,7 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | `aru skill list` | List locked skill sources |
 | `aru skill update [source]` | Update all or selected skills |
 | `aru skill remove <source>` | Remove selected skills or a source |
-| `aru mcp add ...` | Add a Registry, HTTPS, or stdio MCP server |
+| `aru mcp add ...` | Add a managed MCP server or install one once without initialization |
 | `aru mcp list` | List configured MCP servers |
 | `aru mcp update [name]` | Update Registry-backed servers |
 | `aru mcp remove <name>` | Remove a configured server |

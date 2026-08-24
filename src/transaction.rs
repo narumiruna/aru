@@ -11,7 +11,7 @@ use crate::error::{AruError, IoContext, Result};
 
 mod standalone;
 
-pub use standalone::apply_standalone;
+pub use standalone::{apply_standalone, apply_standalone_prepared};
 
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
 

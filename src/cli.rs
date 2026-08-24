@@ -715,7 +715,7 @@ pub struct McpAddArgs {
     /// Environment variable containing a bearer token.
     #[arg(long = "bearer-token-env", help_heading = "Authentication Options")]
     pub bearer_token_env: Option<String>,
-    /// Configured target that should receive this dependency; may be repeated.
+    /// Target that should receive this dependency; may be repeated.
     #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Apply Options")]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.

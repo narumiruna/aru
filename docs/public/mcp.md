@@ -1,6 +1,29 @@
 # MCP servers
 
-Aru supports Registry packages, direct HTTPS endpoints, and direct stdio commands. It stores environment-variable names or target-native placeholders—never secret values—and never executes configured direct commands.
+Aru supports Registry packages, direct HTTPS endpoints, and direct stdio commands.
+It stores environment-variable names or target-native placeholders—never secret values—and never executes configured direct commands.
+
+## Standalone installation
+
+Install an MCP entry without first running `aru init` by passing one or more targets:
+
+```console
+aru mcp add \
+  --target codex \
+  --url https://docs.example.com/mcp \
+  --name docs
+```
+
+If no `aru.toml` exists in the current directory or an ancestor, `mcp add` uses standalone mode.
+Without `--target`, an interactive terminal opens a searchable multi-select containing only Codex, Claude Code, Copilot CLI, and OpenCode with their native project config paths.
+Non-interactive standalone commands must pass `--target`.
+
+Standalone mode safely merges the named entry into every selected config and preserves unrelated entries and supported comments.
+An existing same-name entry is rejected before any write unless `--force` is passed; force replaces only that entry.
+The operation does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, so `mcp update`, `mcp remove`, and `sync` do not manage the installed entry.
+`--dry-run` resolves and previews every config destination without writing.
+`--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
+Registry declarations require network access, while direct HTTPS and stdio declarations can be rendered with `--offline`.
 
 ## Registry package
 
@@ -60,7 +83,7 @@ Commands and repeated `--arg` values remain an ordered argv array. Use `--arg=--
 !!! note
     Aru validates and projects direct commands but does not execute them during add, lock, or sync.
 
-## Update and remove
+## Update and remove managed entries
 
 ```console
 aru mcp list

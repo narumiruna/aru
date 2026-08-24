@@ -71,6 +71,51 @@ fn standalone_interactive_add(project: &Path, repository: &Path) -> expectrl::se
     session
 }
 
+fn standalone_interactive_mcp_add(project: &Path) -> expectrl::session::OsSession {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
+    command.current_dir(project).args([
+        "mcp",
+        "add",
+        "--url",
+        "https://example.com/mcp",
+        "--name",
+        "docs",
+    ]);
+    let mut session = Session::spawn(command).unwrap();
+    session.set_expect_timeout(Some(Duration::from_secs(20)));
+    session
+}
+
+#[test]
+fn standalone_mcp_target_multiselect_installs_checked_target() {
+    let project = tempfile::tempdir().unwrap();
+
+    let mut session = standalone_interactive_mcp_add(project.path());
+    session.expect("Select targets to install to").unwrap();
+    session.send("codex").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert!(project.path().join(".codex/config.toml").is_file());
+    assert!(!project.path().join(".mcp.json").exists());
+    assert!(!project.path().join("aru.toml").exists());
+    assert!(!project.path().join(".aru").exists());
+}
+
+#[test]
+fn standalone_mcp_target_cancel_writes_nothing() {
+    let project = tempfile::tempdir().unwrap();
+
+    let mut session = standalone_interactive_mcp_add(project.path());
+    session.expect("Select targets to install to").unwrap();
+    session.send(ControlCode::ESC).unwrap();
+    session.expect("Target selection canceled").unwrap();
+    session.expect(Eof).unwrap();
+
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 0);
+}
+
 #[test]
 fn standalone_target_and_skill_multiselect_install_checked_combination() {
     let temporary = tempfile::tempdir().unwrap();

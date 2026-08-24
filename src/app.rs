@@ -149,9 +149,9 @@ pub fn run() -> Result<()> {
         }
         Command::Skill {
             command: SkillCommand::Add(args),
-        } => match discover_skill_add_root(project_option)? {
-            SkillAddRoot::Managed(project) => skill::add(&project, args, policy),
-            SkillAddRoot::Standalone(project) => skill::add_standalone(&project, args, policy),
+        } => match discover_add_root(project_option)? {
+            AddRoot::Managed(project) => skill::add(&project, args, policy),
+            AddRoot::Standalone(project) => skill::add_standalone(&project, args, policy),
         },
         Command::Skill { command } => {
             let project = discover_project(project_option)?;
@@ -162,10 +162,16 @@ pub fn run() -> Result<()> {
                 SkillCommand::List => skill::list(&project),
             }
         }
+        Command::Mcp {
+            command: McpCommand::Add(args),
+        } => match discover_add_root(project_option)? {
+            AddRoot::Managed(project) => mcp::add(&project, *args, policy),
+            AddRoot::Standalone(project) => mcp::add_standalone(&project, *args, policy),
+        },
         Command::Mcp { command } => {
             let project = discover_project(project_option)?;
             match command {
-                McpCommand::Add(args) => mcp::add(&project, *args, policy),
+                McpCommand::Add(_) => unreachable!("MCP add is dispatched above"),
                 McpCommand::Remove(args) => mcp::remove(&project, args, policy),
                 McpCommand::Update(args) => mcp::update(&project, args, policy),
                 McpCommand::List => mcp::list(&project),
@@ -625,32 +631,30 @@ fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
     }
 }
 
-enum SkillAddRoot {
+enum AddRoot {
     Managed(PathBuf),
     Standalone(PathBuf),
 }
 
-fn discover_skill_add_root(explicit: Option<PathBuf>) -> Result<SkillAddRoot> {
+fn discover_add_root(explicit: Option<PathBuf>) -> Result<AddRoot> {
     if let Some(path) = explicit {
         let path = path.canonicalize().at(&path)?;
         if !path.is_dir() {
-            return Err(AruError::msg("skill installation root is not a directory"));
+            return Err(AruError::msg("installation root is not a directory"));
         }
         return Ok(if path.join(crate::manifest::MANIFEST_FILE).is_file() {
-            SkillAddRoot::Managed(path)
+            AddRoot::Managed(path)
         } else {
-            SkillAddRoot::Standalone(path)
+            AddRoot::Standalone(path)
         });
     }
     let current = std::env::current_dir().at(".")?;
     for ancestor in current.ancestors() {
         if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return Ok(SkillAddRoot::Managed(ancestor.canonicalize().at(ancestor)?));
+            return Ok(AddRoot::Managed(ancestor.canonicalize().at(ancestor)?));
         }
     }
-    Ok(SkillAddRoot::Standalone(
-        current.canonicalize().at(&current)?,
-    ))
+    Ok(AddRoot::Standalone(current.canonicalize().at(&current)?))
 }
 
 fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
