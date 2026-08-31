@@ -16,7 +16,6 @@ Do not push, open or merge pull requests, create tags, dispatch workflows, publi
 - Explain the main idea simply before adding necessary detail.
 - Keep information accurate.
 - Make documented rules specific and verifiable.
-- In documentation, put each prose sentence on its own source line.
 - Draw diagrams using Mermaid syntax.
 
 ## Code Style
