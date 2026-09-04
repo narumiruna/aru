@@ -98,6 +98,12 @@ struct JournalEntry {
     applied: bool,
 }
 
+#[derive(Clone, Copy)]
+enum PathMode<'a> {
+    Project(&'a Path),
+    Absolute,
+}
+
 pub struct ProjectLock {
     _file: File,
 }
@@ -126,6 +132,14 @@ pub fn recover_if_needed(project: &Path) -> Result<bool> {
 }
 
 fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
+    recover_with_mode(PathMode::Project(project), path)
+}
+
+fn recover_absolute_if_needed_at(path: &Path) -> Result<bool> {
+    recover_with_mode(PathMode::Absolute, path)
+}
+
+fn recover_with_mode(mode: PathMode<'_>, path: &Path) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
@@ -139,9 +153,10 @@ fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
     }
     if journal.phase == "committed" {
         for entry in &journal.entries {
-            let destination = project.join(&entry.destination);
-            validate_destination(project, Path::new(&entry.destination))?;
-            validate_ancestors(project, Path::new(&entry.destination))?;
+            let stored = Path::new(&entry.destination);
+            validate_destination(mode, stored)?;
+            validate_ancestors(mode, stored)?;
+            let destination = resolve_path(mode, stored);
             if path_digest(&destination)? != entry.new_digest {
                 return Err(AruError::msg(format!(
                     "cannot finish committed transaction: {} no longer matches its new digest",
@@ -150,9 +165,9 @@ fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
             }
         }
     } else {
-        rollback(project, path, &mut journal)?;
+        rollback(mode, path, &mut journal)?;
     }
-    cleanup_journal_artifacts(project, &journal)?;
+    cleanup_journal_artifacts(mode, &journal)?;
     std::fs::remove_file(path).at(path)?;
     sync_parent(path)?;
     Ok(true)
@@ -162,7 +177,19 @@ pub fn apply(project: &Path, operations: Vec<Operation>) -> Result<()> {
     apply_at(project, operations, &project.join(JOURNAL_FILE))
 }
 
-fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
+fn apply_at(project: &Path, operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
+    apply_with_mode(PathMode::Project(project), operations, journal_path)
+}
+
+fn apply_absolute_at(operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
+    apply_with_mode(PathMode::Absolute, operations, journal_path)
+}
+
+fn apply_with_mode(
+    mode: PathMode<'_>,
+    mut operations: Vec<Operation>,
+    journal_path: &Path,
+) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
     }
@@ -179,8 +206,8 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
         }
     }
     for operation in &operations {
-        validate_destination(project, &operation.destination)?;
-        validate_ancestors(project, &operation.destination)?;
+        validate_destination(mode, &operation.destination)?;
+        validate_ancestors(mode, &operation.destination)?;
     }
 
     let transaction_id = unique_suffix();
@@ -192,12 +219,12 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
     let mut staged_paths = Vec::new();
     let preparation = (|| -> Result<()> {
         for (index, operation) in operations.iter().enumerate() {
-            validate_destination(project, &operation.destination)?;
-            let destination = project.join(&operation.destination);
+            validate_destination(mode, &operation.destination)?;
+            let destination = resolve_path(mode, &operation.destination);
             let parent = destination
                 .parent()
                 .ok_or_else(|| AruError::msg("transaction destination has no parent"))?;
-            validate_ancestors(project, &operation.destination)?;
+            validate_ancestors(mode, &operation.destination)?;
             std::fs::create_dir_all(parent).at(parent)?;
             let stage = if matches!(&operation.content, Content::Absent) {
                 None
@@ -217,14 +244,14 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
             let old_digest = path_digest(&destination)?;
             let new_digest = stage.as_deref().map(path_digest).transpose()?.flatten();
             journal.entries.push(JournalEntry {
-                destination: relative_string(project, &destination)?,
+                destination: journal_string(mode, &destination)?,
                 stage: stage
                     .as_ref()
-                    .map(|path| relative_string(project, path))
+                    .map(|path| journal_string(mode, path))
                     .transpose()?,
                 backup: backup
                     .as_ref()
-                    .map(|path| relative_string(project, path))
+                    .map(|path| journal_string(mode, path))
                     .transpose()?,
                 old_digest,
                 new_digest,
@@ -239,14 +266,14 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
     }
     if let Err(error) = write_journal(journal_path, &journal) {
         if journal_path.exists() {
-            return recover_after_error(project, journal_path, error);
+            return recover_after_error(mode, journal_path, error);
         }
         cleanup_paths(&staged_paths);
         return Err(error);
     }
     journal.phase = "applying".into();
     if let Err(error) = write_journal(journal_path, &journal) {
-        return recover_after_error(project, journal_path, error);
+        return recover_after_error(mode, journal_path, error);
     }
 
     for index in 0..journal.entries.len() {
@@ -254,17 +281,18 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
             let destination_text = journal.entries[index].destination.clone();
             let backup_text = journal.entries[index].backup.clone();
             let stage_text = journal.entries[index].stage.clone();
-            let destination = project.join(&destination_text);
-            validate_ancestors(project, Path::new(&destination_text))?;
+            let destination_path = Path::new(&destination_text);
+            let destination = resolve_path(mode, destination_path);
+            validate_ancestors(mode, destination_path)?;
             if let Some(backup) = backup_text {
-                let backup = project.join(backup);
+                let backup = resolve_path(mode, Path::new(&backup));
                 if destination_exists(&destination) {
                     std::fs::rename(&destination, &backup).at(&destination)?;
                     sync_parent(&destination)?;
                 }
             }
             if let Some(stage) = stage_text {
-                let stage = project.join(stage);
+                let stage = resolve_path(mode, Path::new(&stage));
                 std::fs::rename(&stage, &destination).at(&destination)?;
                 sync_parent(&destination)?;
             }
@@ -272,7 +300,7 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
             write_journal(journal_path, &journal)
         })();
         if let Err(error) = step {
-            return recover_after_error(project, journal_path, error);
+            return recover_after_error(mode, journal_path, error);
         }
         if failure_phase("ARU_TEST_CRASH_AFTER") == Some(index + 1) {
             return Err(AruError::msg(format!(
@@ -282,7 +310,7 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
         }
         if failure_phase("ARU_TEST_FAIL_AFTER") == Some(index + 1) {
             return recover_after_error(
-                project,
+                mode,
                 journal_path,
                 AruError::msg(format!(
                     "simulated apply failure after transaction phase {}",
@@ -294,16 +322,16 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
 
     journal.phase = "committed".into();
     if let Err(error) = write_journal(journal_path, &journal) {
-        return recover_after_error(project, journal_path, error);
+        return recover_after_error(mode, journal_path, error);
     }
-    cleanup_journal_artifacts(project, &journal)?;
+    cleanup_journal_artifacts(mode, &journal)?;
     std::fs::remove_file(journal_path).at(journal_path)?;
     sync_parent(journal_path)?;
     Ok(())
 }
 
-fn recover_after_error(project: &Path, journal_path: &Path, original: AruError) -> Result<()> {
-    match recover_if_needed_at(project, journal_path) {
+fn recover_after_error(mode: PathMode<'_>, journal_path: &Path, original: AruError) -> Result<()> {
+    match recover_with_mode(mode, journal_path) {
         Ok(_) => Err(original),
         Err(recovery) => Err(AruError::msg(format!(
             "{original}; rollback also failed: {recovery}"
@@ -319,17 +347,20 @@ fn cleanup_paths(paths: &[PathBuf]) {
     }
 }
 
-fn rollback(project: &Path, journal_path: &Path, journal: &mut Journal) -> Result<()> {
+fn rollback(mode: PathMode<'_>, journal_path: &Path, journal: &mut Journal) -> Result<()> {
     for index in (0..journal.entries.len()).rev() {
         let destination_text = journal.entries[index].destination.clone();
         let old_digest = journal.entries[index].old_digest.clone();
         let new_digest = journal.entries[index].new_digest.clone();
         let backup_text = journal.entries[index].backup.clone();
-        let destination = project.join(&destination_text);
-        validate_destination(project, Path::new(&destination_text))?;
-        validate_ancestors(project, Path::new(&destination_text))?;
+        let destination_path = Path::new(&destination_text);
+        validate_destination(mode, destination_path)?;
+        validate_ancestors(mode, destination_path)?;
+        let destination = resolve_path(mode, destination_path);
         let current = path_digest(&destination)?;
-        let backup = backup_text.as_ref().map(|value| project.join(value));
+        let backup = backup_text
+            .as_ref()
+            .map(|value| resolve_path(mode, Path::new(value)));
         let backup_digest = backup.as_deref().map(path_digest).transpose()?.flatten();
 
         let current_is_new = current == new_digest;
@@ -457,41 +488,76 @@ fn create_symlink(_target: &Path, _link: &Path) -> Result<()> {
     Err(AruError::msg("directory symlinks are unsupported"))
 }
 
-fn validate_destination(project: &Path, relative: &Path) -> Result<()> {
-    if relative.as_os_str().is_empty() || relative.is_absolute() {
-        return Err(AruError::msg(
-            "transaction destination must be project-relative",
-        ));
+fn validate_destination(mode: PathMode<'_>, destination: &Path) -> Result<()> {
+    if destination.as_os_str().is_empty() {
+        return Err(AruError::msg("transaction destination must not be empty"));
     }
-    if relative
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(AruError::msg("unsafe transaction destination"));
-    }
-    let canonical_project = project.canonicalize().at(project)?;
-    if !canonical_project.is_dir() {
-        return Err(AruError::msg("project root is not a directory"));
+    match mode {
+        PathMode::Project(project) => {
+            if destination.is_absolute()
+                || destination
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(AruError::msg(
+                    "transaction destination must be a safe project-relative path",
+                ));
+            }
+            let canonical_project = project.canonicalize().at(project)?;
+            if !canonical_project.is_dir() {
+                return Err(AruError::msg("project root is not a directory"));
+            }
+        }
+        PathMode::Absolute => {
+            if !destination.is_absolute()
+                || destination
+                    .components()
+                    .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+            {
+                return Err(AruError::msg(
+                    "global transaction destination must be a safe absolute path",
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-fn validate_ancestors(project: &Path, relative: &Path) -> Result<()> {
-    let canonical_project = project.canonicalize().at(project)?;
-    let mut current = project.to_path_buf();
-    let components: Vec<_> = relative.components().collect();
+fn validate_ancestors(mode: PathMode<'_>, destination: &Path) -> Result<()> {
+    let (mut current, canonical_project) = match mode {
+        PathMode::Project(project) => (
+            project.to_path_buf(),
+            Some(project.canonicalize().at(project)?),
+        ),
+        PathMode::Absolute => (PathBuf::new(), None),
+    };
+    let components: Vec<_> = destination.components().collect();
     for component in components.iter().take(components.len().saturating_sub(1)) {
-        let Component::Normal(component) = component else {
-            return Err(AruError::msg("unsafe destination component"));
-        };
-        current.push(component);
+        match mode {
+            PathMode::Project(_) => {
+                let Component::Normal(component) = component else {
+                    return Err(AruError::msg("unsafe destination component"));
+                };
+                current.push(component);
+            }
+            PathMode::Absolute => current.push(component.as_os_str()),
+        }
         if !current.exists() {
             continue;
         }
         let metadata = std::fs::symlink_metadata(&current).at(&current)?;
         if metadata.file_type().is_symlink() {
             let resolved = current.canonicalize().at(&current)?;
-            if !resolved.starts_with(&canonical_project) {
+            if !resolved.is_dir() {
+                return Err(AruError::msg(format!(
+                    "destination ancestor symlink does not resolve to a directory: {}",
+                    current.display()
+                )));
+            }
+            if canonical_project
+                .as_ref()
+                .is_some_and(|project| !resolved.starts_with(project))
+            {
                 return Err(AruError::msg(format!(
                     "destination ancestor symlink escapes project root: {}",
                     current.display()
@@ -597,13 +663,13 @@ fn write_journal(path: &Path, journal: &Journal) -> Result<()> {
     sync_parent(path)
 }
 
-fn cleanup_journal_artifacts(project: &Path, journal: &Journal) -> Result<()> {
+fn cleanup_journal_artifacts(mode: PathMode<'_>, journal: &Journal) -> Result<()> {
     for entry in &journal.entries {
-        for relative in [entry.stage.as_ref(), entry.backup.as_ref()]
+        for stored in [entry.stage.as_ref(), entry.backup.as_ref()]
             .into_iter()
             .flatten()
         {
-            let path = project.join(relative);
+            let path = resolve_path(mode, Path::new(stored));
             if destination_exists(&path) {
                 remove_any(&path)?;
             }
@@ -625,9 +691,21 @@ fn destination_exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
-fn relative_string(project: &Path, path: &Path) -> Result<String> {
-    path.strip_prefix(project)
-        .map_err(|_| AruError::msg("transaction artifact escaped project"))?
+fn resolve_path(mode: PathMode<'_>, path: &Path) -> PathBuf {
+    match mode {
+        PathMode::Project(project) => project.join(path),
+        PathMode::Absolute => path.to_path_buf(),
+    }
+}
+
+fn journal_string(mode: PathMode<'_>, path: &Path) -> Result<String> {
+    let stored = match mode {
+        PathMode::Project(project) => path
+            .strip_prefix(project)
+            .map_err(|_| AruError::msg("transaction artifact escaped project"))?,
+        PathMode::Absolute => path,
+    };
+    stored
         .to_str()
         .map(|value| value.replace(std::path::MAIN_SEPARATOR, "/"))
         .ok_or_else(|| AruError::msg("transaction path is not UTF-8"))
@@ -889,6 +967,53 @@ mod tests {
         assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"new");
         assert!(!project.path().join(".aru").exists());
         assert!(!project.path().join(JOURNAL_FILE).exists());
+    }
+
+    #[test]
+    fn global_transaction_uses_one_recovery_scope_for_different_destination_sets() {
+        let project = tempfile::tempdir().unwrap();
+        let first_root = tempfile::tempdir().unwrap();
+        let second_root = tempfile::tempdir().unwrap();
+        let first = first_root.path().join("skills/first");
+        let second = second_root.path().join("skills/second");
+
+        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
+        let crashed = apply_standalone_global(
+            project.path(),
+            vec![
+                Operation::file(&first, b"first".to_vec()),
+                Operation::file(&second, b"second".to_vec()),
+            ],
+            true,
+        );
+        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
+        assert!(crashed.is_err());
+
+        apply_standalone_global(
+            project.path(),
+            vec![Operation::file(&first, b"recovered".to_vec())],
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"recovered");
+        assert!(!second.exists());
+    }
+
+    #[test]
+    fn global_transaction_rechecks_standalone_root_before_writing() {
+        let project = tempfile::tempdir().unwrap();
+        let destination_root = tempfile::tempdir().unwrap();
+        let destination = destination_root.path().join("skills/demo");
+        std::fs::write(project.path().join(crate::manifest::MANIFEST_FILE), "").unwrap();
+
+        let result = apply_standalone_global(
+            project.path(),
+            vec![Operation::file(&destination, b"demo".to_vec())],
+            true,
+        );
+
+        assert!(result.is_err());
+        assert!(!destination.exists());
     }
 
     #[test]

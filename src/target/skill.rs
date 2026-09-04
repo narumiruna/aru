@@ -61,85 +61,99 @@ pub(crate) fn destination(target: Target, name: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn global_directory(target: Target) -> Result<Option<PathBuf>> {
-    let home = global_home_directory()?;
-    let config = optional_absolute_env("XDG_CONFIG_HOME")?.unwrap_or_else(|| home.join(".config"));
-    let overridden = |variable: &str, fallback: &str| -> Result<PathBuf> {
-        Ok(optional_absolute_env(variable)?.unwrap_or_else(|| home.join(fallback)))
-    };
     let directory = match target {
-        Target::Agents => home.join(".agents/skills"),
-        Target::Codex => overridden("CODEX_HOME", ".codex")?.join("skills"),
-        Target::Claude => overridden("CLAUDE_CONFIG_DIR", ".claude")?.join("skills"),
-        Target::Copilot => home.join(".copilot/skills"),
-        Target::Opencode => config.join("opencode/skills"),
-        Target::Pi => home.join(".pi/agent/skills"),
-        Target::Amp | Target::Replit => config.join("agents/skills"),
-        Target::Antigravity => home.join(".gemini/antigravity/skills"),
+        Target::Agents => in_home(".agents/skills")?,
+        Target::Codex => overridden_directory("CODEX_HOME", ".codex")?,
+        Target::Claude => overridden_directory("CLAUDE_CONFIG_DIR", ".claude")?,
+        Target::Copilot => in_home(".copilot/skills")?,
+        Target::Opencode => config_directory()?.join("opencode/skills"),
+        Target::Pi => in_home(".pi/agent/skills")?,
+        Target::Amp | Target::Replit => config_directory()?.join("agents/skills"),
+        Target::Antigravity => in_home(".gemini/antigravity/skills")?,
         Target::Cline
         | Target::Dexto
         | Target::Kimi
         | Target::Loaf
         | Target::Warp
-        | Target::Zed => home.join(".agents/skills"),
-        Target::Cursor => home.join(".cursor/skills"),
-        Target::Deepagents => home.join(".deepagents/agent/skills"),
-        Target::Firebender => home.join(".firebender/skills"),
-        Target::Gemini => home.join(".gemini/skills"),
-        Target::Adal => home.join(".adal/skills"),
-        Target::AiderDesk => home.join(".aider-desk/skills"),
-        Target::Astrbot => home.join(".astrbot/data/skills"),
-        Target::Autohand => overridden("AUTOHAND_HOME", ".autohand")?.join("skills"),
-        Target::Augment => home.join(".augment/skills"),
-        Target::Bob => home.join(".bob/skills"),
-        Target::Openclaw => openclaw_directory(&home),
-        Target::Codearts => home.join(".codeartsdoer/skills"),
-        Target::Codebuddy => home.join(".codebuddy/skills"),
-        Target::Codemaker => home.join(".codemaker/skills"),
-        Target::Codestudio => home.join(".codestudio/skills"),
-        Target::Commandcode => home.join(".commandcode/skills"),
-        Target::Continue => home.join(".continue/skills"),
-        Target::Cortex => home.join(".snowflake/cortex/skills"),
-        Target::Crush => home.join(".config/crush/skills"),
-        Target::Devin => config.join("devin/skills"),
-        Target::Droid => home.join(".factory/skills"),
+        | Target::Zed => in_home(".agents/skills")?,
+        Target::Cursor => in_home(".cursor/skills")?,
+        Target::Deepagents => in_home(".deepagents/agent/skills")?,
+        Target::Firebender => in_home(".firebender/skills")?,
+        Target::Gemini => in_home(".gemini/skills")?,
+        Target::Adal => in_home(".adal/skills")?,
+        Target::AiderDesk => in_home(".aider-desk/skills")?,
+        Target::Astrbot => in_home(".astrbot/data/skills")?,
+        Target::Autohand => overridden_directory("AUTOHAND_HOME", ".autohand")?,
+        Target::Augment => in_home(".augment/skills")?,
+        Target::Bob => in_home(".bob/skills")?,
+        Target::Openclaw => openclaw_directory(&global_home_directory()?),
+        Target::Codearts => in_home(".codeartsdoer/skills")?,
+        Target::Codebuddy => in_home(".codebuddy/skills")?,
+        Target::Codemaker => in_home(".codemaker/skills")?,
+        Target::Codestudio => in_home(".codestudio/skills")?,
+        Target::Commandcode => in_home(".commandcode/skills")?,
+        Target::Continue => in_home(".continue/skills")?,
+        Target::Cortex => in_home(".snowflake/cortex/skills")?,
+        Target::Crush => in_home(".config/crush/skills")?,
+        Target::Devin => config_directory()?.join("devin/skills"),
+        Target::Droid => in_home(".factory/skills")?,
         Target::Eve | Target::Promptscript => return Ok(None),
-        Target::Forge => home.join(".forge/skills"),
-        Target::Goose => config.join("goose/skills"),
-        Target::Grok => overridden("GROK_HOME", ".grok")?.join("skills"),
-        Target::Hermes => overridden("HERMES_HOME", ".hermes")?.join("skills"),
-        Target::InferenceSh => home.join(".inferencesh/skills"),
-        Target::Jazz => home.join(".jazz/skills"),
-        Target::Junie => home.join(".junie/skills"),
-        Target::Iflow => home.join(".iflow/skills"),
-        Target::Kilo => home.join(".kilocode/skills"),
-        Target::Kimchi => home.join(".config/kimchi/harness/skills"),
-        Target::Kiro => home.join(".kiro/skills"),
-        Target::Kode => home.join(".kode/skills"),
-        Target::Lingma => home.join(".lingma/skills"),
-        Target::Mcpjam => home.join(".mcpjam/skills"),
-        Target::Minimax => home.join(".minimax/skills"),
-        Target::Vibe => overridden("VIBE_HOME", ".vibe")?.join("skills"),
-        Target::Moxby => home.join(".moxby/skills"),
-        Target::Mux => home.join(".mux/skills"),
-        Target::Openhands => home.join(".openhands/skills"),
-        Target::Ona => home.join(".ona/skills"),
-        Target::Posit => home.join(".posit/assistant/skills"),
-        Target::Qoder => home.join(".qoder/skills"),
-        Target::Qwen => home.join(".qwen/skills"),
-        Target::Reasonix => home.join(".reasonix/skills"),
-        Target::Rovodev => home.join(".rovodev/skills"),
-        Target::Roo => home.join(".roo/skills"),
-        Target::Tabnine => home.join(".tabnine/agent/skills"),
-        Target::Terramind => home.join(".terramind/skills"),
-        Target::Tinycloud => home.join(".tinycloud/skills"),
-        Target::Trae => home.join(".trae/skills"),
-        Target::Windsurf => home.join(".codeium/windsurf/skills"),
-        Target::Zcode => home.join(".zcode/skills"),
-        Target::Zencoder => home.join(".zencoder/skills"),
-        Target::Neovate => home.join(".neovate/skills"),
-        Target::Pochi => home.join(".pochi/skills"),
+        Target::Forge => in_home(".forge/skills")?,
+        Target::Goose => config_directory()?.join("goose/skills"),
+        Target::Grok => overridden_directory("GROK_HOME", ".grok")?,
+        Target::Hermes => overridden_directory("HERMES_HOME", ".hermes")?,
+        Target::InferenceSh => in_home(".inferencesh/skills")?,
+        Target::Jazz => in_home(".jazz/skills")?,
+        Target::Junie => in_home(".junie/skills")?,
+        Target::Iflow => in_home(".iflow/skills")?,
+        Target::Kilo => in_home(".kilocode/skills")?,
+        Target::Kimchi => in_home(".config/kimchi/harness/skills")?,
+        Target::Kiro => in_home(".kiro/skills")?,
+        Target::Kode => in_home(".kode/skills")?,
+        Target::Lingma => in_home(".lingma/skills")?,
+        Target::Mcpjam => in_home(".mcpjam/skills")?,
+        Target::Minimax => in_home(".minimax/skills")?,
+        Target::Vibe => overridden_directory("VIBE_HOME", ".vibe")?,
+        Target::Moxby => in_home(".moxby/skills")?,
+        Target::Mux => in_home(".mux/skills")?,
+        Target::Openhands => in_home(".openhands/skills")?,
+        Target::Ona => in_home(".ona/skills")?,
+        Target::Posit => in_home(".posit/assistant/skills")?,
+        Target::Qoder => in_home(".qoder/skills")?,
+        Target::Qwen => in_home(".qwen/skills")?,
+        Target::Reasonix => in_home(".reasonix/skills")?,
+        Target::Rovodev => in_home(".rovodev/skills")?,
+        Target::Roo => in_home(".roo/skills")?,
+        Target::Tabnine => in_home(".tabnine/agent/skills")?,
+        Target::Terramind => in_home(".terramind/skills")?,
+        Target::Tinycloud => in_home(".tinycloud/skills")?,
+        Target::Trae => in_home(".trae/skills")?,
+        Target::Windsurf => in_home(".codeium/windsurf/skills")?,
+        Target::Zcode => in_home(".zcode/skills")?,
+        Target::Zencoder => in_home(".zencoder/skills")?,
+        Target::Neovate => in_home(".neovate/skills")?,
+        Target::Pochi => in_home(".pochi/skills")?,
     };
     Ok(Some(directory))
+}
+
+fn in_home(path: &str) -> Result<PathBuf> {
+    Ok(global_home_directory()?.join(path))
+}
+
+fn overridden_directory(variable: &str, fallback: &str) -> Result<PathBuf> {
+    let root = match optional_absolute_env(variable)? {
+        Some(root) => root,
+        None => global_home_directory()?.join(fallback),
+    };
+    Ok(root.join("skills"))
+}
+
+fn config_directory() -> Result<PathBuf> {
+    match optional_absolute_env("XDG_CONFIG_HOME")? {
+        Some(root) => Ok(root),
+        None => Ok(global_home_directory()?.join(".config")),
+    }
 }
 
 pub(crate) fn global_home_directory() -> Result<PathBuf> {

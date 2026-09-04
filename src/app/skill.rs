@@ -173,15 +173,7 @@ fn standalone_add_with_policy(
         return Ok(());
     }
     if args.global {
-        let root = global_transaction_root(&destinations)?;
-        for operation in &mut operations {
-            operation.destination = operation
-                .destination
-                .strip_prefix(&root)
-                .map_err(|_| AruError::msg("global skill destination escaped transaction root"))?
-                .to_path_buf();
-        }
-        apply_standalone_global(&root, operations, args.force)?;
+        apply_standalone_global(project, operations, args.force)?;
     } else {
         apply_standalone(project, operations, args.force)?;
     }
@@ -221,29 +213,6 @@ fn validate_standalone_targets(targets: &[crate::manifest::Target], global: bool
         }
     }
     Ok(())
-}
-
-fn global_transaction_root(
-    destinations: &BTreeSet<std::path::PathBuf>,
-) -> Result<std::path::PathBuf> {
-    if destinations.is_empty() {
-        return Err(AruError::msg(
-            "global skill installation produced no destinations",
-        ));
-    }
-    let home = crate::target::skill::global_home_directory()?;
-    for ancestor in home.ancestors() {
-        if ancestor.is_dir()
-            && destinations
-                .iter()
-                .all(|destination| destination.starts_with(ancestor))
-        {
-            return Ok(ancestor.to_path_buf());
-        }
-    }
-    Err(AruError::msg(
-        "global skill destinations do not share the user's filesystem root",
-    ))
 }
 
 fn standalone_requirement(

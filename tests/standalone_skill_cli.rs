@@ -108,6 +108,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
         .current_dir(&project)
         .env("HOME", &home)
         .env_remove("CODEX_HOME")
+        .env("XDG_CONFIG_HOME", "relative-config")
         .args([
             "skill",
             "add",
@@ -123,6 +124,37 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
         .success()
         .stderr(predicate::str::contains("Would create skill beta"));
     assert!(!home.join(".pi/agent/skills/beta").exists());
+}
+
+#[test]
+fn complete_target_override_does_not_require_a_home_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let codex_home = temporary.path().join("codex-home");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("CODEX_HOME", &codex_home)
+        .env("XDG_CONFIG_HOME", "unrelated-relative-config")
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "codex",
+        ])
+        .assert()
+        .success();
+
+    assert!(codex_home.join("skills/demo/SKILL.md").is_file());
+    assert!(!project.join(".aru").exists());
 }
 
 #[test]
