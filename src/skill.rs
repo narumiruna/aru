@@ -10,13 +10,14 @@ use walkdir::WalkDir;
 use crate::error::{AruError, Result};
 use crate::manifest::SkillRequirement;
 
+mod projection;
+
 pub const DISCOVERY_MAX_DEPTH: usize = 6;
 pub const DISCOVERY_MAX_DIRECTORIES: usize = 2_000;
 pub const DISCOVERY_MAX_ENTRIES: usize = 20_000;
 pub const SKILL_MD_MAX_BYTES: u64 = 1024 * 1024;
 pub const SKILL_FILE_MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub const SKILL_TOTAL_MAX_BYTES: u64 = 100 * 1024 * 1024;
-const SOURCE_LOCK_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredSkill {
@@ -39,7 +40,7 @@ pub fn discover_candidates(
 ) -> Result<Vec<DiscoveredSkill>> {
     let mut candidates = BTreeMap::<String, PathBuf>::new();
 
-    let ignored_projection_roots = locked_projection_roots(root)?;
+    let ignored_projection_roots = projection::locked_projection_roots(root)?;
     discover_recursively(root, root_name, &ignored_projection_roots, &mut candidates)?;
     for (expected_name, relative) in explicit_paths {
         let relative_path = validate_relative_selector(relative)?;
@@ -213,62 +214,6 @@ fn discover_recursively_with_limits(
     Ok(())
 }
 
-fn locked_projection_roots(root: &Path) -> Result<BTreeSet<PathBuf>> {
-    locked_projection_roots_with_limit(root, SOURCE_LOCK_MAX_BYTES)
-}
-
-fn locked_projection_roots_with_limit(
-    root: &Path,
-    max_lock_bytes: u64,
-) -> Result<BTreeSet<PathBuf>> {
-    let path = root.join(crate::lockfile::LOCK_FILE);
-    let metadata = match std::fs::symlink_metadata(&path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
-        Err(error) => {
-            return Err(crate::error::AruError::Io {
-                path,
-                source: error,
-            });
-        }
-    };
-    if !metadata.file_type().is_file() {
-        return Ok(BTreeSet::new());
-    }
-    if metadata.len() > max_lock_bytes {
-        return Err(AruError::msg(format!(
-            "source aru.lock is {} bytes; skill discovery limit is {max_lock_bytes} bytes",
-            metadata.len()
-        )));
-    }
-    let lock = match crate::lockfile::Lockfile::load_optional(root) {
-        Ok(Some(lock)) => lock,
-        Ok(None) | Err(_) => return Ok(BTreeSet::new()),
-    };
-    let mut checked = BTreeSet::new();
-    let mut ignored = BTreeSet::new();
-    for package in lock.skill_packages {
-        for skill in package.skills {
-            if crate::manifest::validate_name(&skill.name, "skill name").is_err() {
-                continue;
-            }
-            for target in &package.targets {
-                let projection = crate::target::spec(*target).project_skills;
-                if !projection.starts_with('.') {
-                    continue;
-                }
-                let candidate = root.join(projection).join(&skill.name);
-                if checked.insert(candidate.clone())
-                    && canonical_skill_digest(&candidate).is_ok_and(|digest| digest == skill.sha256)
-                {
-                    ignored.insert(candidate);
-                }
-            }
-        }
-    }
-    Ok(ignored)
-}
-
 fn insert_candidate(
     candidates: &mut BTreeMap<String, PathBuf>,
     expected_name: &str,
@@ -347,11 +292,38 @@ fn canonical_skill_digest_with_limits(
     file_max_bytes: u64,
     total_max_bytes: u64,
 ) -> Result<String> {
+    canonical_skill_digest_with_structural_limits(root, file_max_bytes, total_max_bytes, None)
+}
+
+fn canonical_skill_digest_with_structural_limits(
+    root: &Path,
+    file_max_bytes: u64,
+    total_max_bytes: u64,
+    structural_limits: Option<(usize, usize, usize)>,
+) -> Result<String> {
     let mut files = Vec::new();
     let mut folded = BTreeSet::new();
     let mut total_bytes = 0u64;
-    for item in WalkDir::new(root).follow_links(false) {
+    let mut directories = 0usize;
+    let mut entries = 0usize;
+    let walker = WalkDir::new(root).follow_links(false).into_iter();
+    for item in walker {
         let item = item.map_err(|error| AruError::msg(format!("skill walk failed: {error}")))?;
+        if let Some((max_depth, max_directories, max_entries)) = structural_limits {
+            entries += 1;
+            if entries > max_entries {
+                return Err(skill_tree_limit_error("entries", max_entries));
+            }
+            if item.depth() > max_depth + 1 {
+                return Err(skill_tree_limit_error("depth", max_depth));
+            }
+            if item.file_type().is_dir() {
+                directories += 1;
+                if directories > max_directories {
+                    return Err(skill_tree_limit_error("directories", max_directories));
+                }
+            }
+        }
         if item.depth() == 0 {
             continue;
         }
@@ -508,6 +480,10 @@ fn limit_error(kind: &str, limit: usize) -> AruError {
     AruError::msg(format!(
         "skill discovery exceeded {kind} limit {limit}; result is truncated and no skills were selected"
     ))
+}
+
+fn skill_tree_limit_error(kind: &str, limit: usize) -> AruError {
+    AruError::msg(format!("skill tree exceeded {kind} limit {limit}"))
 }
 
 #[cfg(test)]
@@ -681,11 +657,6 @@ mod tests {
         let installed = temporary.path().join(".agents/skills/installed");
         write_skill(&installed, "installed");
         write_skill(&installed.join("nested"), "nested");
-        let mut deep = installed;
-        for index in 0..=DISCOVERY_MAX_DEPTH + 1 {
-            deep.push(format!("d{index}"));
-        }
-        std::fs::create_dir_all(deep).unwrap();
         write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
 
         let candidates =
@@ -695,12 +666,69 @@ mod tests {
     }
 
     #[test]
+    fn projection_digest_enforces_discovery_structure_limits() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let projection = temporary.path().join(".agents/skills/installed");
+        write_skill(&projection, "installed");
+        let mut deep = projection;
+        for index in 0..=DISCOVERY_MAX_DEPTH + 1 {
+            deep.push(format!("d{index}"));
+        }
+        std::fs::create_dir_all(deep).unwrap();
+        write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
+        assert!(
+            projection::locked_projection_roots(temporary.path())
+                .unwrap()
+                .is_empty()
+        );
+
+        let entries = tempfile::tempdir().unwrap();
+        write_skill(
+            entries.path(),
+            entries.path().file_name().unwrap().to_str().unwrap(),
+        );
+        let error = canonical_skill_digest_with_structural_limits(
+            entries.path(),
+            SKILL_FILE_MAX_BYTES,
+            SKILL_TOTAL_MAX_BYTES,
+            Some((DISCOVERY_MAX_DEPTH, DISCOVERY_MAX_DIRECTORIES, 1)),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("entries limit"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_projection_ancestor_is_not_hashed_or_pruned() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let projection = temporary.path().join(".agents/skills/installed");
+        write_skill(&projection, "installed");
+        write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
+
+        let external = tempfile::tempdir().unwrap();
+        let external_agents = external.path().join("agents");
+        std::fs::rename(temporary.path().join(".agents"), &external_agents).unwrap();
+        std::os::unix::fs::symlink(&external_agents, temporary.path().join(".agents")).unwrap();
+
+        assert!(
+            projection::locked_projection_roots(temporary.path())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn oversized_source_lock_fails_instead_of_disabling_projection_filtering() {
         use crate::manifest::Target;
 
         let temporary = tempfile::tempdir().unwrap();
         write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
-        let error = locked_projection_roots_with_limit(temporary.path(), 1)
+        let error = projection::locked_projection_roots_with_limit(temporary.path(), 1)
             .unwrap_err()
             .to_string();
         assert!(error.contains("source aru.lock is"));
