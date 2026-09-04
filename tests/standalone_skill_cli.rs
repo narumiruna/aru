@@ -65,6 +65,163 @@ fn explicit_target_installs_without_project_state() {
 }
 
 #[test]
+fn global_flags_install_to_target_user_directories_without_project_state() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    let codex_home = temporary.path().join("codex-home");
+    let config_home = temporary.path().join("config-home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["alpha", "beta"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("CODEX_HOME", &codex_home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "alpha",
+            "-g",
+            "--target",
+            "codex",
+            "--target",
+            "opencode",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Global skills installed"));
+
+    assert!(codex_home.join("skills/alpha/SKILL.md").is_file());
+    assert!(config_home.join("opencode/skills/alpha/SKILL.md").is_file());
+    assert!(!project.join(".agents").exists());
+    assert!(!project.join("aru.toml").exists());
+    assert!(!project.join("aru.lock").exists());
+    assert!(!project.join(".aru").exists());
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env_remove("CODEX_HOME")
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--skill",
+            "beta",
+            "--global",
+            "--target",
+            "pi",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Would create skill beta"));
+    assert!(!home.join(".pi/agent/skills/beta").exists());
+}
+
+#[test]
+fn global_collisions_fail_before_any_target_is_written() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+    let collision = home.join(".claude/skills/demo");
+    std::fs::create_dir_all(&collision).unwrap();
+    std::fs::write(collision.join("manual"), "keep").unwrap();
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "codex",
+            "--target",
+            "claude",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("collision"));
+
+    assert!(!home.join(".codex/skills/demo").exists());
+    assert_eq!(std::fs::read(collision.join("manual")).unwrap(), b"keep");
+}
+
+#[test]
+fn global_install_rejects_unsupported_targets_and_managed_projects() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let standalone = temporary.path().join("standalone");
+    let managed = temporary.path().join("managed");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&standalone).unwrap();
+    std::fs::create_dir(&managed).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&standalone)
+        .env("HOME", &home)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "eve",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "eve does not support global Agent Skills installation",
+        ));
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+
+    cargo_bin_cmd!("aru")
+        .args([
+            "--project",
+            managed.to_str().unwrap(),
+            "init",
+            "--target",
+            "codex",
+        ])
+        .assert()
+        .success();
+    cargo_bin_cmd!("aru")
+        .current_dir(&managed)
+        .env("HOME", &home)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--global is only supported for standalone skill installation",
+        ));
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
+
+#[test]
 fn project_override_alias_and_explicit_skill_use_the_requested_root() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

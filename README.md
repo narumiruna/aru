@@ -229,6 +229,7 @@ aru skill list
 aru skill add owner/repository --skill review
 aru skill add owner/repository --all
 aru skill add --target codex owner/repository --all # works without aru init
+aru skill add --global --target codex owner/repository --skill review
 aru skill update --dry-run
 aru skill update
 aru skill remove owner/repository --skill review
@@ -239,6 +240,7 @@ In an initialized project, a bare `skill add` opens an interactive skill selecto
 
 Without an `aru.toml` in the current directory or an ancestor, `skill add` performs a one-time installation.
 Pass `--target` explicitly or choose one or more targets from the interactive menu.
+Add `-g` or `--global` to install into each target's user-level skill directory instead of the current directory; global mode is rejected when aru discovers an initialized project.
 Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
 
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.

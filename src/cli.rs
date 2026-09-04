@@ -619,6 +619,9 @@ pub struct SkillAddArgs {
     /// Resolve the latest compatible tag or branch head instead of reusing the lock.
     #[arg(short = 'U', long, help_heading = "Source Options")]
     pub upgrade: bool,
+    /// Install into target-native user directories instead of the current directory.
+    #[arg(short = 'g', long, help_heading = "Apply Options")]
+    pub global: bool,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,

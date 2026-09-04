@@ -16,11 +16,16 @@ use crate::resolver::{
 };
 use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
-use crate::transaction::{Operation, apply_standalone};
+use crate::transaction::{Operation, apply_standalone, apply_standalone_global};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
 pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
+    if args.global {
+        return Err(AruError::msg(
+            "--global is only supported for standalone skill installation without aru.toml",
+        ));
+    }
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     skill_add_with_policy(project, args, mode, &mut chooser, policy)
@@ -43,11 +48,22 @@ pub(super) fn add_standalone(
     }
     if args.targets.is_empty() {
         let mut chooser = InquireTargetChooser;
-        let choices = crate::target::specs()
+        let mut choices = Vec::new();
+        for spec in crate::target::specs()
             .iter()
             .filter(|spec| spec.capabilities.skills)
-            .map(|spec| TargetChoice::new(spec.target, spec.project_skills))
-            .collect::<Vec<_>>();
+        {
+            if args.global {
+                if let Some(destination) = crate::target::skill::global_directory(spec.target)? {
+                    choices.push(TargetChoice::new(
+                        spec.target,
+                        &destination.display().to_string(),
+                    ));
+                }
+            } else {
+                choices.push(TargetChoice::new(spec.target, spec.project_skills));
+            }
+        }
         let Some(targets) = terminal_choose_targets(&mut chooser, &choices)? else {
             policy
                 .output
@@ -56,7 +72,7 @@ pub(super) fn add_standalone(
         };
         args.targets = targets;
     }
-    validate_standalone_targets(&args.targets)?;
+    validate_standalone_targets(&args.targets, args.global)?;
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     standalone_add_with_policy(project, &args, mode, &mut chooser, policy)
@@ -104,12 +120,28 @@ fn standalone_add_with_policy(
     let mut plan = Vec::new();
     for skill in selected {
         for target in &args.targets {
-            let destination = crate::target::skill::destination(*target, &skill.name)
-                .ok_or_else(|| AruError::msg(format!("target {target} does not support skills")))?;
-            if !destinations.insert(destination.clone()) {
+            let destination = if args.global {
+                crate::target::skill::global_directory(*target)?
+                    .ok_or_else(|| {
+                        AruError::msg(format!(
+                            "target {target} does not support global Agent Skills installation"
+                        ))
+                    })?
+                    .join(&skill.name)
+            } else {
+                crate::target::skill::destination(*target, &skill.name).ok_or_else(|| {
+                    AruError::msg(format!("target {target} does not support skills"))
+                })?
+            };
+            let absolute_destination = if args.global {
+                destination.clone()
+            } else {
+                project.join(&destination)
+            };
+            if !destinations.insert(absolute_destination.clone()) {
                 continue;
             }
-            let exists = standalone_destination_exists(&project.join(&destination))?;
+            let exists = standalone_destination_exists(&absolute_destination)?;
             if exists && !args.force && args.dry_run {
                 return Err(AruError::msg(format!(
                     "collision: unmanaged skill {:?} already exists at {}; inspect it or rerun with --force",
@@ -140,17 +172,32 @@ fn standalone_add_with_policy(
             .completion("Dry run complete; no files were changed.");
         return Ok(());
     }
-    apply_standalone(project, operations, args.force)?;
+    if args.global {
+        let root = global_transaction_root(&destinations)?;
+        for operation in &mut operations {
+            operation.destination = operation
+                .destination
+                .strip_prefix(&root)
+                .map_err(|_| AruError::msg("global skill destination escaped transaction root"))?
+                .to_path_buf();
+        }
+        apply_standalone_global(&root, operations, args.force)?;
+    } else {
+        apply_standalone(project, operations, args.force)?;
+    }
     for item in &plan {
         policy.output.plan(item, false);
     }
-    policy
-        .output
-        .completion("Standalone skills installed; no aru project state was created.");
+    let completion = if args.global {
+        "Global skills installed; no aru project state was created."
+    } else {
+        "Standalone skills installed; no aru project state was created."
+    };
+    policy.output.completion(completion);
     Ok(())
 }
 
-fn validate_standalone_targets(targets: &[crate::manifest::Target]) -> Result<()> {
+fn validate_standalone_targets(targets: &[crate::manifest::Target], global: bool) -> Result<()> {
     if targets.is_empty() {
         return Err(AruError::msg(
             "standalone skill installation requires a target",
@@ -167,8 +214,36 @@ fn validate_standalone_targets(targets: &[crate::manifest::Target]) -> Result<()
                 "target {target} does not support Agent Skills"
             )));
         }
+        if global && crate::target::skill::global_directory(*target)?.is_none() {
+            return Err(AruError::msg(format!(
+                "target {target} does not support global Agent Skills installation"
+            )));
+        }
     }
     Ok(())
+}
+
+fn global_transaction_root(
+    destinations: &BTreeSet<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    if destinations.is_empty() {
+        return Err(AruError::msg(
+            "global skill installation produced no destinations",
+        ));
+    }
+    let home = crate::target::skill::global_home_directory()?;
+    for ancestor in home.ancestors() {
+        if ancestor.is_dir()
+            && destinations
+                .iter()
+                .all(|destination| destination.starts_with(ancestor))
+        {
+            return Ok(ancestor.to_path_buf());
+        }
+    }
+    Err(AruError::msg(
+        "global skill destinations do not share the user's filesystem root",
+    ))
 }
 
 fn standalone_requirement(

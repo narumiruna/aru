@@ -7,13 +7,26 @@ use super::{Operation, apply_at, destination_exists, recover_if_needed_at};
 use crate::error::{AruError, IoContext, Result};
 
 pub fn apply_standalone(project: &Path, operations: Vec<Operation>, force: bool) -> Result<()> {
+    apply_unmanaged(project, operations, force, true)
+}
+
+pub fn apply_standalone_global(root: &Path, operations: Vec<Operation>, force: bool) -> Result<()> {
+    apply_unmanaged(root, operations, force, false)
+}
+
+fn apply_unmanaged(
+    root: &Path,
+    operations: Vec<Operation>,
+    force: bool,
+    reject_manifest: bool,
+) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
     }
-    apply_standalone_prepared(project, move || {
+    apply_prepared(root, reject_manifest, move || {
         if !force {
             for operation in &operations {
-                let destination = project.join(&operation.destination);
+                let destination = root.join(&operation.destination);
                 if destination_exists(&destination) {
                     return Err(AruError::msg(format!(
                         "collision: unmanaged entry already exists at {}; inspect it or rerun with --force",
@@ -30,15 +43,23 @@ pub fn apply_standalone_prepared<T>(
     project: &Path,
     prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
 ) -> Result<T> {
-    let (_lock, journal_path) = acquire(project)?;
-    recover_if_needed_at(project, &journal_path)?;
-    if project.join(crate::manifest::MANIFEST_FILE).is_file() {
+    apply_prepared(project, true, prepare)
+}
+
+fn apply_prepared<T>(
+    root: &Path,
+    reject_manifest: bool,
+    prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
+) -> Result<T> {
+    let (_lock, journal_path) = acquire(root)?;
+    recover_if_needed_at(root, &journal_path)?;
+    if reject_manifest && root.join(crate::manifest::MANIFEST_FILE).is_file() {
         return Err(AruError::msg(
             "aru.toml appeared during standalone installation; retry the command",
         ));
     }
     let (operations, output) = prepare()?;
-    apply_at(project, operations, &journal_path)?;
+    apply_at(root, operations, &journal_path)?;
     Ok(output)
 }
 
