@@ -245,6 +245,7 @@ fn locked_projection_roots_with_limit(
         Ok(Some(lock)) => lock,
         Ok(None) | Err(_) => return Ok(BTreeSet::new()),
     };
+    let mut checked = BTreeSet::new();
     let mut ignored = BTreeSet::new();
     for package in lock.skill_packages {
         for skill in package.skills {
@@ -253,8 +254,14 @@ fn locked_projection_roots_with_limit(
             }
             for target in &package.targets {
                 let projection = crate::target::spec(*target).project_skills;
-                if projection.starts_with('.') {
-                    ignored.insert(root.join(projection).join(&skill.name));
+                if !projection.starts_with('.') {
+                    continue;
+                }
+                let candidate = root.join(projection).join(&skill.name);
+                if checked.insert(candidate.clone())
+                    && canonical_skill_digest(&candidate).is_ok_and(|digest| digest == skill.sha256)
+                {
+                    ignored.insert(candidate);
                 }
             }
         }
@@ -519,6 +526,16 @@ mod tests {
     fn write_lock(path: &Path, skills: &[(&str, &[crate::manifest::Target])]) {
         let mut lock = crate::lockfile::Lockfile::empty();
         for (index, (name, targets)) in skills.iter().enumerate() {
+            let sha256 = targets
+                .iter()
+                .find_map(|target| {
+                    let projection = crate::target::spec(*target).project_skills;
+                    projection
+                        .starts_with('.')
+                        .then(|| canonical_skill_digest(&path.join(projection).join(name)).ok())
+                        .flatten()
+                })
+                .unwrap_or_else(|| format!("sha256:{}", "0".repeat(64)));
             lock.skill_packages.push(crate::lockfile::SkillPackage {
                 source: format!("git+https://example.com/source-{index}.git"),
                 requirement: "version:*".into(),
@@ -529,7 +546,7 @@ mod tests {
                 skills: vec![crate::lockfile::LockedSkill {
                     name: (*name).into(),
                     path: format!("skills/{name}"),
-                    sha256: format!("sha256:{}", "0".repeat(64)),
+                    sha256,
                     origin: None,
                 }],
             });
@@ -636,6 +653,23 @@ mod tests {
                 "untracked"
             ]
         );
+    }
+
+    #[test]
+    fn discovery_preserves_drifted_locked_projection_content() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let projection = temporary.path().join(".agents/skills/drifted");
+        write_skill(&projection, "drifted");
+        write_lock(temporary.path(), &[("drifted", &[Target::Codex])]);
+        std::fs::write(projection.join("notes.md"), "authored after lock\n").unwrap();
+
+        let candidates =
+            discover_candidates(temporary.path(), "repository", &BTreeMap::new()).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "drifted");
+        assert_eq!(candidates[0].relative_path, ".agents/skills/drifted");
     }
 
     #[test]
