@@ -39,6 +39,8 @@ aru skill add owner/repository --all --target codex    # target subset
 A bare command requires an interactive terminal. Scripts, pipes, redirected shells, and CI must pass `--all`, `--skill`, or `--path` explicitly.
 
 Aru discovers a skill at the repository root (`./SKILL.md`) or in any nested directory (`**/SKILL.md`) within the discovery limits.
+When the source repository contains a valid `aru.lock`, automatic discovery ignores a skill under a hidden target projection directory such as `.agents/skills/` or `.pi/skills/` if that skill name is already locked.
+This prevents installed project copies from appearing as duplicate source exports while preserving untracked skills in those directories; use `--path` to select a projection directory explicitly.
 A skill's `name` must match the directory that directly contains its `SKILL.md`; a root skill must match the repository name.
 
 Selection intent is preserved:

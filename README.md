@@ -244,6 +244,7 @@ Standalone installation leaves no manifest, lockfile, ownership state, or projec
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.
 
 Aru discovers skills from `SKILL.md` files at the repository root or in nested directories within its discovery limits.
+When a source repository has a valid `aru.lock`, automatic discovery ignores matching locked skills under hidden target projection directories such as `.agents/skills/` and `.pi/skills/`; an explicit `--path` still selects one of these directories.
 
 Each skill's `name` must match the directory containing its `SKILL.md`, or the repository name for a root skill.
 
