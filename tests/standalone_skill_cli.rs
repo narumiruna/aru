@@ -105,8 +105,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
     assert!(!project.join("aru.toml").exists());
     assert!(!project.join("aru.lock").exists());
     assert!(!project.join(".aru").exists());
-    assert!(state_home.join("aru/standalone/operation.lock").is_file());
-    assert!(!state_home.join("aru/standalone/transaction.toml").exists());
+    assert!(!state_home.exists());
 
     cargo_bin_cmd!("aru")
         .current_dir(&project)
@@ -159,6 +158,42 @@ fn complete_target_override_does_not_require_a_home_directory() {
 
     assert!(codex_home.join("skills/demo/SKILL.md").is_file());
     assert!(!project.join(".aru").exists());
+}
+
+#[test]
+fn global_dry_run_rejects_nested_destinations_before_writing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    let nested_codex_home = home.join(".claude/skills/demo");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("CODEX_HOME", &nested_codex_home)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "claude",
+            "--target",
+            "codex",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "transaction destinations must not be nested",
+        ));
+
+    assert!(!home.join(".claude").exists());
 }
 
 #[test]

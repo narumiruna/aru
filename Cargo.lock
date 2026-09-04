@@ -82,6 +82,7 @@ dependencies = [
  "hex",
  "inquire",
  "jsonc-parser",
+ "libc",
  "percent-encoding",
  "predicates",
  "reqwest",

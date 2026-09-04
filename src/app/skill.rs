@@ -16,7 +16,10 @@ use crate::resolver::{
 };
 use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
-use crate::transaction::{Operation, apply_standalone, apply_standalone_global};
+use crate::transaction::{
+    Operation, apply_standalone, apply_standalone_global, validate_standalone_dry_run,
+    validate_standalone_global_dry_run,
+};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
@@ -118,6 +121,7 @@ fn standalone_add_with_policy(
     let mut destinations = BTreeSet::new();
     let mut operations = Vec::new();
     let mut plan = Vec::new();
+    let mut collision = None;
     for skill in selected {
         for target in &args.targets {
             let destination = if args.global {
@@ -142,12 +146,12 @@ fn standalone_add_with_policy(
                 continue;
             }
             let exists = standalone_destination_exists(&absolute_destination)?;
-            if exists && !args.force && args.dry_run {
-                return Err(AruError::msg(format!(
+            if exists && !args.force && args.dry_run && collision.is_none() {
+                collision = Some(format!(
                     "collision: unmanaged skill {:?} already exists at {}; inspect it or rerun with --force",
                     skill.name,
                     destination.display()
-                )));
+                ));
             }
             let verb = if exists { "force replace" } else { "create" };
             plan.push(format!(
@@ -164,6 +168,14 @@ fn standalone_add_with_policy(
     }
     plan.sort();
     if args.dry_run {
+        if args.global {
+            validate_standalone_global_dry_run(project, &operations)?;
+        } else {
+            validate_standalone_dry_run(project, &operations)?;
+        }
+        if let Some(collision) = collision {
+            return Err(AruError::msg(collision));
+        }
         for item in &plan {
             policy.output.plan(item, true);
         }
