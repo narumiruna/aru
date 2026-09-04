@@ -301,6 +301,7 @@ struct SkillTreeStructuralBudget {
     max_entries: usize,
     directories: usize,
     entries: usize,
+    exceeded: bool,
 }
 
 impl SkillTreeStructuralBudget {
@@ -311,24 +312,32 @@ impl SkillTreeStructuralBudget {
             max_entries,
             directories: 0,
             entries: 0,
+            exceeded: false,
         }
     }
 
     fn consume(&mut self, item: &walkdir::DirEntry) -> Result<()> {
         if self.entries >= self.max_entries {
+            self.exceeded = true;
             return Err(skill_tree_limit_error("entries", self.max_entries));
         }
         self.entries += 1;
         if item.depth() > self.max_depth + 1 {
+            self.exceeded = true;
             return Err(skill_tree_limit_error("depth", self.max_depth));
         }
         if item.file_type().is_dir() {
             if self.directories >= self.max_directories {
+                self.exceeded = true;
                 return Err(skill_tree_limit_error("directories", self.max_directories));
             }
             self.directories += 1;
         }
         Ok(())
+    }
+
+    fn exceeded(&self) -> bool {
+        self.exceeded
     }
 }
 
@@ -701,11 +710,10 @@ mod tests {
         }
         std::fs::create_dir_all(deep).unwrap();
         write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
-        assert!(
-            projection::locked_projection_roots(temporary.path())
-                .unwrap()
-                .is_empty()
-        );
+        let error = projection::locked_projection_roots(temporary.path())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("depth limit"));
 
         let entries = tempfile::tempdir().unwrap();
         write_skill(
@@ -726,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_digests_share_one_discovery_budget() {
+    fn projection_digest_budget_exhaustion_fails_closed() {
         use crate::manifest::Target;
 
         let temporary = tempfile::tempdir().unwrap();
@@ -739,16 +747,17 @@ mod tests {
             &[("first", &[Target::Codex]), ("second", &[Target::Codex])],
         );
 
-        let ignored = projection::locked_projection_roots_with_limits(
+        let error = projection::locked_projection_roots_with_limits(
             temporary.path(),
             u64::MAX,
             DISCOVERY_MAX_DEPTH,
             DISCOVERY_MAX_DIRECTORIES,
             3,
         )
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
-        assert_eq!(ignored, BTreeSet::from([first]));
+        assert!(error.contains("entries limit 3"));
     }
 
     #[cfg(unix)]

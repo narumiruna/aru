@@ -81,12 +81,17 @@ pub(super) fn locked_projection_roots_with_limits(
                     continue;
                 }
                 let candidate = root.join(projection).join(&skill.name);
-                if checked.insert(candidate.clone())
-                    && projection_root_is_safe(root, &candidate)
-                    && canonical_projection_digest(&candidate, &mut structural_budget)
-                        .is_ok_and(|digest| digest == skill.sha256)
+                if !checked.insert(candidate.clone()) || !projection_root_is_safe(root, &candidate)
                 {
-                    ignored.insert(candidate);
+                    continue;
+                }
+                match canonical_projection_digest(&candidate, &mut structural_budget) {
+                    Ok(digest) if digest == skill.sha256 => {
+                        ignored.insert(candidate);
+                    }
+                    Ok(_) => {}
+                    Err(error) if structural_budget.exceeded() => return Err(error),
+                    Err(_) => {}
                 }
             }
         }
