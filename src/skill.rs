@@ -39,8 +39,8 @@ pub fn discover_candidates(
 ) -> Result<Vec<DiscoveredSkill>> {
     let mut candidates = BTreeMap::<String, PathBuf>::new();
 
-    let locked_skill_names = locked_skill_names(root);
-    discover_recursively(root, root_name, &locked_skill_names, &mut candidates)?;
+    let ignored_projection_roots = locked_projection_roots(root)?;
+    discover_recursively(root, root_name, &ignored_projection_roots, &mut candidates)?;
     for (expected_name, relative) in explicit_paths {
         let relative_path = validate_relative_selector(relative)?;
         let selected = root.join(&relative_path);
@@ -149,13 +149,13 @@ pub fn discover_and_select(
 fn discover_recursively(
     root: &Path,
     root_name: &str,
-    locked_skill_names: &BTreeSet<String>,
+    ignored_projection_roots: &BTreeSet<PathBuf>,
     candidates: &mut BTreeMap<String, PathBuf>,
 ) -> Result<()> {
     discover_recursively_with_limits(
         root,
         root_name,
-        locked_skill_names,
+        ignored_projection_roots,
         candidates,
         DISCOVERY_MAX_DEPTH,
         DISCOVERY_MAX_DIRECTORIES,
@@ -166,7 +166,7 @@ fn discover_recursively(
 fn discover_recursively_with_limits(
     root: &Path,
     root_name: &str,
-    locked_skill_names: &BTreeSet<String>,
+    ignored_projection_roots: &BTreeSet<PathBuf>,
     candidates: &mut BTreeMap<String, PathBuf>,
     max_depth: usize,
     max_directories: usize,
@@ -177,10 +177,12 @@ fn discover_recursively_with_limits(
     }
     let mut directories = 0usize;
     let mut entries = 0usize;
-    for item in WalkDir::new(root)
+    let walker = WalkDir::new(root)
         .follow_links(false)
         .max_depth(max_depth + 2)
-    {
+        .into_iter()
+        .filter_entry(|item| !ignored_projection_roots.contains(item.path()));
+    for item in walker {
         let item =
             item.map_err(|error| AruError::msg(format!("skill discovery failed: {error}")))?;
         entries += 1;
@@ -204,47 +206,60 @@ fn discover_recursively_with_limits(
                         .to_str()
                         .ok_or_else(|| AruError::msg("skill directory name is not valid UTF-8"))?
                 };
-                if !is_locked_projection(root, item.path(), expected_name, locked_skill_names) {
-                    insert_candidate(candidates, expected_name, item.path().to_path_buf())?;
-                }
+                insert_candidate(candidates, expected_name, item.path().to_path_buf())?;
             }
         }
     }
     Ok(())
 }
 
-fn locked_skill_names(root: &Path) -> BTreeSet<String> {
-    let path = root.join(crate::lockfile::LOCK_FILE);
-    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-        return BTreeSet::new();
-    };
-    if !metadata.file_type().is_file() || metadata.len() > SOURCE_LOCK_MAX_BYTES {
-        return BTreeSet::new();
-    }
-    let Ok(Some(lock)) = crate::lockfile::Lockfile::load_optional(root) else {
-        return BTreeSet::new();
-    };
-    lock.skill_packages
-        .into_iter()
-        .flat_map(|package| package.skills.into_iter().map(|skill| skill.name))
-        .collect()
+fn locked_projection_roots(root: &Path) -> Result<BTreeSet<PathBuf>> {
+    locked_projection_roots_with_limit(root, SOURCE_LOCK_MAX_BYTES)
 }
 
-fn is_locked_projection(
+fn locked_projection_roots_with_limit(
     root: &Path,
-    candidate: &Path,
-    name: &str,
-    locked_skill_names: &BTreeSet<String>,
-) -> bool {
-    if !locked_skill_names.contains(name) {
-        return false;
-    }
-    let Ok(relative) = candidate.strip_prefix(root) else {
-        return false;
+    max_lock_bytes: u64,
+) -> Result<BTreeSet<PathBuf>> {
+    let path = root.join(crate::lockfile::LOCK_FILE);
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => {
+            return Err(crate::error::AruError::Io {
+                path,
+                source: error,
+            });
+        }
     };
-    crate::target::TARGET_SPECS.iter().any(|spec| {
-        spec.project_skills.starts_with('.') && relative.starts_with(spec.project_skills)
-    })
+    if !metadata.file_type().is_file() {
+        return Ok(BTreeSet::new());
+    }
+    if metadata.len() > max_lock_bytes {
+        return Err(AruError::msg(format!(
+            "source aru.lock is {} bytes; skill discovery limit is {max_lock_bytes} bytes",
+            metadata.len()
+        )));
+    }
+    let lock = match crate::lockfile::Lockfile::load_optional(root) {
+        Ok(Some(lock)) => lock,
+        Ok(None) | Err(_) => return Ok(BTreeSet::new()),
+    };
+    let mut ignored = BTreeSet::new();
+    for package in lock.skill_packages {
+        for skill in package.skills {
+            if crate::manifest::validate_name(&skill.name, "skill name").is_err() {
+                continue;
+            }
+            for target in &package.targets {
+                let projection = crate::target::spec(*target).project_skills;
+                if projection.starts_with('.') {
+                    ignored.insert(root.join(projection).join(&skill.name));
+                }
+            }
+        }
+    }
+    Ok(ignored)
 }
 
 fn insert_candidate(
@@ -501,25 +516,24 @@ mod tests {
         .unwrap();
     }
 
-    fn write_lock(path: &Path, names: &[&str]) {
+    fn write_lock(path: &Path, skills: &[(&str, &[crate::manifest::Target])]) {
         let mut lock = crate::lockfile::Lockfile::empty();
-        lock.skill_packages.push(crate::lockfile::SkillPackage {
-            source: "git+https://example.com/source.git".into(),
-            requirement: "version:*".into(),
-            version: "1.0.0".into(),
-            revision: "a".repeat(40),
-            repository_name: "source".into(),
-            targets: vec![crate::manifest::Target::Codex],
-            skills: names
-                .iter()
-                .map(|name| crate::lockfile::LockedSkill {
+        for (index, (name, targets)) in skills.iter().enumerate() {
+            lock.skill_packages.push(crate::lockfile::SkillPackage {
+                source: format!("git+https://example.com/source-{index}.git"),
+                requirement: "version:*".into(),
+                version: "1.0.0".into(),
+                revision: format!("{index:040x}"),
+                repository_name: format!("source-{index}"),
+                targets: targets.to_vec(),
+                skills: vec![crate::lockfile::LockedSkill {
                     name: (*name).into(),
                     path: format!("skills/{name}"),
                     sha256: format!("sha256:{}", "0".repeat(64)),
                     origin: None,
-                })
-                .collect(),
-        });
+                }],
+            });
+        }
         std::fs::write(path.join(crate::lockfile::LOCK_FILE), lock.bytes().unwrap()).unwrap();
     }
 
@@ -557,7 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn discovery_ignores_locked_projection_copies_but_allows_explicit_paths() {
+    fn discovery_ignores_only_actual_locked_projection_targets() {
+        use crate::manifest::Target;
+
         let temporary = tempfile::tempdir().unwrap();
         write_skill(&temporary.path().join("skills/source"), "source");
         write_skill(
@@ -569,10 +585,31 @@ mod tests {
             "pi-installed",
         );
         write_skill(
+            &temporary.path().join(".claude/skills/claude-installed"),
+            "claude-installed",
+        );
+        write_skill(
+            &temporary.path().join(".agents/skills/claude-only"),
+            "claude-only",
+        );
+        write_skill(
+            &temporary.path().join(".agents/skills/openclaw-only"),
+            "openclaw-only",
+        );
+        write_skill(
             &temporary.path().join(".claude/skills/untracked"),
             "untracked",
         );
-        write_lock(temporary.path(), &["installed", "pi-installed"]);
+        write_lock(
+            temporary.path(),
+            &[
+                ("installed", &[Target::Codex]),
+                ("pi-installed", &[Target::Pi]),
+                ("claude-installed", &[Target::Claude]),
+                ("claude-only", &[Target::Claude]),
+                ("openclaw-only", &[Target::Openclaw]),
+            ],
+        );
 
         let candidates =
             discover_candidates(temporary.path(), "repository", &BTreeMap::new()).unwrap();
@@ -581,7 +618,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.name.as_str())
                 .collect::<Vec<_>>(),
-            ["source", "untracked"]
+            ["claude-only", "openclaw-only", "source", "untracked"]
         );
 
         let explicit = BTreeMap::from([("installed".into(), ".agents/skills/installed".into())]);
@@ -591,8 +628,49 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.name.as_str())
                 .collect::<Vec<_>>(),
-            ["installed", "source", "untracked"]
+            [
+                "claude-only",
+                "installed",
+                "openclaw-only",
+                "source",
+                "untracked"
+            ]
         );
+    }
+
+    #[test]
+    fn discovery_prunes_locked_projection_subtrees() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(&temporary.path().join("skills/source"), "source");
+        let installed = temporary.path().join(".agents/skills/installed");
+        write_skill(&installed, "installed");
+        write_skill(&installed.join("nested"), "nested");
+        let mut deep = installed;
+        for index in 0..=DISCOVERY_MAX_DEPTH + 1 {
+            deep.push(format!("d{index}"));
+        }
+        std::fs::create_dir_all(deep).unwrap();
+        write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
+
+        let candidates =
+            discover_candidates(temporary.path(), "repository", &BTreeMap::new()).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "source");
+    }
+
+    #[test]
+    fn oversized_source_lock_fails_instead_of_disabling_projection_filtering() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        write_lock(temporary.path(), &[("installed", &[Target::Codex])]);
+        let error = locked_projection_roots_with_limit(temporary.path(), 1)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("source aru.lock is"));
+        assert!(error.contains("skill discovery limit is 1 byte"));
     }
 
     #[test]
