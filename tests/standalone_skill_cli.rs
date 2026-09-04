@@ -72,6 +72,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
     let home = temporary.path().join("home");
     let codex_home = temporary.path().join("codex-home");
     let config_home = temporary.path().join("config-home");
+    let state_home = temporary.path().join("state-home");
     std::fs::create_dir(&project).unwrap();
     std::fs::create_dir(&home).unwrap();
     create_repository(&repository, &["alpha", "beta"]);
@@ -81,6 +82,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
         .env("HOME", &home)
         .env("CODEX_HOME", &codex_home)
         .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
         .args([
             "skill",
             "add",
@@ -103,6 +105,8 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
     assert!(!project.join("aru.toml").exists());
     assert!(!project.join("aru.lock").exists());
     assert!(!project.join(".aru").exists());
+    assert!(state_home.join("aru/standalone/operation.lock").is_file());
+    assert!(!state_home.join("aru/standalone/transaction.toml").exists());
 
     cargo_bin_cmd!("aru")
         .current_dir(&project)

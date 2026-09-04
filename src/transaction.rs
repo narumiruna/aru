@@ -208,6 +208,7 @@ fn apply_with_mode(
     for operation in &operations {
         validate_destination(mode, &operation.destination)?;
         validate_ancestors(mode, &operation.destination)?;
+        journal_string(mode, &resolve_path(mode, &operation.destination))?;
     }
 
     let transaction_id = unique_suffix();
@@ -997,6 +998,51 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(&first).unwrap(), b"recovered");
         assert!(!second.exists());
+    }
+
+    #[test]
+    fn global_transaction_recovers_an_overlapping_project_scoped_install() {
+        let project = tempfile::tempdir().unwrap();
+        let other_project = tempfile::tempdir().unwrap();
+        let destination = project.path().join(".kiro/skills/demo");
+
+        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
+        let crashed = apply_standalone(
+            project.path(),
+            vec![Operation::file(".kiro/skills/demo", b"project".to_vec())],
+            true,
+        );
+        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
+        assert!(crashed.is_err());
+
+        apply_standalone_global(
+            other_project.path(),
+            vec![Operation::file(&destination, b"global".to_vec())],
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), b"global");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_transaction_rejects_non_utf8_paths_before_staging() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let invalid = std::ffi::OsString::from_vec(vec![b'n', b'o', b'n', b'-', 0xff]);
+        let destination_root = root.path().join(invalid);
+        let destination = destination_root.join("skills/demo");
+        let journal = root.path().join("control/transaction.toml");
+
+        let result = apply_absolute_at(
+            vec![Operation::file(&destination, b"demo".to_vec())],
+            &journal,
+        );
+
+        assert!(result.is_err());
+        assert!(!destination_root.exists());
+        assert!(!journal.exists());
     }
 
     #[test]

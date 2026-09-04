@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 
 use super::{
-    Operation, apply_absolute_at, apply_at, destination_exists, recover_absolute_if_needed_at,
+    Operation, apply_absolute_at, destination_exists, recover_absolute_if_needed_at,
     recover_if_needed_at,
 };
 use crate::error::{AruError, IoContext, Result};
@@ -27,13 +27,9 @@ pub fn apply_standalone_global(
     if operations.is_empty() {
         return Ok(());
     }
-    let (_lock, journal_path) = acquire_global()?;
+    let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
     recover_absolute_if_needed_at(&journal_path)?;
-    if project.join(crate::manifest::MANIFEST_FILE).is_file() {
-        return Err(AruError::msg(
-            "aru.toml appeared during global skill installation; retry the command",
-        ));
-    }
+    validate_standalone_root(project, "global skill")?;
     validate_collisions(&operations, force, Path::to_path_buf)?;
     apply_absolute_at(operations, &journal_path)
 }
@@ -62,19 +58,39 @@ pub fn apply_standalone_prepared<T>(
     project: &Path,
     prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
 ) -> Result<T> {
-    let (_lock, journal_path) = acquire(project)?;
-    recover_if_needed_at(project, &journal_path)?;
-    if project.join(crate::manifest::MANIFEST_FILE).is_file() {
-        return Err(AruError::msg(
-            "aru.toml appeared during standalone installation; retry the command",
-        ));
+    let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
+    recover_absolute_if_needed_at(&journal_path)?;
+    validate_standalone_root(project, "standalone")?;
+    let (mut operations, output) = prepare()?;
+    for operation in &mut operations {
+        if operation.destination.is_absolute() {
+            return Err(AruError::msg(
+                "standalone transaction destination must be project-relative",
+            ));
+        }
+        operation.destination = project.join(&operation.destination);
     }
-    let (operations, output) = prepare()?;
-    apply_at(project, operations, &journal_path)?;
+    apply_absolute_at(operations, &journal_path)?;
     Ok(output)
 }
 
-fn acquire(project: &Path) -> Result<(File, PathBuf)> {
+fn validate_standalone_root(project: &Path, operation: &str) -> Result<()> {
+    if project.join(crate::manifest::MANIFEST_FILE).is_file() {
+        return Err(AruError::msg(format!(
+            "aru.toml appeared during {operation} installation; retry the command"
+        )));
+    }
+    Ok(())
+}
+
+fn acquire_for_project(project: &Path) -> Result<(File, File, PathBuf)> {
+    let (global_lock, journal_path) = acquire_global()?;
+    let (legacy_lock, legacy_journal_path) = acquire_legacy(project)?;
+    recover_if_needed_at(project, &legacy_journal_path)?;
+    Ok((global_lock, legacy_lock, journal_path))
+}
+
+fn acquire_legacy(project: &Path) -> Result<(File, PathBuf)> {
     let canonical = project.canonicalize().at(project)?;
     let digest = crate::digest::sha256_bytes(canonical.as_os_str().as_encoded_bytes());
     acquire_control(
@@ -88,25 +104,37 @@ fn acquire_global() -> Result<(File, PathBuf)> {
     acquire_control(global_control_directory()?)
 }
 
+#[cfg(not(test))]
 fn global_control_directory() -> Result<PathBuf> {
-    let root = std::env::temp_dir().join("aru-standalone");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
+    let root = match std::env::var_os("XDG_STATE_HOME") {
+        Some(value) if !value.is_empty() => {
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(AruError::msg(
+                    "XDG_STATE_HOME must be an absolute path for standalone transaction state",
+                ));
+            }
+            path
+        }
+        _ => dirs::state_dir().or_else(dirs::data_local_dir).ok_or_else(|| {
+            AruError::msg(
+                "could not determine a durable user state directory for standalone transactions",
+            )
+        })?,
+    };
+    if !root.is_absolute() {
+        return Err(AruError::msg(
+            "durable user state directory must be an absolute path",
+        ));
+    }
+    Ok(root.join("aru/standalone"))
+}
 
-        std::fs::create_dir_all(&root).at(&root)?;
-        let probe = tempfile::tempfile_in(&root)
-            .map_err(|error| AruError::msg(format!("could not identify current user: {error}")))?;
-        let user = probe
-            .metadata()
-            .map_err(|error| AruError::msg(format!("could not identify current user: {error}")))?
-            .uid();
-        Ok(root.join(format!("global-{user}")))
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(root.join("global"))
-    }
+#[cfg(test)]
+fn global_control_directory() -> Result<PathBuf> {
+    Ok(std::env::temp_dir()
+        .join("aru-standalone-tests")
+        .join(std::process::id().to_string()))
 }
 
 fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {

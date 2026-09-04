@@ -29,6 +29,7 @@ Standalone installation writes a complete independent copy to each unique target
 This applies to both project-directory and global standalone installs.
 It rejects an existing same-name destination before any write unless `--force` is passed.
 It does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, and the installed copies are not managed by `skill update`, `skill remove`, or `sync`.
+Mutating standalone installs coordinate through aru's durable per-user state directory, honoring an absolute `XDG_STATE_HOME`; the recovery journal is removed after a completed transaction.
 `--dry-run` validates and previews the complete installation without writing.
 `--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
 
