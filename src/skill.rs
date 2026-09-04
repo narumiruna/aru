@@ -292,37 +292,60 @@ fn canonical_skill_digest_with_limits(
     file_max_bytes: u64,
     total_max_bytes: u64,
 ) -> Result<String> {
-    canonical_skill_digest_with_structural_limits(root, file_max_bytes, total_max_bytes, None)
+    canonical_skill_digest_with_structural_budget(root, file_max_bytes, total_max_bytes, None)
 }
 
-fn canonical_skill_digest_with_structural_limits(
+struct SkillTreeStructuralBudget {
+    max_depth: usize,
+    max_directories: usize,
+    max_entries: usize,
+    directories: usize,
+    entries: usize,
+}
+
+impl SkillTreeStructuralBudget {
+    fn new(max_depth: usize, max_directories: usize, max_entries: usize) -> Self {
+        Self {
+            max_depth,
+            max_directories,
+            max_entries,
+            directories: 0,
+            entries: 0,
+        }
+    }
+
+    fn consume(&mut self, item: &walkdir::DirEntry) -> Result<()> {
+        if self.entries >= self.max_entries {
+            return Err(skill_tree_limit_error("entries", self.max_entries));
+        }
+        self.entries += 1;
+        if item.depth() > self.max_depth + 1 {
+            return Err(skill_tree_limit_error("depth", self.max_depth));
+        }
+        if item.file_type().is_dir() {
+            if self.directories >= self.max_directories {
+                return Err(skill_tree_limit_error("directories", self.max_directories));
+            }
+            self.directories += 1;
+        }
+        Ok(())
+    }
+}
+
+fn canonical_skill_digest_with_structural_budget(
     root: &Path,
     file_max_bytes: u64,
     total_max_bytes: u64,
-    structural_limits: Option<(usize, usize, usize)>,
+    mut structural_budget: Option<&mut SkillTreeStructuralBudget>,
 ) -> Result<String> {
     let mut files = Vec::new();
     let mut folded = BTreeSet::new();
     let mut total_bytes = 0u64;
-    let mut directories = 0usize;
-    let mut entries = 0usize;
     let walker = WalkDir::new(root).follow_links(false).into_iter();
     for item in walker {
         let item = item.map_err(|error| AruError::msg(format!("skill walk failed: {error}")))?;
-        if let Some((max_depth, max_directories, max_entries)) = structural_limits {
-            entries += 1;
-            if entries > max_entries {
-                return Err(skill_tree_limit_error("entries", max_entries));
-            }
-            if item.depth() > max_depth + 1 {
-                return Err(skill_tree_limit_error("depth", max_depth));
-            }
-            if item.file_type().is_dir() {
-                directories += 1;
-                if directories > max_directories {
-                    return Err(skill_tree_limit_error("directories", max_directories));
-                }
-            }
+        if let Some(budget) = structural_budget.as_deref_mut() {
+            budget.consume(&item)?;
         }
         if item.depth() == 0 {
             continue;
@@ -689,15 +712,43 @@ mod tests {
             entries.path(),
             entries.path().file_name().unwrap().to_str().unwrap(),
         );
-        let error = canonical_skill_digest_with_structural_limits(
+        let mut budget =
+            SkillTreeStructuralBudget::new(DISCOVERY_MAX_DEPTH, DISCOVERY_MAX_DIRECTORIES, 1);
+        let error = canonical_skill_digest_with_structural_budget(
             entries.path(),
             SKILL_FILE_MAX_BYTES,
             SKILL_TOTAL_MAX_BYTES,
-            Some((DISCOVERY_MAX_DEPTH, DISCOVERY_MAX_DIRECTORIES, 1)),
+            Some(&mut budget),
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("entries limit"));
+    }
+
+    #[test]
+    fn projection_digests_share_one_discovery_budget() {
+        use crate::manifest::Target;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let first = temporary.path().join(".agents/skills/first");
+        let second = temporary.path().join(".agents/skills/second");
+        write_skill(&first, "first");
+        write_skill(&second, "second");
+        write_lock(
+            temporary.path(),
+            &[("first", &[Target::Codex]), ("second", &[Target::Codex])],
+        );
+
+        let ignored = projection::locked_projection_roots_with_limits(
+            temporary.path(),
+            u64::MAX,
+            DISCOVERY_MAX_DEPTH,
+            DISCOVERY_MAX_DIRECTORIES,
+            3,
+        )
+        .unwrap();
+
+        assert_eq!(ignored, BTreeSet::from([first]));
     }
 
     #[cfg(unix)]
