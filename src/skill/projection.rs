@@ -5,18 +5,42 @@ use crate::error::{AruError, Result};
 
 use super::{
     DISCOVERY_MAX_DEPTH, DISCOVERY_MAX_DIRECTORIES, DISCOVERY_MAX_ENTRIES, SKILL_FILE_MAX_BYTES,
-    SKILL_TOTAL_MAX_BYTES, canonical_skill_digest_with_structural_limits,
+    SKILL_TOTAL_MAX_BYTES, SkillTreeStructuralBudget,
+    canonical_skill_digest_with_structural_budget,
 };
 
 const SOURCE_LOCK_MAX_BYTES: u64 = 10 * 1024 * 1024;
 
 pub(super) fn locked_projection_roots(root: &Path) -> Result<BTreeSet<PathBuf>> {
-    locked_projection_roots_with_limit(root, SOURCE_LOCK_MAX_BYTES)
+    locked_projection_roots_with_limits(
+        root,
+        SOURCE_LOCK_MAX_BYTES,
+        DISCOVERY_MAX_DEPTH,
+        DISCOVERY_MAX_DIRECTORIES,
+        DISCOVERY_MAX_ENTRIES,
+    )
 }
 
+#[cfg(test)]
 pub(super) fn locked_projection_roots_with_limit(
     root: &Path,
     max_lock_bytes: u64,
+) -> Result<BTreeSet<PathBuf>> {
+    locked_projection_roots_with_limits(
+        root,
+        max_lock_bytes,
+        DISCOVERY_MAX_DEPTH,
+        DISCOVERY_MAX_DIRECTORIES,
+        DISCOVERY_MAX_ENTRIES,
+    )
+}
+
+pub(super) fn locked_projection_roots_with_limits(
+    root: &Path,
+    max_lock_bytes: u64,
+    max_depth: usize,
+    max_directories: usize,
+    max_entries: usize,
 ) -> Result<BTreeSet<PathBuf>> {
     let path = root.join(crate::lockfile::LOCK_FILE);
     let metadata = match std::fs::symlink_metadata(&path) {
@@ -44,6 +68,8 @@ pub(super) fn locked_projection_roots_with_limit(
     };
     let mut checked = BTreeSet::new();
     let mut ignored = BTreeSet::new();
+    let mut structural_budget =
+        SkillTreeStructuralBudget::new(max_depth, max_directories, max_entries);
     for package in lock.skill_packages {
         for skill in package.skills {
             if crate::manifest::validate_name(&skill.name, "skill name").is_err() {
@@ -57,7 +83,7 @@ pub(super) fn locked_projection_roots_with_limit(
                 let candidate = root.join(projection).join(&skill.name);
                 if checked.insert(candidate.clone())
                     && projection_root_is_safe(root, &candidate)
-                    && canonical_projection_digest(&candidate)
+                    && canonical_projection_digest(&candidate, &mut structural_budget)
                         .is_ok_and(|digest| digest == skill.sha256)
                 {
                     ignored.insert(candidate);
@@ -92,15 +118,14 @@ fn projection_root_is_safe(root: &Path, candidate: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn canonical_projection_digest(root: &Path) -> Result<String> {
-    canonical_skill_digest_with_structural_limits(
+fn canonical_projection_digest(
+    root: &Path,
+    structural_budget: &mut SkillTreeStructuralBudget,
+) -> Result<String> {
+    canonical_skill_digest_with_structural_budget(
         root,
         SKILL_FILE_MAX_BYTES,
         SKILL_TOTAL_MAX_BYTES,
-        Some((
-            DISCOVERY_MAX_DEPTH,
-            DISCOVERY_MAX_DIRECTORIES,
-            DISCOVERY_MAX_ENTRIES,
-        )),
+        Some(structural_budget),
     )
 }
