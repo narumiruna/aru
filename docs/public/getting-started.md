@@ -91,7 +91,9 @@ Initialization creates:
 
 - `aru.toml` for human-maintained intent;
 - `aru.lock` for exact, reproducible resolution and projection data;
-- `.aru/` for ignored local cache, ownership, and transaction state.
+- `.aru/` for local cache, ownership, and transaction state.
+
+Aru does not create or modify `.gitignore`. Add `.aru/` to your ignore rules yourself.
 
 ## Adopt existing instructions
 

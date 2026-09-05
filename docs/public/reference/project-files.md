@@ -11,7 +11,7 @@
 | `.aru/state.toml` | No | Local deployment mode and last-applied ownership digests |
 | `.aru/transaction.toml` | No | Crash-recovery journal, present only during interrupted operations |
 
-`aru init` adds `.aru/` to `.gitignore`. Generated target projections are not ignored automatically because each team decides whether to commit them.
+Aru does not create or modify `.gitignore`. Add `.aru/` to your ignore rules yourself. Each team decides whether to ignore or commit generated target projections.
 
 For byte-level persisted-format details, see [`docs/formats.md` on GitHub](https://github.com/narumiruna/aru/blob/main/docs/formats.md).
 
