@@ -54,11 +54,8 @@ pub(super) fn add_standalone(
             .filter(|spec| spec.capabilities.skills)
         {
             if args.global {
-                if let Some(destination) = crate::target::skill::global_directory(spec.target)? {
-                    choices.push(TargetChoice::new(
-                        spec.target,
-                        &destination.display().to_string(),
-                    ));
+                if crate::target::skill::supports_global(spec.target) {
+                    choices.push(TargetChoice::new(spec.target, "user skill directory"));
                 }
             } else {
                 choices.push(TargetChoice::new(spec.target, spec.project_skills));

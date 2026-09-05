@@ -87,6 +87,83 @@ fn standalone_interactive_mcp_add(project: &Path) -> expectrl::session::OsSessio
 }
 
 #[test]
+fn global_target_selection_ignores_unselected_environment_errors() {
+    for target in ["pi", "codex"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let repository = temporary.path().join("repository");
+        let project = temporary.path().join("project");
+        let home = temporary.path().join("home");
+        let codex = temporary.path().join("codex");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        create_repository(&repository, &["demo"]);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
+        command
+            .current_dir(&project)
+            .args([
+                "skill",
+                "add",
+                repository.to_str().unwrap(),
+                "--global",
+                "--all",
+            ])
+            .env("XDG_CONFIG_HOME", "unrelated-relative-config")
+            .env("CODEX_HOME", &codex);
+        if target == "pi" {
+            command.env("HOME", &home);
+        } else {
+            command.env_remove("HOME").env_remove("USERPROFILE");
+        }
+        let mut session = Session::spawn(command).unwrap();
+        session.set_expect_timeout(Some(Duration::from_secs(20)));
+        session.expect("Select targets to install to").unwrap();
+        session.send(target).unwrap();
+        session.send(" ").unwrap();
+        session.send("\r").unwrap();
+        session.expect("Global skills installed").unwrap();
+        session.expect(Eof).unwrap();
+        let destination = if target == "pi" {
+            home.join(".pi/agent/skills/demo")
+        } else {
+            codex.join("skills/demo")
+        };
+        assert!(destination.join("SKILL.md").is_file());
+        assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+    }
+}
+
+#[test]
+fn global_target_selection_validates_a_selected_override_before_writing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
+    command
+        .current_dir(&project)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--global",
+            "--all",
+        ])
+        .env("CODEX_HOME", "invalid-relative-override");
+    let mut session = Session::spawn(command).unwrap();
+    session.set_expect_timeout(Some(Duration::from_secs(20)));
+    session.expect("Select targets to install to").unwrap();
+    session.send("codex").unwrap();
+    session.send(" ").unwrap();
+    session.send("\r").unwrap();
+    session
+        .expect("CODEX_HOME must be an absolute path")
+        .unwrap();
+    session.expect(Eof).unwrap();
+    assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+}
+
+#[test]
 fn standalone_mcp_target_multiselect_installs_checked_target() {
     let project = tempfile::tempdir().unwrap();
 

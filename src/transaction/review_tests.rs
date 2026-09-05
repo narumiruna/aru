@@ -4,7 +4,9 @@ use super::*;
 fn managed_work_recovers_legacy_standalone_journals_before_project_writes() {
     for drift in [false, true] {
         let project = tempfile::tempdir().unwrap();
-        let legacy = standalone::legacy_control_directory(project.path()).unwrap();
+        let legacy = standalone::legacy_control_directory(project.path())
+            .unwrap()
+            .unwrap();
         let journal = legacy.join("transaction.toml");
         std::fs::create_dir_all(&legacy).unwrap();
         #[cfg(unix)]
@@ -80,7 +82,7 @@ fn case_ambiguous_destinations_are_rejected_before_any_staging() {
         let preview = StandaloneDryRun::begin(project.path(), true).unwrap();
         assert!(preview.validate(&operations()).is_err());
         drop(preview);
-        assert!(apply_absolute_at(operations(), &journal).is_err());
+        assert!(apply_absolute_at(operations(), &journal, true).is_err());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
     }
 }

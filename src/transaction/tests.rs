@@ -258,6 +258,7 @@ fn absolute_transaction_supports_non_utf8_paths_losslessly() {
     apply_absolute_at(
         vec![Operation::file(&destination, b"demo".to_vec())],
         &journal,
+        true,
     )
     .unwrap();
 
@@ -312,6 +313,7 @@ fn aliased_absolute_destinations_are_rejected_before_staging() {
             Operation::file(&alias_destination, b"alias".to_vec()),
         ],
         &journal,
+        true,
     );
 
     assert!(result.is_err());
@@ -344,6 +346,7 @@ fn nested_absolute_destinations_are_rejected_before_staging() {
             Operation::file(&descendant, b"descendant".to_vec()),
         ],
         &journal,
+        true,
     );
 
     assert!(result.is_err());

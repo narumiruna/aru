@@ -80,6 +80,10 @@ pub(crate) fn global_directory_for_input(
     Ok(directory)
 }
 
+pub(crate) fn supports_global(target: Target) -> bool {
+    !matches!(target, Target::Eve | Target::Promptscript)
+}
+
 pub(crate) fn global_directory(target: Target) -> Result<Option<PathBuf>> {
     let directory = match target {
         Target::Agents => in_home(".agents/skills")?,
@@ -177,8 +181,23 @@ fn config_directory() -> Result<PathBuf> {
 }
 
 pub(crate) fn global_home_directory() -> Result<PathBuf> {
-    for variable in ["HOME", "USERPROFILE"] {
-        if let Some(path) = optional_absolute_env(variable)? {
+    home_directory_from(home_variables(cfg!(windows)), |name| std::env::var_os(name))
+}
+
+fn home_variables(windows: bool) -> [&'static str; 2] {
+    if windows {
+        ["USERPROFILE", "HOME"]
+    } else {
+        ["HOME", "USERPROFILE"]
+    }
+}
+
+fn home_directory_from(
+    variables: [&str; 2],
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<PathBuf> {
+    for variable in variables {
+        if let Some(path) = absolute_env_value(variable, lookup(variable))? {
             if !path.is_dir() {
                 return Err(AruError::msg(format!(
                     "{variable} must identify an existing directory for global skill installation"
@@ -193,7 +212,14 @@ pub(crate) fn global_home_directory() -> Result<PathBuf> {
 }
 
 fn optional_absolute_env(variable: &str) -> Result<Option<PathBuf>> {
-    let Some(value) = std::env::var_os(variable) else {
+    absolute_env_value(variable, std::env::var_os(variable))
+}
+
+fn absolute_env_value(
+    variable: &str,
+    value: Option<std::ffi::OsString>,
+) -> Result<Option<PathBuf>> {
+    let Some(value) = value else {
         return Ok(None);
     };
     if value.is_empty() {
@@ -248,6 +274,35 @@ fn supports_project_symlink() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_home_policy_prefers_profile_without_inspecting_home() {
+        let profile = tempfile::tempdir().unwrap();
+        let result = home_directory_from(home_variables(true), |variable| {
+            assert_eq!(
+                variable, "USERPROFILE",
+                "HOME must not be read when the profile is usable"
+            );
+            Some(profile.path().as_os_str().to_owned())
+        })
+        .unwrap();
+        assert_eq!(result, profile.path());
+        assert_eq!(home_variables(false), ["HOME", "USERPROFILE"]);
+    }
+
+    #[test]
+    fn home_policy_uses_fallback_only_when_primary_is_unset() {
+        let home = tempfile::tempdir().unwrap();
+        for windows in [false, true] {
+            let variables = home_variables(windows);
+            let result = home_directory_from(variables, |variable| {
+                (variable == variables[1]).then(|| home.path().as_os_str().to_owned())
+            })
+            .unwrap();
+            assert_eq!(result, home.path());
+            assert!(home_directory_from(variables, |_| Some("relative".into())).is_err());
+        }
+    }
 
     #[test]
     fn target_layouts_own_their_native_projection_topology() {

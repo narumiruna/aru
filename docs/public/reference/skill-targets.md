@@ -1,6 +1,6 @@
 # Skill targets
 
-Aru keeps target identifiers short and stores only the canonical names shown below.
+In initialized projects, aru keeps target identifiers short and stores only the canonical names shown below.
 CLI aliases are accepted by `init`, `target add`, `target remove`, `target set`, and dependency target options, then normalized before `aru.toml` is written.
 Run `aru target list --available` to print this registry from the installed binary.
 
@@ -8,8 +8,9 @@ Targets marked `skills` only receive Agent Skills.
 They do not receive instructions or MCP servers unless a later adapter adds independently verified support.
 Implicit instruction and MCP reach is restricted to capable configured targets, and an explicit unsupported target is rejected before writes.
 
-All destinations are relative to the project root and end with `<skill-name>` when projected.
-Aru does not install skills into home-directory paths.
+The project skill directories below are relative to the project root and end with `<skill-name>` when projected.
+Standalone `aru skill add --global` instead installs into target-native user directories, including supported environment overrides and distinct global aliases.
+See [standalone skill installation](../skills.md#standalone-installation) for global paths, restrictions, and examples.
 
 | Canonical target | Project skill directory | Capabilities | CLI aliases |
 | --- | --- | --- | --- |
@@ -87,7 +88,7 @@ Aru does not install skills into home-directory paths.
 | `zed` | `.agents/skills` | skills | — |
 | `zencoder` | `.zencoder/skills` | skills | `zenflow` |
 
-When multiple selected targets share a destination, aru creates one owned projection while retaining every canonical target in the lock.
+In initialized projects, when multiple selected targets share a destination, aru creates one owned projection while retaining every canonical target in the lock.
 On Unix, a target-specific destination may link to a selected `.agents/skills` projection.
 The relative link is calculated from the actual destination depth, including nested paths such as `.posit/assistant/skills` and `.tabnine/agent/skills`.
 Platforms without project symlink support receive verified copies.

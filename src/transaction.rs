@@ -10,6 +10,7 @@ use walkdir::WalkDir;
 use crate::error::{AruError, IoContext, Result};
 
 mod destination;
+mod install;
 mod standalone;
 use destination::{normalize_destination, validate_operations};
 
@@ -220,19 +221,32 @@ pub fn apply(project: &Path, operations: Vec<Operation>) -> Result<()> {
 }
 
 fn apply_at(project: &Path, operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
-    apply_with_mode(PathMode::Project(project), operations, journal_path, 1)
+    apply_with_mode(
+        PathMode::Project(project),
+        operations,
+        journal_path,
+        1,
+        true,
+    )
 }
 
 fn apply_standalone_at(
     project: &Path,
     operations: Vec<Operation>,
     journal_path: &Path,
+    replace: bool,
 ) -> Result<()> {
-    apply_with_mode(PathMode::Project(project), operations, journal_path, 2)
+    apply_with_mode(
+        PathMode::Project(project),
+        operations,
+        journal_path,
+        2,
+        replace,
+    )
 }
 
-fn apply_absolute_at(operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
-    apply_with_mode(PathMode::Absolute, operations, journal_path, 2)
+fn apply_absolute_at(operations: Vec<Operation>, journal_path: &Path, replace: bool) -> Result<()> {
+    apply_with_mode(PathMode::Absolute, operations, journal_path, 2, replace)
 }
 
 fn apply_with_mode(
@@ -240,6 +254,7 @@ fn apply_with_mode(
     mut operations: Vec<Operation>,
     journal_path: &Path,
     journal_version: u32,
+    replace: bool,
 ) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
@@ -280,17 +295,27 @@ fn apply_with_mode(
             } else {
                 Some(parent.join(format!(".aru-stage-{transaction_id}-{index}")))
             };
-            let backup = if destination_exists(&destination) {
-                Some(parent.join(format!(".aru-backup-{transaction_id}-{index}")))
-            } else {
-                None
-            };
             if let Some(stage) = &stage {
                 staged_paths.push(stage.clone());
                 materialize_stage(stage, &operation.content)?;
                 sync_tree(stage)?;
             }
-            let old_digest = path_digest(&destination)?;
+            #[cfg(test)]
+            install::run_hook(install::Event::Staged, &destination);
+            if !replace && destination_exists(&destination) {
+                return Err(AruError::msg(format!(
+                    "collision: unmanaged entry appeared at {}",
+                    destination.display()
+                )));
+            }
+            let old_digest = if replace {
+                path_digest(&destination)?
+            } else {
+                None
+            };
+            let backup = old_digest
+                .as_ref()
+                .map(|_| parent.join(format!(".aru-backup-{transaction_id}-{index}")));
             let new_digest = stage.as_deref().map(path_digest).transpose()?.flatten();
             journal.entries.push(JournalEntry {
                 destination: encode_journal_path(journal_version, mode, &destination)?,
@@ -344,7 +369,13 @@ fn apply_with_mode(
             if let Some(stage) = stage_text {
                 let stage = decode_journal_path(journal.version, mode, &stage)?;
                 let stage = resolve_path(mode, &stage);
-                std::fs::rename(&stage, &destination).at(&destination)?;
+                #[cfg(test)]
+                install::run_hook(install::Event::Installing, &destination);
+                if replace {
+                    std::fs::rename(&stage, &destination).at(&destination)?;
+                } else {
+                    install::rename_no_replace(&stage, &destination)?;
+                }
                 sync_parent(&destination)?;
             }
             journal.entries[index].applied = true;
@@ -408,6 +439,18 @@ fn rollback(mode: PathMode<'_>, journal_path: &Path, journal: &mut Journal) -> R
         validate_destination(mode, &destination_path)?;
         validate_ancestors(mode, &destination_path)?;
         let destination = resolve_path(mode, &destination_path);
+        // A retained, verified stage with no backup proves this create never
+        // reached its destination. Preserve even identical concurrent content.
+        if !journal.entries[index].applied
+            && backup_text.is_none()
+            && let Some(stage) = journal.entries[index].stage.as_deref()
+        {
+            let stage = decode_journal_path(journal.version, mode, stage)?;
+            let stage = resolve_path(mode, &stage);
+            if destination_exists(&stage) && path_digest(&stage)? == new_digest {
+                continue;
+            }
+        }
         let current = path_digest(&destination)?;
         let backup = backup_text
             .as_ref()

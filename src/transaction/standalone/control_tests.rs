@@ -2,6 +2,35 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
+fn legacy_scope_lookup_skips_absent_roots_and_foreign_owners() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    assert!(
+        legacy_control_directory_at(&project, &root.path().join("missing"))
+            .unwrap()
+            .is_none()
+    );
+    let control = legacy_control_directory_at(&project, root.path())
+        .unwrap()
+        .unwrap();
+    std::fs::create_dir_all(&control).unwrap();
+    std::fs::write(control.join("transaction.toml"), "untrusted pending state").unwrap();
+    let uid = unsafe { libc::geteuid() };
+    assert!(
+        !inspect_legacy_scope(&control, |metadata| metadata.uid() == uid.wrapping_add(1)).unwrap()
+    );
+    assert!(owned_legacy_scope(&control).unwrap());
+    assert_eq!(
+        std::fs::read(control.join("transaction.toml")).unwrap(),
+        b"untrusted pending state"
+    );
+    assert!(!control.join("operation.lock").exists());
+}
+
+#[test]
 fn unsafe_fallback_entries_do_not_override_a_usable_home() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
@@ -76,6 +105,7 @@ fn retargeted_control_ancestor_cannot_select_a_fresh_lock_or_hide_recovery() {
     let crashed = apply_absolute_at(
         vec![Operation::file(&destination, b"new".to_vec())],
         &journal,
+        true,
     );
     super::super::set_failure_phase("ARU_TEST_CRASH_AFTER", None);
     assert!(crashed.is_err());

@@ -80,6 +80,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
     cargo_bin_cmd!("aru")
         .current_dir(&project)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("CODEX_HOME", &codex_home)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_STATE_HOME", &state_home)
@@ -110,6 +111,7 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
     cargo_bin_cmd!("aru")
         .current_dir(&project)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env_remove("CODEX_HOME")
         .env("XDG_CONFIG_HOME", "relative-config")
         .args([
@@ -143,6 +145,7 @@ fn distinct_global_target_aliases_preserve_their_requested_paths() {
     cargo_bin_cmd!("aru")
         .current_dir(&project)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("XDG_CONFIG_HOME", &config_home)
         .args([
             "skill",
@@ -202,6 +205,7 @@ fn distinct_global_targets_share_one_install_per_destination() {
         command
             .current_dir(&project)
             .env("HOME", &home)
+            .env("USERPROFILE", &home)
             .env("XDG_CONFIG_HOME", &config)
             .args([
                 "skill",
@@ -250,6 +254,7 @@ fn repeated_global_targets_and_equivalent_aliases_are_rejected() {
         cargo_bin_cmd!("aru")
             .current_dir(&project)
             .env("HOME", &home)
+            .env("USERPROFILE", &home)
             .env_remove("CLAUDE_CONFIG_DIR")
             .args([
                 "skill",
@@ -267,6 +272,35 @@ fn repeated_global_targets_and_equivalent_aliases_are_rejected() {
             .stderr(predicate::str::contains("targets contains duplicates"));
     }
     assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_global_install_uses_profile_despite_invalid_home() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let profile = temporary.path().join("profile");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&profile).unwrap();
+    create_repository(&repository, &["demo"]);
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("USERPROFILE", &profile)
+        .env("HOME", "relative-invalid-home")
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "pi",
+        ])
+        .assert()
+        .success();
+    assert!(profile.join(".pi/agent/skills/demo/SKILL.md").is_file());
+    assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
 }
 
 #[test]
@@ -314,6 +348,7 @@ fn global_dry_run_rejects_nested_destinations_before_writing() {
     cargo_bin_cmd!("aru")
         .current_dir(&project)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env("CODEX_HOME", &nested_codex_home)
         .args([
             "skill",
@@ -390,6 +425,7 @@ fn global_collisions_fail_before_any_target_is_written() {
     cargo_bin_cmd!("aru")
         .current_dir(&project)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .args([
@@ -426,6 +462,7 @@ fn global_install_rejects_unsupported_targets_and_managed_projects() {
     cargo_bin_cmd!("aru")
         .current_dir(&standalone)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .args([
             "skill",
             "add",
@@ -455,6 +492,7 @@ fn global_install_rejects_unsupported_targets_and_managed_projects() {
     cargo_bin_cmd!("aru")
         .current_dir(&managed)
         .env("HOME", &home)
+        .env("USERPROFILE", &home)
         .args([
             "skill",
             "add",

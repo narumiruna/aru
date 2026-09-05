@@ -340,7 +340,7 @@ aru target set codex claude
 ```
 
 Skill-only targets receive skills but not instructions or MCP servers.
-All destinations are project-relative; aru does not install skills into home-directory paths.
+Managed project destinations are project-relative; standalone `aru skill add --global` uses target-native user directories instead.
 At least one target must remain.
 
 Use `target set` when replacing the only configured target.

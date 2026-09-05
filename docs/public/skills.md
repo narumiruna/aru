@@ -1,6 +1,6 @@
 # Agent Skills
 
-Aru resolves skills from Git repositories and installs each selected skill into compatible targets' native project directories.
+Aru resolves skills from Git repositories and installs each selected skill into compatible targets' native skill directories.
 
 In an initialized aru project, `skill add` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state.
 In a directory without an `aru.toml` in it or an ancestor, the same command performs a one-time standalone installation without creating project state.
@@ -20,15 +20,18 @@ Global mode is intentionally standalone: aru rejects it when the discovered root
 For example, Codex receives `~/.codex/skills/<name>`, Claude receives `~/.claude/skills/<name>`, pi receives `~/.pi/agent/skills/<name>`, and OpenCode receives `${XDG_CONFIG_HOME:-~/.config}/opencode/skills/<name>`.
 Global mode preserves aliases whose user-level paths differ from their canonical target: `universal` uses `${XDG_CONFIG_HOME:-~/.config}/agents/skills/<name>`, `antigravity-cli` uses `~/.gemini/antigravity-cli/skills/<name>`, `qoder-cn` uses `~/.qoder-cn/skills/<name>`, and `trae-cn` uses `~/.trae-cn/skills/<name>`.
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `VIBE_HOME`, `HERMES_HOME`, `AUTOHAND_HOME`, and `GROK_HOME` override their corresponding target roots and must be absolute paths.
+For home-based paths, Windows prefers `USERPROFILE` over `HOME`; other platforms prefer `HOME`.
 Eve and PromptScript do not support global installation.
 
 If `--target` is omitted in an interactive terminal, aru first opens a searchable multi-select target menu.
+Global paths and environment overrides are validated only for the selected targets, after the menu completes.
 It then applies the normal skill selection rules, so a bare source opens the skill menu while `--all`, `--skill`, or `--path` skips it.
 Non-interactive standalone commands must provide both `--target` and an explicit skill selector.
 
 Standalone installation writes a complete independent copy to each unique target path and never creates cross-target symlinks.
 This applies to both project-directory and global standalone installs.
 It rejects an existing same-name destination before any write unless `--force` is passed.
+Non-force skill installs also require atomic no-replace rename support from the platform and filesystem, so content created concurrently is preserved; unsupported backends fail rather than falling back to an overwriting rename.
 Transaction plans also reject duplicate or nested paths after conservative Unicode case and normalization comparison, even on case-sensitive filesystems; use unambiguous destination names instead.
 It does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, and the installed copies are not managed by `skill update`, `skill remove`, or `sync`.
 Mutating standalone and managed installs coordinate through aru's durable OS-user state directory, independent of `XDG_STATE_HOME`; the recovery journal is removed after a completed transaction.

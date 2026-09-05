@@ -18,7 +18,7 @@ pub fn apply_standalone(project: &Path, operations: Vec<Operation>, force: bool)
     if operations.is_empty() {
         return Ok(());
     }
-    apply_standalone_prepared(project, move || {
+    apply_standalone_prepared_with_policy(project, force, move || {
         validate_collisions(&operations, force, |destination| project.join(destination))?;
         Ok((operations, ()))
     })
@@ -38,7 +38,7 @@ pub fn apply_standalone_global(
     validate_operations(PathMode::Absolute, &operations, 2)?;
     validate_no_managed_overlap(&operations)?;
     validate_collisions(&operations, force, Path::to_path_buf)?;
-    apply_absolute_at(operations, &journal_path)
+    apply_absolute_at(operations, &journal_path, force)
 }
 
 /// Keeps collision inspection and plan validation inside the same lock scope.
@@ -83,7 +83,11 @@ struct PreviewLock {
 fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
     let mut lock = lock_without_pending_journal_at(&global_control_directory()?)?;
     // The shared guard is already held. Do not acquire bootstrap recursively.
-    lock._legacy_file = lock_existing_without_pending_journal(&legacy_control_directory(project)?)?;
+    if let Some(control) = legacy_control_directory(project)?
+        && owned_legacy_scope(&control)?
+    {
+        lock._legacy_file = lock_existing_without_pending_journal(&control)?;
+    }
     Ok(lock)
 }
 
@@ -189,12 +193,21 @@ pub fn apply_standalone_prepared<T>(
     project: &Path,
     prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
 ) -> Result<T> {
+    // Prepared MCP edits intentionally merge into existing configuration files.
+    apply_standalone_prepared_with_policy(project, true, prepare)
+}
+
+fn apply_standalone_prepared_with_policy<T>(
+    project: &Path,
+    replace: bool,
+    prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
+) -> Result<T> {
     let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
     recover_standalone_if_needed_at(&journal_path)?;
     validate_standalone_root(project, "standalone")?;
     let (operations, output) = prepare()?;
     validate_operations(PathMode::Project(project), &operations, 2)?;
-    apply_standalone_at(project, operations, &journal_path)?;
+    apply_standalone_at(project, operations, &journal_path, replace)?;
     Ok(output)
 }
 
@@ -212,33 +225,62 @@ fn validate_standalone_root(project: &Path, operation: &str) -> Result<()> {
 
 pub(super) fn acquire_for_project(project: &Path) -> Result<(File, Option<File>, PathBuf)> {
     let (global_lock, journal_path) = acquire_global()?;
-    let legacy_control = legacy_control_directory(project)?;
-    let legacy_lock = match legacy_control.symlink_metadata() {
-        Ok(_) => {
-            let (lock, journal) = acquire_control(legacy_control)?;
-            recover_if_needed_at(project, &journal)?;
-            Some(lock)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => {
-            return Err(AruError::msg(format!(
-                "could not inspect legacy standalone recovery scope {}: {error}",
-                legacy_control.display()
-            )));
-        }
+    let legacy_lock = if let Some(control) = legacy_control_directory(project)?
+        && owned_legacy_scope(&control)?
+    {
+        let (lock, journal) = acquire_control(control)?;
+        recover_if_needed_at(project, &journal)?;
+        Some(lock)
+    } else {
+        None
     };
     Ok((global_lock, legacy_lock, journal_path))
 }
 
-pub(super) fn legacy_control_directory(project: &Path) -> Result<PathBuf> {
+pub(super) fn legacy_control_directory(project: &Path) -> Result<Option<PathBuf>> {
+    legacy_control_directory_at(project, &std::env::temp_dir())
+}
+
+fn legacy_control_directory_at(project: &Path, temporary: &Path) -> Result<Option<PathBuf>> {
+    let temporary = match temporary.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        result => result.at(temporary)?,
+    };
     let canonical = project.canonicalize().at(project)?;
     let digest = crate::digest::sha256_bytes(canonical.as_os_str().as_encoded_bytes());
-    let temporary = std::env::temp_dir();
-    Ok(temporary
-        .canonicalize()
-        .at(&temporary)?
-        .join("aru-standalone")
-        .join(digest.strip_prefix("sha256:").unwrap_or(&digest)))
+    Ok(Some(
+        temporary
+            .join("aru-standalone")
+            .join(digest.strip_prefix("sha256:").unwrap_or(&digest)),
+    ))
+}
+
+fn owned_legacy_scope(control: &Path) -> Result<bool> {
+    inspect_legacy_scope(control, |metadata| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            metadata.uid() == unsafe { libc::geteuid() }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            true
+        }
+    })
+}
+
+fn inspect_legacy_scope(
+    control: &Path,
+    owned: impl FnOnce(&std::fs::Metadata) -> bool,
+) -> Result<bool> {
+    let metadata = match control.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        result => result.at(control)?,
+    };
+    Ok(metadata.is_dir() && owned(&metadata))
 }
 
 pub(super) fn acquire_global() -> Result<(File, PathBuf)> {

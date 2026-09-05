@@ -57,6 +57,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_Threading"
 ] }
 
