@@ -106,7 +106,7 @@ Initialization creates:
 - `aru.lock`, which pins the exact resolved result;
 - `.aru/`, which contains local cache, ownership, and recovery state.
 
-Aru also adds `.aru/` to the project's `.gitignore`.
+Aru does not create or modify `.gitignore`. Add `.aru/` to your ignore rules yourself.
 
 To initialize another existing directory, pass its path:
 
@@ -176,7 +176,7 @@ aru sync --check
 
 ### 5. Commit the reproducible state
 
-Commit `aru.toml`, `aru.lock`, and the `.gitignore` change.
+Commit `aru.toml` and `aru.lock`.
 
 Your team may also commit generated target files if that matches the repository's policy.
 

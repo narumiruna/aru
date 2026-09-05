@@ -214,25 +214,13 @@ fn init_with_output(project: PathBuf, mut targets: Vec<Target>, output: Output) 
     }
     let manifest = ManifestDocument::new(&targets);
     manifest.manifest()?;
-    let mut operations = vec![Operation::file(
-        crate::manifest::MANIFEST_FILE,
-        manifest.bytes(),
-    )];
-    let gitignore_path = project.join(".gitignore");
-    let existing = if gitignore_path.exists() {
-        std::fs::read_to_string(&gitignore_path).at(&gitignore_path)?
-    } else {
-        String::new()
-    };
-    if !existing.lines().any(|line| line.trim() == ".aru/") {
-        let mut updated = existing;
-        if !updated.is_empty() && !updated.ends_with('\n') {
-            updated.push('\n');
-        }
-        updated.push_str(".aru/\n");
-        operations.push(Operation::file(".gitignore", updated.into_bytes()));
-    }
-    apply(&project, operations)?;
+    apply(
+        &project,
+        vec![Operation::file(
+            crate::manifest::MANIFEST_FILE,
+            manifest.bytes(),
+        )],
+    )?;
     output.completion(&format!(
         "Initialized aru project for {}.",
         targets

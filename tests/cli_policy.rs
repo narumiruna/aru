@@ -54,6 +54,56 @@ fn init_accepts_a_cargo_style_project_path() {
 }
 
 #[test]
+fn init_does_not_create_gitignore() {
+    let temporary = tempfile::tempdir().unwrap();
+    aru(temporary.path())
+        .args(["init", "--target", "codex"])
+        .assert()
+        .success();
+
+    assert!(temporary.path().join("aru.toml").is_file());
+    assert!(!temporary.path().join(".gitignore").exists());
+}
+
+#[test]
+fn init_preserves_existing_gitignore_bytes() {
+    for contents in [
+        b"".as_slice(),
+        b"# User rules\r\n/target/",
+        b".aru/\n!.aru/keep\n",
+        b"# Non-UTF-8 comment: \xff\n",
+    ] {
+        let temporary = tempfile::tempdir().unwrap();
+        let gitignore = temporary.path().join(".gitignore");
+        std::fs::write(&gitignore, contents).unwrap();
+
+        aru(temporary.path())
+            .args(["init", "--target", "codex"])
+            .assert()
+            .success();
+
+        assert!(temporary.path().join("aru.toml").is_file());
+        assert_eq!(std::fs::read(&gitignore).unwrap(), contents);
+    }
+}
+
+#[test]
+fn init_does_not_inspect_gitignore_directory() {
+    let temporary = tempfile::tempdir().unwrap();
+    let gitignore = temporary.path().join(".gitignore");
+    std::fs::create_dir(&gitignore).unwrap();
+
+    aru(temporary.path())
+        .args(["init", "--target", "codex"])
+        .assert()
+        .success();
+
+    assert!(temporary.path().join("aru.toml").is_file());
+    assert!(gitignore.is_dir());
+    assert_eq!(std::fs::read_dir(&gitignore).unwrap().count(), 0);
+}
+
+#[test]
 fn cargo_style_output_supports_quiet_verbose_and_color_modes() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");
