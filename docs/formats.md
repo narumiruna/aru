@@ -193,7 +193,7 @@ The skill target registry defines every skill-only destination and alias; no des
 Targets with the same skill destination share one independently owned projection while retaining complete canonical target reach in the lock.
 When a selected target uses `.agents/skills/<name>` and another target has a distinct path on a platform with project symlink support, the other path links to the canonical `.agents` copy.
 The link target is relative to the actual destination depth.
-Otherwise each destination is a verified copy with the same semantic digest and an independent ownership entry.
+Otherwise each destination is a verified copy with an independent ownership entry. Local skill metadata overrides can give independent copies different projection digests; shared symlinks retain the canonical copy's effective digest.
 
 Copilot MCP uses the `mcpServers` project format, `stdio` / `http` transport names, `${ENV}` references, and `tools = ["*"]`. This contract targets Copilot CLI; `.vscode/mcp.json` and GitHub.com repository MCP settings are not projections. OpenCode MCP uses `mcp` entries with `local` command arrays or `remote` URLs, `{env:ENV}` references, and `enabled = true`. Header-authenticated OpenCode remotes set `oauth = false` to avoid an unintended OAuth flow. `opencode.json` is parsed and edited as JSONC; unrelated keys, MCP entries, comments, trailing commas, and surrounding formatting survive.
 
@@ -214,7 +214,7 @@ Cycles, missing nodes, incomplete flattened exports, duplicate package names, an
 
 Each `skill-package` locks a normalized source, original requirement descriptor, selected SemVer/branch/revision label, full 40-hex commit, repository root name, sorted effective targets, and selected `{name,path,sha256}` entries. Branch requirements use `branch:<name>` while `revision` remains immutable. Each `mcp-server` locks exact normalized metadata and one concrete projection for each effective dependency target. Registry package projections lock npm/`npx` or approved PyPI/`uvx` command arrays plus exact package registry, identifier, and version. Direct stdio entries lock their exact command and ordered argv with `version = "direct"`; they contain no resolved package metadata.
 
-`projection-input-hash` covers complete lock identity, sorted project targets, and adapter capability schema. `projection-baseline` contains only currently desired semantic instruction, skill, and MCP entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
+Adapter capability schema 10 adds local skill metadata overrides while retaining the raw source skill digest contract. `projection-input-hash` covers complete lock identity, sorted project targets, and adapter capability schema. `projection-baseline` contains only currently desired semantic instruction, skill, and MCP entries. It can bootstrap ownership after state loss but cannot authorize historical deletion.
 
 Skill and MCP destinations follow the table above. Codex and OpenCode MCP projections explicitly set `enabled = true` so a declared project server overrides a disabled same-name higher-precedence entry. Targets without a requested capability are filtered out before dependency resolution; a declared requirement with no capable effective target fails explicitly.
 
@@ -227,7 +227,13 @@ Directories add no direct digest record. Symlinks and special files are rejected
 
 ## `.aru/state.toml`
 
-`version = 1`. Each `entry` has project-relative destination, kind/key, actual deployment mode (`copy`, `symlink`, `merge`, or `file`), last-applied semantic digest, and complete owning lock identity. Instruction `merge` entries track one source block; instruction `file` entries track a whole generated path. State proves local ownership but never replaces the committed baseline.
+`version = 2` for state containing skill metadata snapshots. Version 1 remains readable and is upgraded when snapshots are first recorded; the version is not downgraded after removing the final skill. Older binaries reject version 2 rather than silently discarding overrides. Each `entry` has project-relative destination, kind/key, actual deployment mode (`copy`, `symlink`, `merge`, or `file`), last-applied semantic digest, and complete owning lock identity. Instruction `merge` entries track one source block; instruction `file` entries track a whole generated path. State proves local ownership but never replaces the committed baseline.
+
+Skill entries may additionally contain `skill-metadata` with `source-digest` (the complete locked source tree digest), `frontmatter` (the exact last-applied YAML header including delimiters), `values` (sorted top-level override keys with serialized YAML values), and `removed` (sorted persistent deletion keys). The entry's last-applied digest covers the complete effective projection, not just upstream content. Existing entries without this optional record remain readable.
+
+Before accepting local metadata edits, aru compares parsed `name` and `description`, substitutes the recorded header into the current document, and requires the reconstructed tree digest to equal the last-applied digest. Thus body bytes, other file contents, paths, and executable markers stay protected. Only differing non-protected top-level fields become overrides; existing overrides persist across coincident upstream values. Override values and deletion keys together are limited to 20,000 entries and 1 MiB. The source tree is verified after staging, then the merged projection is independently verified before transaction publication. The transaction journal and recovery continue to use complete raw filesystem digests.
+
+The generated state contract fixture is `tests/fixtures/contracts/state-skill-metadata.toml`. Regenerate it with `ARU_UPDATE_CONTRACTS=1 cargo test --locked --lib skill::metadata::tests::skill_metadata_state_matches_golden_bytes`.
 
 ## CycloneDX 1.5 inventory
 

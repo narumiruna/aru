@@ -9,7 +9,7 @@ use crate::instruction::InstructionScope;
 use crate::manifest::Target;
 
 pub const LOCK_FILE: &str = "aru.lock";
-pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 9;
+pub const ADAPTER_CAPABILITY_SCHEMA: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]

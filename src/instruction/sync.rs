@@ -194,6 +194,7 @@ fn prepare_file(
         kind: "instruction".into(),
         key: projection.source.clone(),
         mode: "file".into(),
+        skill_metadata: None,
         last_applied_digest: desired,
         lock_identity: lock_identity.into(),
     });
@@ -307,6 +308,7 @@ fn prepare_shared_document(
             kind: "instruction".into(),
             key: projection.source.clone(),
             mode: "merge".into(),
+            skill_metadata: None,
             last_applied_digest: desired_digest,
             lock_identity: lock_identity.into(),
         });

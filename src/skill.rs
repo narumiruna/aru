@@ -3,14 +3,17 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::error::{AruError, Result};
 use crate::manifest::SkillRequirement;
 
+mod budget;
+pub mod metadata;
 mod projection;
+
+use budget::SkillTreeStructuralBudget;
 
 pub const DISCOVERY_MAX_DEPTH: usize = 6;
 pub const DISCOVERY_MAX_DIRECTORIES: usize = 2_000;
@@ -25,12 +28,6 @@ pub struct DiscoveredSkill {
     pub relative_path: String,
     pub absolute_path: PathBuf,
     pub sha256: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Frontmatter {
-    name: String,
-    description: String,
 }
 
 pub fn discover_candidates(
@@ -238,49 +235,10 @@ fn insert_candidate(
 }
 
 fn parse_skill_name(path: &Path) -> Result<String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| AruError::msg(format!("could not inspect {}: {error}", path.display())))?;
-    if !metadata.file_type().is_file() || metadata.len() > SKILL_MD_MAX_BYTES {
-        return Err(AruError::msg(format!(
-            "SKILL.md must be a regular file no larger than {} bytes: {}",
-            SKILL_MD_MAX_BYTES,
-            path.display()
-        )));
-    }
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        AruError::msg(format!(
-            "could not read {} as UTF-8: {error}",
-            path.display()
-        ))
-    })?;
-    let body = text
-        .strip_prefix("---\n")
-        .or_else(|| text.strip_prefix("---\r\n"))
-        .ok_or_else(|| AruError::msg(format!("{} has no YAML frontmatter", path.display())))?;
-    let mut offset = 0usize;
-    let mut end = None;
-    for line in body.split_inclusive('\n') {
-        if line.trim_end_matches(['\r', '\n']) == "---" {
-            end = Some(offset);
-            break;
-        }
-        offset += line.len();
-    }
-    let end = end.ok_or_else(|| {
-        AruError::msg(format!(
-            "{} has unterminated YAML frontmatter",
-            path.display()
-        ))
-    })?;
-    let frontmatter: Frontmatter = serde_yaml_ng::from_str(&body[..end])
-        .map_err(|error| AruError::msg(format!("invalid SKILL.md frontmatter: {error}")))?;
-    crate::manifest::validate_name(&frontmatter.name, "skill name")?;
-    if frontmatter.description.trim().is_empty() || frontmatter.description.len() > 1024 {
-        return Err(AruError::msg(
-            "SKILL.md description must contain 1-1024 UTF-8 bytes",
-        ));
-    }
-    Ok(frontmatter.name)
+    Ok(metadata::Document::read(path)?.fields["name"]
+        .as_str()
+        .expect("validated skill name")
+        .to_owned())
 }
 
 pub fn canonical_skill_digest(root: &Path) -> Result<String> {
@@ -295,57 +253,37 @@ fn canonical_skill_digest_with_limits(
     canonical_skill_digest_with_structural_budget(root, file_max_bytes, total_max_bytes, None)
 }
 
-struct SkillTreeStructuralBudget {
-    max_depth: usize,
-    max_directories: usize,
-    max_entries: usize,
-    directories: usize,
-    entries: usize,
-    exceeded: bool,
-}
-
-impl SkillTreeStructuralBudget {
-    fn new(max_depth: usize, max_directories: usize, max_entries: usize) -> Self {
-        Self {
-            max_depth,
-            max_directories,
-            max_entries,
-            directories: 0,
-            entries: 0,
-            exceeded: false,
-        }
-    }
-
-    fn consume(&mut self, item: &walkdir::DirEntry) -> Result<()> {
-        if self.entries >= self.max_entries {
-            self.exceeded = true;
-            return Err(skill_tree_limit_error("entries", self.max_entries));
-        }
-        self.entries += 1;
-        if item.depth() > self.max_depth + 1 {
-            self.exceeded = true;
-            return Err(skill_tree_limit_error("depth", self.max_depth));
-        }
-        if item.file_type().is_dir() {
-            if self.directories >= self.max_directories {
-                self.exceeded = true;
-                return Err(skill_tree_limit_error("directories", self.max_directories));
-            }
-            self.directories += 1;
-        }
-        Ok(())
-    }
-
-    fn exceeded(&self) -> bool {
-        self.exceeded
-    }
-}
-
 fn canonical_skill_digest_with_structural_budget(
     root: &Path,
     file_max_bytes: u64,
     total_max_bytes: u64,
+    structural_budget: Option<&mut SkillTreeStructuralBudget>,
+) -> Result<String> {
+    skill_digest(
+        root,
+        file_max_bytes,
+        total_max_bytes,
+        structural_budget,
+        None,
+    )
+}
+
+pub(crate) fn skill_digest_with_document(root: &Path, document: &[u8]) -> Result<String> {
+    skill_digest(
+        root,
+        SKILL_FILE_MAX_BYTES,
+        SKILL_TOTAL_MAX_BYTES,
+        None,
+        Some(document),
+    )
+}
+
+fn skill_digest(
+    root: &Path,
+    file_max_bytes: u64,
+    total_max_bytes: u64,
     mut structural_budget: Option<&mut SkillTreeStructuralBudget>,
+    document: Option<&[u8]>,
 ) -> Result<String> {
     let mut files = Vec::new();
     let mut folded = BTreeSet::new();
@@ -390,8 +328,14 @@ fn canonical_skill_digest_with_structural_budget(
                     file_max_bytes
                 )));
             }
+            let length = document
+                .filter(|_| portable == "SKILL.md")
+                .map_or(metadata.len(), |bytes| bytes.len() as u64);
+            if length > file_max_bytes {
+                return Err(AruError::msg("merged skill file exceeds byte limit"));
+            }
             total_bytes = total_bytes
-                .checked_add(metadata.len())
+                .checked_add(length)
                 .ok_or_else(|| AruError::msg("skill byte count overflow"))?;
             if total_bytes > total_max_bytes {
                 return Err(AruError::msg(format!(
@@ -409,6 +353,11 @@ fn canonical_skill_digest_with_structural_budget(
         hasher.update((relative_bytes.len() as u64).to_be_bytes());
         hasher.update(relative_bytes);
         hasher.update([u8::from(executable)]);
+        if let Some(document) = document.filter(|_| relative == "SKILL.md") {
+            hasher.update((document.len() as u64).to_be_bytes());
+            hasher.update(document);
+            continue;
+        }
         let length = std::fs::metadata(&path)
             .map_err(|error| {
                 AruError::msg(format!("could not inspect {}: {error}", path.display()))
@@ -512,10 +461,6 @@ fn limit_error(kind: &str, limit: usize) -> AruError {
     AruError::msg(format!(
         "skill discovery exceeded {kind} limit {limit}; result is truncated and no skills were selected"
     ))
-}
-
-fn skill_tree_limit_error(kind: &str, limit: usize) -> AruError {
-    AruError::msg(format!("skill tree exceeded {kind} limit {limit}"))
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use crate::error::{AruError, IoContext, Result};
 
 mod destination;
 mod install;
+mod skill;
 mod staging;
 mod standalone;
 mod state_file;
@@ -30,6 +31,7 @@ pub enum Content {
     Directory {
         source: PathBuf,
         expected_skill_digest: Option<String>,
+        skill_document: Option<(Vec<u8>, String)>,
     },
     Symlink(PathBuf),
     Absent,
@@ -55,6 +57,7 @@ impl Operation {
             content: Content::Directory {
                 source: source.into(),
                 expected_skill_digest: None,
+                skill_document: None,
             },
         }
     }
@@ -69,6 +72,24 @@ impl Operation {
             content: Content::Directory {
                 source: source.into(),
                 expected_skill_digest: Some(expected_skill_digest.into()),
+                skill_document: None,
+            },
+        }
+    }
+
+    pub(crate) fn skill_directory_with_metadata(
+        path: impl Into<PathBuf>,
+        source: impl Into<PathBuf>,
+        source_digest: &str,
+        document: Vec<u8>,
+        projection_digest: &str,
+    ) -> Self {
+        Self {
+            destination: path.into(),
+            content: Content::Directory {
+                source: source.into(),
+                expected_skill_digest: Some(source_digest.into()),
+                skill_document: Some((document, projection_digest.into())),
             },
         }
     }
@@ -517,6 +538,7 @@ fn materialize_stage(stage: &Path, content: &Content) -> Result<()> {
         Content::Directory {
             source,
             expected_skill_digest,
+            skill_document,
         } => {
             copy_directory(source, stage)?;
             if let Some(expected) = expected_skill_digest
@@ -525,6 +547,9 @@ fn materialize_stage(stage: &Path, content: &Content) -> Result<()> {
                 return Err(AruError::msg(
                     "post-copy skill digest does not match the locked content",
                 ));
+            }
+            if let Some((document, digest)) = skill_document {
+                skill::stage_document(stage, document, digest)?;
             }
         }
         Content::Symlink(target) => create_symlink(target, stage)?,
@@ -956,5 +981,7 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod skill_tests;
 #[cfg(test)]
 mod tests;

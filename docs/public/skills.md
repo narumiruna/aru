@@ -108,6 +108,33 @@ aru skill remove owner/repository
 
 Ordinary `sync` and `sync --locked` retain a branch's locked commit. Run `skill update` or add with `--upgrade` to move it.
 
+## Local metadata overrides
+
+For managed project skills, edit the installed `SKILL.md` frontmatter and run `aru sync`. Aru accepts changes to top-level fields other than `name` and `description`, records them in local ownership state, and keeps your values when upstream changes the same fields. Untouched fields follow upstream updates.
+
+For example, add this top-level field inside the existing YAML frontmatter to hide a skill from pi's system prompt while retaining manual `/skill:name` invocation:
+
+```yaml
+disable-model-invocation: true
+```
+
+```console
+aru sync
+aru sync --locked --check
+```
+
+- Added or changed fields are local overrides. Deleting a field records a persistent deletion, not a request to restore the upstream default. An overridden field stays local even if upstream temporarily publishes the same value.
+- Nested mappings and lists are replaced as a whole top-level value; aru does not merge individual keys inside `metadata`.
+- Changes to the parsed `name` or `description`, Markdown body bytes, other files, or executable markers still fail with drift. Malformed YAML, duplicate keys, non-string top-level keys, custom tags, and YAML merge keys are rejected. Parsing bounds expanded YAML to 32 levels, 20,000 nodes, and 1 MiB of scalar string content; `SKILL.md` remains limited to 1 MiB.
+- Ordinary sync preserves your header bytes when the effective fields do not change. An upstream metadata update may reformat the frontmatter; upstream body and asset updates still apply.
+- Overrides are local to the projection and `.aru/state.toml`; they do not change `aru.lock` source digests or travel to a fresh checkout. Source integrity checks still cover the complete original tree. `sync --check` reports pending ownership-state changes until an ordinary sync records the edit.
+- Targets linked to the same `.agents` copy share metadata. Independent copies remain independent. A target change that would combine different overrides fails instead of discarding them.
+- Removing a projection with recorded overrides fails for review. Preserve the customized skill outside managed paths and manually remove the projection before retrying removal. A missing projection is recreated with its recorded overrides by `sync`.
+
+Existing ownership entries without metadata snapshots can migrate using the unchanged source or a verified cached previous source. If neither matches the last-applied digest, aru preserves the edited skill and reports that it cannot verify the edit. Missing ownership state never authorizes adoption of a modified skill.
+
+After upgrading from the previous adapter schema, run an ordinary `aru sync` once to refresh the lock before using `--locked`.
+
 ## Projection paths
 
 Aru supports full adapters and skill-only targets.

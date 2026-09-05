@@ -28,6 +28,8 @@ pub struct Resolution {
     pub lock: Lockfile,
     pub skill_sources: BTreeMap<String, PathBuf>,
     pub instructions: Vec<DiscoveredInstruction>,
+    // Keep dry-run source paths alive while consumers prepare projections.
+    _cache: Cache,
 }
 
 pub struct ResolveOptions<'a> {
@@ -184,6 +186,7 @@ pub fn resolve(
             lock,
             skill_sources: materialized_skills,
             instructions,
+            _cache: cache,
         });
     }
 
@@ -265,6 +268,7 @@ pub fn resolve(
         lock,
         skill_sources: materialized_skills,
         instructions,
+        _cache: cache,
     })
 }
 

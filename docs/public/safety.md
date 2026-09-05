@@ -30,6 +30,7 @@ Aru distinguishes owned, unowned, and drifted content:
 - `--merge` preserves unmanaged Markdown around source-specific marker blocks;
 - `--force` performs explicit destructive takeover;
 - drifted owned entries are preserved and reported instead of overwritten;
+- managed skill frontmatter edits outside `name` and `description` are retained as [local metadata overrides](skills.md#local-metadata-overrides) only after verifying the rest of the last-applied tree;
 - removals affect only digest-matching aru-owned output;
 - unrelated TOML keys, JSON entries, and JSONC comments survive managed MCP updates.
 

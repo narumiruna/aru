@@ -16,6 +16,8 @@ pub struct StateEntry {
     pub mode: String,
     pub last_applied_digest: String,
     pub lock_identity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_metadata: Option<crate::skill::metadata::MetadataState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,9 +47,9 @@ impl State {
             path: path.clone(),
             source,
         })?;
-        if state.version != 1 {
+        if !matches!(state.version, 1 | 2) {
             return Err(AruError::msg(format!(
-                "unsupported state version {}; expected 1",
+                "unsupported state version {}; expected 1 or 2",
                 state.version
             )));
         }
@@ -56,6 +58,14 @@ impl State {
     }
 
     pub fn normalize(&mut self) {
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.skill_metadata.is_some())
+        {
+            // Older binaries must refuse this state rather than discard overrides.
+            self.version = 2;
+        }
         self.entries.sort_by(|left, right| {
             (&left.kind, &left.key, &left.destination).cmp(&(
                 &right.kind,
@@ -161,6 +171,7 @@ mod tests {
             kind: "skill".into(),
             key: "test".into(),
             mode: "copy".into(),
+            skill_metadata: None,
             last_applied_digest: digest.into(),
             lock_identity: "lock".into(),
         }
