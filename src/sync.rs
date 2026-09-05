@@ -1,5 +1,6 @@
 mod plan;
 mod request;
+mod skill_metadata;
 
 pub(crate) use request::{CollisionPolicy, ReconcileRequest, UpdateSelection, prepare_request};
 
@@ -175,8 +176,17 @@ fn prepare_projections(
                 AruError::msg(format!("missing materialized skill {:?}", skill.name))
             })?;
             let mut destinations = BTreeSet::new();
-            for target in &package.targets {
-                let layout = skill_adapter::layout(*target, &package.targets, &skill.name)?;
+            let mut layouts = package
+                .targets
+                .iter()
+                .map(|target| {
+                    skill_adapter::layout(*target, &package.targets, &skill.name)
+                        .map(|layout| (*target, layout))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            // Plan canonical copies before links, regardless of target enum order.
+            layouts.sort_by_key(|(_, layout)| layout.mode == SkillDeploymentMode::Symlink);
+            for (target, layout) in layouts {
                 if !destinations.insert(layout.destination.clone()) {
                     continue;
                 }
@@ -185,7 +195,7 @@ fn prepare_projections(
                     lock,
                     previous,
                     &state_map,
-                    *target,
+                    target,
                     &skill.name,
                     &skill.sha256,
                     source,
@@ -212,6 +222,17 @@ fn prepare_projections(
             let expected_link =
                 (entry.mode == "symlink").then(|| skill_adapter::shared_link_target(&destination));
             let current = observe_skill(project, &destination, expected_link.as_deref())?;
+            if current.is_some()
+                && entry
+                    .skill_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.has_overrides())
+            {
+                return Err(AruError::msg(format!(
+                    "drift: refusing to remove skill {:?} with local metadata overrides; preserve the skill and remove the projection manually first",
+                    entry.key
+                )));
+            }
             match reconcile(
                 &entry.key,
                 current.as_deref(),
@@ -273,7 +294,7 @@ fn prepare_projections(
         }
     }
     let next = State {
-        version: 1,
+        version: state.version,
         entries: next_state,
     };
     push_file_if_changed(
@@ -430,12 +451,29 @@ fn prepare_skill_entry(
     let observed_link =
         (observed_mode == "symlink").then(|| skill_adapter::shared_link_target(&destination));
     let current = observe_skill(project, &destination, observed_link.as_deref())?;
+    let mut projection = skill_metadata::prepare(
+        project,
+        previous,
+        source,
+        desired_digest,
+        &destination,
+        current.as_deref(),
+        owned,
+    )?;
+    if mode == SkillDeploymentMode::Symlink {
+        let shared_destination = format!(".agents/skills/{name}");
+        let shared = next_state
+            .iter()
+            .find(|entry| entry.kind == "skill" && entry.destination == shared_destination)
+            .ok_or_else(|| AruError::msg("missing planned shared skill projection"))?;
+        skill_metadata::share(&mut projection, shared, source)?;
+    }
     let mut action = reconcile(
         name,
         current.as_deref(),
-        owned,
+        projection.owned.as_ref(),
         baseline,
-        Some(desired_digest),
+        Some(&projection.digest),
         force,
     )?;
     let mode_changed =
@@ -453,10 +491,12 @@ fn prepare_skill_entry(
                         .expect("symlink layout has a link target"),
                 ));
             } else {
-                operations.push(Operation::skill_directory(
+                operations.push(Operation::skill_directory_with_metadata(
                     destination.clone(),
                     source,
                     desired_digest,
+                    projection.document,
+                    &projection.digest,
                 ));
             }
             let verb = if action == OwnershipAction::Create {
@@ -477,8 +517,9 @@ fn prepare_skill_entry(
         kind: "skill".into(),
         key: name.into(),
         mode: mode.as_str().into(),
-        last_applied_digest: desired_digest.into(),
+        last_applied_digest: projection.digest,
         lock_identity: lock_identity.into(),
+        skill_metadata: projection.metadata,
     });
     processed.insert(identity);
     Ok(())
@@ -574,6 +615,7 @@ fn prepare_mcp(
                 mode: "merge".into(),
                 last_applied_digest: desired,
                 lock_identity: lock_identity.into(),
+                skill_metadata: None,
             });
             processed.insert(identity);
         }
