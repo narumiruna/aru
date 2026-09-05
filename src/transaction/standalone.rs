@@ -329,6 +329,12 @@ fn select_unix_control_directory(
     uid: libc::uid_t,
     fallback: &Path,
 ) -> Result<PathBuf> {
+    // Once selected, keep the owned fallback's lock and recovery identity.
+    // An unused home path must not prevent access to that established state.
+    if established_fallback_scope(fallback, uid) {
+        validate_control_ancestors(fallback)?;
+        return Ok(fallback.to_path_buf());
+    }
     let Some(home) = home.filter(|home| home.is_absolute()) else {
         return Ok(fallback.to_path_buf());
     };
@@ -338,14 +344,14 @@ fn select_unix_control_directory(
     let control = home.join(".local/state/aru/standalone");
 
     validate_control_ancestors(&control)?;
-    // Never bypass an established lock or abandon its recovery journal when
-    // permissions change. A selected fallback also stays sticky once created.
+    // Without an established fallback, retain home-based recovery state even
+    // when its permissions change.
     if control.join("operation.lock").symlink_metadata().is_ok()
         || control.join("transaction.toml").symlink_metadata().is_ok()
     {
         return Ok(control);
     }
-    if established_fallback_scope(fallback, uid) || !home.is_dir() {
+    if !home.is_dir() {
         return Ok(fallback.to_path_buf());
     }
     let existing = control.ancestors().find(|path| path.exists());

@@ -90,6 +90,94 @@ fn unsafe_fallback_entries_do_not_override_a_usable_home() {
 }
 
 #[test]
+fn established_fallback_survives_unused_home_symlinks() {
+    use std::os::unix::fs::MetadataExt;
+
+    for pending in [false, true] {
+        for private in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let root = root.path().canonicalize().unwrap();
+            let home = root.join("missing-home");
+            let fallback = root.join("fallback");
+            let uid = unsafe { libc::geteuid() };
+            let selected = select_unix_control_directory(Some(&home), uid, &fallback).unwrap();
+            assert_eq!(selected, fallback);
+            let (lock, journal) = acquire_global_at(selected).unwrap();
+            let inode = lock.metadata().unwrap().ino();
+            let destination = root.join("demo");
+            if pending {
+                std::fs::write(&destination, b"old").unwrap();
+                super::super::set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
+                let crashed = apply_absolute_at(
+                    vec![Operation::file(&destination, b"new".to_vec())],
+                    &journal,
+                    true,
+                );
+                super::super::set_failure_phase("ARU_TEST_CRASH_AFTER", None);
+                assert!(crashed.is_err());
+            }
+            let retained = std::fs::read(&journal).ok();
+            drop(lock);
+            let mode = if private { 0o700 } else { 0o755 };
+            std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(mode)).unwrap();
+
+            std::fs::create_dir(&home).unwrap();
+            let unused = root.join("unused-state");
+            std::fs::create_dir(&unused).unwrap();
+            #[cfg(target_os = "macos")]
+            let alias = home.join("Library");
+            #[cfg(not(target_os = "macos"))]
+            let alias = home.join(".local");
+            std::os::unix::fs::symlink(&unused, &alias).unwrap();
+
+            let selected = select_unix_control_directory(Some(&home), uid, &fallback).unwrap();
+            assert_eq!(selected, fallback);
+            let preview = lock_without_pending_journal_at(&selected);
+            assert_eq!(preview.is_ok(), private && !pending);
+            if let Ok(preview) = preview {
+                assert_eq!(preview._file.metadata().unwrap().ino(), inode);
+            }
+            assert_eq!(std::fs::read(&journal).ok(), retained);
+            assert_eq!(fallback.metadata().unwrap().mode() & 0o777, mode);
+            let (_lock, selected_journal) = acquire_global_at(selected).unwrap();
+            assert_eq!(selected_journal, journal);
+            assert_eq!(_lock.metadata().unwrap().ino(), inode);
+            assert_eq!(recover_standalone_if_needed_at(&journal).unwrap(), pending);
+            if pending {
+                assert_eq!(std::fs::read(&destination).unwrap(), b"old");
+            }
+            assert!(!journal.exists());
+            assert_eq!(std::fs::read_link(&alias).unwrap(), unused);
+            assert_eq!(std::fs::read_dir(&unused).unwrap().count(), 0);
+            assert_eq!(std::fs::read_dir(&home).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
+fn established_fallback_still_rejects_its_own_symlink_ancestor() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let real = root.join("real");
+    let alias = root.join("alias");
+    let fallback = real.join("fallback");
+    let (lock, journal) = acquire_global_at(fallback).unwrap();
+    drop(lock);
+    std::fs::write(&journal, b"pending").unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let home = root.join("home");
+    std::fs::create_dir(&home).unwrap();
+    let result = select_unix_control_directory(
+        Some(&home),
+        unsafe { libc::geteuid() },
+        &alias.join("fallback"),
+    );
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(&journal).unwrap(), b"pending");
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
+
+#[test]
 fn retargeted_control_ancestor_cannot_select_a_fresh_lock_or_hide_recovery() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
