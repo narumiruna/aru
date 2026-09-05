@@ -9,14 +9,16 @@ use walkdir::WalkDir;
 
 use crate::error::{AruError, IoContext, Result};
 
+mod destination;
 mod standalone;
+use destination::{normalize_destination, validate_operations};
 
 pub use standalone::{
     StandaloneDryRun, apply_standalone, apply_standalone_global, apply_standalone_prepared,
 };
 
-pub(crate) fn validate_no_standalone_pending_journal() -> Result<()> {
-    standalone::validate_no_pending_journal()
+pub(crate) fn validate_no_standalone_pending_journal(project: &Path) -> Result<()> {
+    standalone::validate_no_pending_journal(project)
 }
 
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
@@ -114,12 +116,14 @@ enum PathMode<'a> {
 
 pub struct ProjectLock {
     _standalone_file: File,
+    _legacy_file: Option<File>,
     _file: File,
 }
 
 impl ProjectLock {
     pub fn acquire(project: &Path) -> Result<Self> {
-        let (standalone_file, standalone_journal) = standalone::acquire_global()?;
+        let (standalone_file, legacy_file, standalone_journal) =
+            standalone::acquire_for_project(project)?;
         recover_standalone_if_needed_at(&standalone_journal)?;
         let aru = project.join(".aru");
         std::fs::create_dir_all(&aru).at(&aru)?;
@@ -136,6 +140,7 @@ impl ProjectLock {
         })?;
         Ok(Self {
             _standalone_file: standalone_file,
+            _legacy_file: legacy_file,
             _file: file,
         })
     }
@@ -239,10 +244,10 @@ fn apply_with_mode(
     if operations.is_empty() {
         return Ok(());
     }
+    validate_operations(mode, &operations, journal_version)?;
     if let Some(parent) = journal_path.parent() {
         std::fs::create_dir_all(parent).at(parent)?;
     }
-    validate_operations(mode, &operations, journal_version)?;
     if matches!(mode, PathMode::Absolute) {
         for operation in &mut operations {
             operation.destination = normalize_destination(&operation.destination)?;
@@ -738,81 +743,6 @@ fn remove_any(path: &Path) -> Result<()> {
 
 fn destination_exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
-}
-
-fn validate_operations(
-    mode: PathMode<'_>,
-    operations: &[Operation],
-    journal_version: u32,
-) -> Result<()> {
-    let mut destinations = Vec::with_capacity(operations.len());
-    for operation in operations {
-        validate_destination(mode, &operation.destination)?;
-        validate_ancestors(mode, &operation.destination)?;
-        let resolved = resolve_path(mode, &operation.destination);
-        encode_journal_path(journal_version, mode, &resolved)?;
-        destinations.push(normalize_destination(&resolved)?);
-    }
-    destinations.sort_unstable();
-    for pair in destinations.windows(2) {
-        let [left, right] = pair else {
-            unreachable!("destination windows always contain two paths")
-        };
-        if left == right {
-            return Err(AruError::msg(format!(
-                "transaction contains duplicate destination {}",
-                left.display()
-            )));
-        }
-        if right.starts_with(left) {
-            return Err(AruError::msg(format!(
-                "transaction destinations must not be nested: {} and {}",
-                left.display(),
-                right.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_destination(path: &Path) -> Result<PathBuf> {
-    let mut existing = path.parent().unwrap_or(path);
-    let mut suffix = path
-        .file_name()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    loop {
-        match std::fs::symlink_metadata(existing) {
-            Ok(_) => break,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let component = existing.file_name().ok_or_else(|| {
-                    AruError::msg(format!(
-                        "could not find an existing destination ancestor for {}",
-                        path.display()
-                    ))
-                })?;
-                suffix.push(PathBuf::from(component));
-                existing = existing.parent().ok_or_else(|| {
-                    AruError::msg(format!(
-                        "could not find an existing destination ancestor for {}",
-                        path.display()
-                    ))
-                })?;
-            }
-            Err(error) => {
-                return Err(AruError::msg(format!(
-                    "could not inspect destination ancestor {}: {error}",
-                    existing.display()
-                )));
-            }
-        }
-    }
-    let mut normalized = existing.canonicalize().at(existing)?;
-    for component in suffix.into_iter().rev() {
-        normalized.push(component);
-    }
-    Ok(normalized)
 }
 
 fn resolve_path(mode: PathMode<'_>, path: &Path) -> PathBuf {

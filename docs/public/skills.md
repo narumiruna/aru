@@ -29,8 +29,12 @@ Non-interactive standalone commands must provide both `--target` and an explicit
 Standalone installation writes a complete independent copy to each unique target path and never creates cross-target symlinks.
 This applies to both project-directory and global standalone installs.
 It rejects an existing same-name destination before any write unless `--force` is passed.
+Transaction plans also reject duplicate or nested paths after conservative Unicode case and normalization comparison, even on case-sensitive filesystems; use unambiguous destination names instead.
 It does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, and the installed copies are not managed by `skill update`, `skill remove`, or `sync`.
 Mutating standalone and managed installs coordinate through aru's durable OS-user state directory, independent of `XDG_STATE_HOME`; the recovery journal is removed after a completed transaction.
+Control paths with symlink ancestors are rejected rather than following a potentially retargeted lock or journal. Restore the original directory layout before retrying if existing recovery state is affected.
+An established Unix fallback directory is preferred only when it is owned by the effective UID and is private or contains existing lock/recovery state; unrelated fallback entries do not override a usable account home. Owned recovery state is retained across permission changes; mutations repair its directory permissions and dry runs reject unsafe permissions.
+Both managed and standalone mutations recover an existing legacy project-scoped standalone journal before new writes; dry runs reject pending legacy recovery without changing it.
 `--dry-run` validates and previews the complete installation without writing.
 `--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
 

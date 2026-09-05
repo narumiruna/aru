@@ -337,6 +337,44 @@ fn global_dry_run_rejects_nested_destinations_before_writing() {
 }
 
 #[test]
+fn case_ambiguous_global_overrides_fail_without_target_writes() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let targets = temporary.path().join("targets");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    for dry_run in [true, false] {
+        let mut command = cargo_bin_cmd!("aru");
+        command
+            .current_dir(&project)
+            .env("CODEX_HOME", targets.join("Root"))
+            .env("CLAUDE_CONFIG_DIR", targets.join("root"))
+            .args([
+                "skill",
+                "add",
+                repository.to_str().unwrap(),
+                "--all",
+                "--global",
+                "--target",
+                "codex",
+                "--target",
+                "claude",
+            ]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("case-ambiguous"));
+        assert!(!targets.exists());
+        assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn global_collisions_fail_before_any_target_is_written() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

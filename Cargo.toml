@@ -48,6 +48,7 @@ tempfile = "3.20"
 thiserror = "2.0"
 toml = "1.1"
 toml_edit = { version = "0.25.13", features = ["serde"] }
+unicode-normalization = "0.1.25"
 url = "2.5"
 walkdir = "2.5"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }

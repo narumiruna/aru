@@ -619,7 +619,7 @@ fn finish_execution(
 
 pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
     if dry_run {
-        validate_no_standalone_pending_journal()?;
+        validate_no_standalone_pending_journal(project)?;
         if project.join(JOURNAL_FILE).exists() {
             return Err(AruError::msg(
                 "a recoverable transaction is pending; run a mutating aru command before --dry-run",

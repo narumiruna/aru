@@ -6,7 +6,7 @@ use std::time::Duration;
 fn first_use_preview_blocks_lock_creation_without_writing() {
     for existing_control in [false, true] {
         let root = tempfile::tempdir().unwrap();
-        let control = root.path().join("control");
+        let control = root.path().canonicalize().unwrap().join("control");
         if existing_control {
             std::fs::create_dir(&control).unwrap();
             #[cfg(unix)]
@@ -45,7 +45,8 @@ fn first_use_preview_blocks_lock_creation_without_writing() {
 #[test]
 fn established_preview_releases_bootstrap_but_keeps_its_user_lock() {
     let root = tempfile::tempdir().unwrap();
-    let control = root.path().join("control");
+    let root_path = root.path().canonicalize().unwrap();
+    let control = root_path.join("control");
     let (file, _) = acquire_global_at(control.clone()).unwrap();
     drop(file);
     let preview = lock_without_pending_journal_at(&control).unwrap();
@@ -58,7 +59,7 @@ fn established_preview_releases_bootstrap_but_keeps_its_user_lock() {
         .unwrap();
     assert!(competing.try_lock_exclusive().is_err());
 
-    let other_control = root.path().join("other-user");
+    let other_control = root_path.join("other-user");
     let (tx, rx) = mpsc::channel();
     let other = std::thread::spawn(move || {
         let (_lock, _) = acquire_global_at(other_control).unwrap();

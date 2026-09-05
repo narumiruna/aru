@@ -50,7 +50,7 @@ pub struct StandaloneDryRun<'a> {
 
 impl<'a> StandaloneDryRun<'a> {
     pub fn begin(project: &'a Path, global: bool) -> Result<Self> {
-        let lock = lock_without_pending_journal()?;
+        let lock = lock_without_pending_journal(project)?;
         validate_standalone_root(project, "standalone")?;
         Ok(Self {
             _lock: lock,
@@ -70,22 +70,42 @@ impl<'a> StandaloneDryRun<'a> {
     }
 }
 
-pub(crate) fn validate_no_pending_journal() -> Result<()> {
-    lock_without_pending_journal().map(|_| ())
+pub(crate) fn validate_no_pending_journal(project: &Path) -> Result<()> {
+    lock_without_pending_journal(project).map(|_| ())
 }
 
 struct PreviewLock {
     _file: Option<File>,
     _bootstrap: Option<BootstrapLock>,
+    _legacy_file: Option<File>,
 }
 
-fn lock_without_pending_journal() -> Result<PreviewLock> {
-    lock_without_pending_journal_at(&global_control_directory()?)
+fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
+    let mut lock = lock_without_pending_journal_at(&global_control_directory()?)?;
+    // The shared guard is already held. Do not acquire bootstrap recursively.
+    lock._legacy_file = lock_existing_without_pending_journal(&legacy_control_directory(project)?)?;
+    Ok(lock)
 }
 
 fn lock_without_pending_journal_at(control: &Path) -> Result<PreviewLock> {
     let bootstrap = BootstrapLock::acquire(control)?;
-    if control.exists() {
+    let lock = lock_existing_without_pending_journal(control)?;
+    let bootstrap = if lock.is_some() {
+        drop(bootstrap);
+        None
+    } else {
+        Some(bootstrap)
+    };
+    Ok(PreviewLock {
+        _file: lock,
+        _bootstrap: bootstrap,
+        _legacy_file: None,
+    })
+}
+
+fn lock_existing_without_pending_journal(control: &Path) -> Result<Option<File>> {
+    validate_control_ancestors(control)?;
+    if control.symlink_metadata().is_ok() {
         validate_control_directory(control, false)?;
     }
     let lock_path = control.join("operation.lock");
@@ -109,16 +129,7 @@ fn lock_without_pending_journal_at(control: &Path) -> Result<PreviewLock> {
             "a recoverable standalone transaction is pending; run a mutating aru command before --dry-run",
         ));
     }
-    let bootstrap = if lock.is_some() {
-        drop(bootstrap);
-        None
-    } else {
-        Some(bootstrap)
-    };
-    Ok(PreviewLock {
-        _file: lock,
-        _bootstrap: bootstrap,
-    })
+    Ok(lock)
 }
 
 fn validate_no_managed_overlap(operations: &[Operation]) -> Result<()> {
@@ -199,21 +210,35 @@ fn validate_standalone_root(project: &Path, operation: &str) -> Result<()> {
     Ok(())
 }
 
-fn acquire_for_project(project: &Path) -> Result<(File, File, PathBuf)> {
+pub(super) fn acquire_for_project(project: &Path) -> Result<(File, Option<File>, PathBuf)> {
     let (global_lock, journal_path) = acquire_global()?;
-    let (legacy_lock, legacy_journal_path) = acquire_legacy(project)?;
-    recover_if_needed_at(project, &legacy_journal_path)?;
+    let legacy_control = legacy_control_directory(project)?;
+    let legacy_lock = match legacy_control.symlink_metadata() {
+        Ok(_) => {
+            let (lock, journal) = acquire_control(legacy_control)?;
+            recover_if_needed_at(project, &journal)?;
+            Some(lock)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(AruError::msg(format!(
+                "could not inspect legacy standalone recovery scope {}: {error}",
+                legacy_control.display()
+            )));
+        }
+    };
     Ok((global_lock, legacy_lock, journal_path))
 }
 
-fn acquire_legacy(project: &Path) -> Result<(File, PathBuf)> {
+pub(super) fn legacy_control_directory(project: &Path) -> Result<PathBuf> {
     let canonical = project.canonicalize().at(project)?;
     let digest = crate::digest::sha256_bytes(canonical.as_os_str().as_encoded_bytes());
-    acquire_control(
-        std::env::temp_dir()
-            .join("aru-standalone")
-            .join(digest.strip_prefix("sha256:").unwrap_or(&digest)),
-    )
+    let temporary = std::env::temp_dir();
+    Ok(temporary
+        .canonicalize()
+        .at(&temporary)?
+        .join("aru-standalone")
+        .join(digest.strip_prefix("sha256:").unwrap_or(&digest)))
 }
 
 pub(super) fn acquire_global() -> Result<(File, PathBuf)> {
@@ -238,7 +263,7 @@ fn global_control_directory() -> Result<PathBuf> {
 #[cfg(all(not(test), unix, not(target_os = "redox")))]
 fn global_control_directory() -> Result<PathBuf> {
     let uid = unsafe { libc::geteuid() };
-    Ok(unix_control_directory(stable_user_home()?.as_deref(), uid))
+    unix_control_directory(stable_user_home()?.as_deref(), uid)
 }
 
 #[cfg(all(
@@ -256,31 +281,45 @@ fn global_control_directory() -> Result<PathBuf> {
 }
 
 #[cfg(all(unix, not(target_os = "redox")))]
-fn unix_control_directory(home: Option<&Path>, uid: libc::uid_t) -> PathBuf {
-    let fallback = PathBuf::from(format!("/var/tmp/aru-standalone-{uid}"));
+fn unix_control_directory(home: Option<&Path>, uid: libc::uid_t) -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let temporary = "/private/var/tmp";
+    #[cfg(not(target_os = "macos"))]
+    let temporary = "/var/tmp";
+    let fallback = PathBuf::from(format!("{temporary}/aru-standalone-{uid}"));
+    select_unix_control_directory(home, uid, &fallback)
+}
+
+#[cfg(all(unix, not(target_os = "redox")))]
+fn select_unix_control_directory(
+    home: Option<&Path>,
+    uid: libc::uid_t,
+    fallback: &Path,
+) -> Result<PathBuf> {
     let Some(home) = home.filter(|home| home.is_absolute()) else {
-        return fallback;
+        return Ok(fallback.to_path_buf());
     };
     #[cfg(target_os = "macos")]
     let control = home.join("Library/Application Support/aru/standalone");
     #[cfg(not(target_os = "macos"))]
     let control = home.join(".local/state/aru/standalone");
 
+    validate_control_ancestors(&control)?;
     // Never bypass an established lock or abandon its recovery journal when
     // permissions change. A selected fallback also stays sticky once created.
     if control.join("operation.lock").symlink_metadata().is_ok()
         || control.join("transaction.toml").symlink_metadata().is_ok()
     {
-        return control;
+        return Ok(control);
     }
-    if fallback.symlink_metadata().is_ok() || !home.is_dir() {
-        return fallback;
+    if established_fallback_scope(fallback, uid) || !home.is_dir() {
+        return Ok(fallback.to_path_buf());
     }
     let existing = control.ancestors().find(|path| path.exists());
     if existing.is_some_and(writable_directory) {
-        control
+        Ok(control)
     } else {
-        fallback
+        Ok(fallback.to_path_buf())
     }
 }
 
@@ -361,13 +400,17 @@ fn lookup_user_home(
 
 #[cfg(test)]
 fn global_control_directory() -> Result<PathBuf> {
-    Ok(std::env::temp_dir()
+    let temporary = std::env::temp_dir();
+    Ok(temporary
+        .canonicalize()
+        .at(&temporary)?
         .join("aru-standalone-tests")
         .join(std::process::id().to_string())
         .join(format!("{:?}", std::thread::current().id())))
 }
 
 fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
+    validate_control_ancestors(&control)?;
     std::fs::create_dir_all(&control).at(&control)?;
     validate_control_directory(&control, true)?;
     let lock_path = control.join("operation.lock");
@@ -384,6 +427,50 @@ fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
         ))
     })?;
     Ok((lock, control.join("transaction.toml")))
+}
+
+// Resolving a symlink anew on each invocation cannot retain a crashed journal's
+// identity. Reject such control scopes rather than silently creating a second
+// lock after retargeting. Existing state is left untouched for manual recovery.
+fn validate_control_ancestors(control: &Path) -> Result<()> {
+    for ancestor in control.ancestors() {
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AruError::msg(format!(
+                    "standalone control path has a mutable symlink ancestor: {}; restore the original state path before retrying",
+                    ancestor.display()
+                )));
+            }
+            Ok(_) => (),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(error) => {
+                return Err(AruError::msg(format!(
+                    "could not inspect standalone control ancestor {}: {error}",
+                    ancestor.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "redox")))]
+fn established_fallback_scope(path: &Path, uid: libc::uid_t) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    path.symlink_metadata().is_ok_and(|metadata| {
+        metadata.is_dir()
+            && metadata.uid() == uid
+            && (metadata.mode() & 0o077 == 0
+                // Preserve owned recovery state across permission changes;
+                // preview rejects unsafe permissions and mutation repairs them.
+                || path.join("operation.lock").symlink_metadata().is_ok()
+                || path.join("transaction.toml").symlink_metadata().is_ok())
+    })
 }
 
 fn validate_control_directory(control: &Path, repair_permissions: bool) -> Result<()> {
@@ -423,6 +510,10 @@ fn validate_control_directory(control: &Path, repair_permissions: bool) -> Resul
 #[cfg(test)]
 #[path = "standalone/preview_tests.rs"]
 mod preview_tests;
+
+#[cfg(all(test, unix, not(target_os = "redox")))]
+#[path = "standalone/control_tests.rs"]
+mod control_tests;
 
 #[cfg(all(test, unix, not(target_os = "redox")))]
 mod tests {
@@ -479,8 +570,11 @@ mod tests {
     #[test]
     fn unix_control_directory_falls_back_to_durable_uid_path() {
         assert_eq!(
-            unix_control_directory(None, 42),
-            PathBuf::from("/var/tmp/aru-standalone-42")
+            unix_control_directory(None, 42)
+                .unwrap()
+                .file_name()
+                .unwrap(),
+            "aru-standalone-42"
         );
     }
 
@@ -489,21 +583,22 @@ mod tests {
     fn unix_control_directory_uses_account_home_when_available() {
         let home = tempfile::tempdir().unwrap();
         assert_eq!(
-            unix_control_directory(Some(home.path()), unsafe { libc::geteuid() }),
+            unix_control_directory(Some(home.path()), unsafe { libc::geteuid() }).unwrap(),
             home.path().join(".local/state/aru/standalone")
         );
     }
 
     #[test]
     fn unix_control_directory_rejects_unusable_account_homes() {
-        let root = tempfile::tempdir().unwrap();
-        let missing = root.path().join("nonexistent");
-        let file = root.path().join("not-a-directory");
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let missing = root.join("nonexistent");
+        let file = root.join("not-a-directory");
         std::fs::write(&file, "").unwrap();
         for home in [&missing, &file, Path::new("relative")] {
             assert_eq!(
-                unix_control_directory(Some(home), 42),
-                PathBuf::from("/var/tmp/aru-standalone-42")
+                unix_control_directory(Some(home), 42).unwrap(),
+                unix_control_directory(None, 42).unwrap()
             );
         }
         assert!(!missing.exists());
@@ -519,9 +614,10 @@ mod tests {
         }
         let home = tempfile::tempdir().unwrap();
         std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
-        let selected = unix_control_directory(Some(home.path()), 42);
+        let selected =
+            unix_control_directory(Some(&home.path().canonicalize().unwrap()), 42).unwrap();
         std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(selected, PathBuf::from("/var/tmp/aru-standalone-42"));
+        assert_eq!(selected, unix_control_directory(None, 42).unwrap());
         assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
     }
 
@@ -529,12 +625,13 @@ mod tests {
     fn unix_control_directory_does_not_abandon_existing_recovery_scope() {
         use std::os::unix::fs::PermissionsExt;
 
-        let home = tempfile::tempdir().unwrap();
-        let control = unix_control_directory(Some(home.path()), 42);
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().canonicalize().unwrap();
+        let control = unix_control_directory(Some(&home), 42).unwrap();
         std::fs::create_dir_all(&control).unwrap();
         std::fs::write(control.join("transaction.toml"), "pending").unwrap();
         std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let selected = unix_control_directory(Some(home.path()), 42);
+        let selected = unix_control_directory(Some(&home), 42).unwrap();
         std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(selected, control);
     }
