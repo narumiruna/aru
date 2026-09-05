@@ -12,8 +12,7 @@ use crate::error::{AruError, IoContext, Result};
 mod standalone;
 
 pub use standalone::{
-    apply_standalone, apply_standalone_global, apply_standalone_prepared,
-    validate_standalone_dry_run, validate_standalone_global_dry_run,
+    StandaloneDryRun, apply_standalone, apply_standalone_global, apply_standalone_prepared,
 };
 
 pub(crate) fn validate_no_standalone_pending_journal() -> Result<()> {
@@ -243,8 +242,13 @@ fn apply_with_mode(
     if let Some(parent) = journal_path.parent() {
         std::fs::create_dir_all(parent).at(parent)?;
     }
-    operations.sort_by(|left, right| left.destination.cmp(&right.destination));
     validate_operations(mode, &operations, journal_version)?;
+    if matches!(mode, PathMode::Absolute) {
+        for operation in &mut operations {
+            operation.destination = normalize_destination(&operation.destination)?;
+        }
+    }
+    operations.sort_by(|left, right| left.destination.cmp(&right.destination));
 
     let transaction_id = unique_suffix();
     let mut journal = Journal {

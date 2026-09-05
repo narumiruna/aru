@@ -8,7 +8,7 @@ use crate::lockfile::{Lockfile, McpServer};
 use crate::manifest::{ManifestDocument, McpRequirement, Target, validate_name};
 use crate::sync::{CollisionPolicy, UpdateSelection};
 use crate::target::mcp::McpConfig;
-use crate::transaction::{Operation, apply_standalone_prepared, validate_standalone_dry_run};
+use crate::transaction::{Operation, StandaloneDryRun, apply_standalone_prepared};
 
 use super::{ExecutionPolicy, ProjectionPolicy};
 
@@ -79,9 +79,10 @@ pub(super) fn add_standalone(
         policy.offline,
     )?;
     let plan = if intent.dry_run {
+        let dry_run = StandaloneDryRun::begin(project, false)?;
         let (operations, plan) =
             prepare_standalone_mcp(project, &intent.name, &server, intent.force)?;
-        validate_standalone_dry_run(project, &operations)?;
+        dry_run.validate(&operations)?;
         for item in &plan {
             policy.output.plan(item, true);
         }

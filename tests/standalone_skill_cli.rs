@@ -187,6 +187,89 @@ fn distinct_global_target_aliases_preserve_their_requested_paths() {
 }
 
 #[test]
+fn distinct_global_targets_share_one_install_per_destination() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    let config = temporary.path().join("config");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    for dry_run in [true, false] {
+        let mut command = cargo_bin_cmd!("aru");
+        command
+            .current_dir(&project)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &config)
+            .args([
+                "skill",
+                "add",
+                repository.to_str().unwrap(),
+                "--all",
+                "--global",
+                "--target",
+                "agents",
+                "--target",
+                "cline",
+                "--target",
+                "amp",
+                "--target",
+                "replit",
+            ]);
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        let result = command.assert().success();
+        let stderr = String::from_utf8_lossy(&result.get_output().stderr);
+        let action = if dry_run { "Would create" } else { "Created" };
+        assert_eq!(stderr.matches(&format!("{action} skill demo")).count(), 2);
+        assert_eq!(
+            home.join(".agents/skills/demo/SKILL.md").is_file(),
+            !dry_run
+        );
+        assert_eq!(
+            config.join("agents/skills/demo/SKILL.md").is_file(),
+            !dry_run
+        );
+    }
+    assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+}
+
+#[test]
+fn repeated_global_targets_and_equivalent_aliases_are_rejected() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+    for targets in [["agents", "agents"], ["claude", "claude-code"]] {
+        cargo_bin_cmd!("aru")
+            .current_dir(&project)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .args([
+                "skill",
+                "add",
+                repository.to_str().unwrap(),
+                "--all",
+                "--global",
+                "--target",
+                targets[0],
+                "--target",
+                targets[1],
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("targets contains duplicates"));
+    }
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
+
+#[test]
 fn complete_target_override_does_not_require_a_home_directory() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

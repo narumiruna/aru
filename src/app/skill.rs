@@ -16,10 +16,7 @@ use crate::resolver::{
 };
 use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
-use crate::transaction::{
-    Operation, apply_standalone, apply_standalone_global, validate_standalone_dry_run,
-    validate_standalone_global_dry_run,
-};
+use crate::transaction::{Operation, StandaloneDryRun, apply_standalone, apply_standalone_global};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
@@ -118,6 +115,10 @@ fn standalone_add_with_policy(
         requirement.normalize();
     }
     let selected = select_candidates(inspection.candidates, &requirement)?;
+    let dry_run = args
+        .dry_run
+        .then(|| StandaloneDryRun::begin(project, args.global))
+        .transpose()?;
     let mut destinations = BTreeSet::new();
     let mut operations = Vec::new();
     let mut plan = Vec::new();
@@ -168,12 +169,8 @@ fn standalone_add_with_policy(
         }
     }
     plan.sort();
-    if args.dry_run {
-        if args.global {
-            validate_standalone_global_dry_run(project, &operations)?;
-        } else {
-            validate_standalone_dry_run(project, &operations)?;
-        }
+    if let Some(dry_run) = dry_run {
+        dry_run.validate(&operations)?;
         if let Some(collision) = collision {
             return Err(AruError::msg(collision));
         }
@@ -217,14 +214,16 @@ fn validate_standalone_targets(targets: &[SkillTargetArg], global: bool) -> Resu
             )));
         }
         let identity = if global {
-            crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
-                .ok_or_else(|| {
-                    AruError::msg(format!(
-                        "target {target} does not support global Agent Skills installation"
-                    ))
-                })?
+            let directory =
+                crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
+                    .ok_or_else(|| {
+                        AruError::msg(format!(
+                            "target {target} does not support global Agent Skills installation"
+                        ))
+                    })?;
+            (target, Some(directory))
         } else {
-            target.to_string().into()
+            (target, None)
         };
         if !identities.insert(identity) {
             return Err(AruError::msg(

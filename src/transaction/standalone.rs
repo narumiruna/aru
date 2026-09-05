@@ -38,26 +38,46 @@ pub fn apply_standalone_global(
     apply_absolute_at(operations, &journal_path)
 }
 
-pub fn validate_standalone_dry_run(project: &Path, operations: &[Operation]) -> Result<()> {
-    validate_no_pending_journal()?;
-    validate_standalone_root(project, "standalone")?;
-    validate_operations(PathMode::Project(project), operations, 2)
+/// Keeps collision inspection and plan validation inside the same lock scope.
+pub struct StandaloneDryRun<'a> {
+    _lock: Option<File>,
+    project: &'a Path,
+    global: bool,
 }
 
-pub fn validate_standalone_global_dry_run(project: &Path, operations: &[Operation]) -> Result<()> {
-    validate_no_pending_journal()?;
-    validate_standalone_root(project, "global skill")?;
-    validate_operations(PathMode::Absolute, operations, 2)?;
-    validate_no_managed_overlap(operations)
+impl<'a> StandaloneDryRun<'a> {
+    pub fn begin(project: &'a Path, global: bool) -> Result<Self> {
+        let lock = lock_without_pending_journal()?;
+        validate_standalone_root(project, "standalone")?;
+        Ok(Self {
+            _lock: lock,
+            project,
+            global,
+        })
+    }
+
+    pub fn validate(&self, operations: &[Operation]) -> Result<()> {
+        validate_standalone_root(self.project, "standalone")?;
+        if self.global {
+            validate_operations(PathMode::Absolute, operations, 2)?;
+            validate_no_managed_overlap(operations)
+        } else {
+            validate_operations(PathMode::Project(self.project), operations, 2)
+        }
+    }
 }
 
 pub(crate) fn validate_no_pending_journal() -> Result<()> {
+    lock_without_pending_journal().map(|_| ())
+}
+
+fn lock_without_pending_journal() -> Result<Option<File>> {
     let control = global_control_directory()?;
     if control.exists() {
         validate_control_directory(&control, false)?;
     }
     let lock_path = control.join("operation.lock");
-    let _lock = if lock_path.exists() {
+    let lock = if lock_path.exists() {
         let lock = OpenOptions::new()
             .read(true)
             .write(true)
@@ -77,7 +97,7 @@ pub(crate) fn validate_no_pending_journal() -> Result<()> {
             "a recoverable standalone transaction is pending; run a mutating aru command before --dry-run",
         ));
     }
-    Ok(())
+    Ok(lock)
 }
 
 fn validate_no_managed_overlap(operations: &[Operation]) -> Result<()> {
@@ -147,7 +167,10 @@ pub fn apply_standalone_prepared<T>(
 }
 
 fn validate_standalone_root(project: &Path, operation: &str) -> Result<()> {
-    if project.join(crate::manifest::MANIFEST_FILE).is_file() {
+    if project
+        .ancestors()
+        .any(|ancestor| ancestor.join(crate::manifest::MANIFEST_FILE).is_file())
+    {
         return Err(AruError::msg(format!(
             "aru.toml appeared during {operation} installation; retry the command"
         )));
@@ -208,12 +231,51 @@ fn global_control_directory() -> Result<PathBuf> {
 
 #[cfg(all(unix, not(target_os = "redox")))]
 fn unix_control_directory(home: Option<&Path>, uid: libc::uid_t) -> PathBuf {
-    match home {
-        #[cfg(target_os = "macos")]
-        Some(home) => home.join("Library/Application Support/aru/standalone"),
-        #[cfg(not(target_os = "macos"))]
-        Some(home) => home.join(".local/state/aru/standalone"),
-        None => PathBuf::from(format!("/var/tmp/aru-standalone-{uid}")),
+    let fallback = PathBuf::from(format!("/var/tmp/aru-standalone-{uid}"));
+    let Some(home) = home.filter(|home| home.is_absolute()) else {
+        return fallback;
+    };
+    #[cfg(target_os = "macos")]
+    let control = home.join("Library/Application Support/aru/standalone");
+    #[cfg(not(target_os = "macos"))]
+    let control = home.join(".local/state/aru/standalone");
+
+    // Never bypass an established lock or abandon its recovery journal when
+    // permissions change. A selected fallback also stays sticky once created.
+    if control.join("operation.lock").symlink_metadata().is_ok()
+        || control.join("transaction.toml").symlink_metadata().is_ok()
+    {
+        return control;
+    }
+    if fallback.symlink_metadata().is_ok() || !home.is_dir() {
+        return fallback;
+    }
+    let existing = control.ancestors().find(|path| path.exists());
+    if existing.is_some_and(writable_directory) {
+        control
+    } else {
+        fallback
+    }
+}
+
+#[cfg(all(unix, not(target_os = "redox")))]
+fn writable_directory(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    unsafe {
+        libc::faccessat(
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::W_OK | libc::X_OK,
+            libc::AT_EACCESS,
+        ) == 0
     }
 }
 
@@ -331,10 +393,56 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn unix_control_directory_uses_account_home_when_available() {
+        let home = tempfile::tempdir().unwrap();
         assert_eq!(
-            unix_control_directory(Some(Path::new("/home/demo")), 42),
-            PathBuf::from("/home/demo/.local/state/aru/standalone")
+            unix_control_directory(Some(home.path()), unsafe { libc::geteuid() }),
+            home.path().join(".local/state/aru/standalone")
         );
+    }
+
+    #[test]
+    fn unix_control_directory_rejects_unusable_account_homes() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("nonexistent");
+        let file = root.path().join("not-a-directory");
+        std::fs::write(&file, "").unwrap();
+        for home in [&missing, &file, Path::new("relative")] {
+            assert_eq!(
+                unix_control_directory(Some(home), 42),
+                PathBuf::from("/var/tmp/aru-standalone-42")
+            );
+        }
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn unix_control_directory_falls_back_from_unwritable_state_ancestor() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root can write through mode 0555; this regression needs an unprivileged UID.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let home = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let selected = unix_control_directory(Some(home.path()), 42);
+        std::fs::set_permissions(home.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(selected, PathBuf::from("/var/tmp/aru-standalone-42"));
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn unix_control_directory_does_not_abandon_existing_recovery_scope() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let control = unix_control_directory(Some(home.path()), 42);
+        std::fs::create_dir_all(&control).unwrap();
+        std::fs::write(control.join("transaction.toml"), "pending").unwrap();
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let selected = unix_control_directory(Some(home.path()), 42);
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(selected, control);
     }
 
     #[test]

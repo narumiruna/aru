@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "review_tests.rs"]
+mod review;
+
 #[test]
 fn failed_post_copy_verification_leaves_no_stage_or_destination() {
     let project = tempfile::tempdir().unwrap();
@@ -363,10 +366,8 @@ fn global_dry_run_rejects_pending_recovery_without_mutating_it() {
     set_failure_phase("ARU_TEST_CRASH_AFTER", None);
     assert!(crashed.is_err());
 
-    let result = validate_standalone_global_dry_run(
-        project.path(),
-        &[Operation::file(&destination, b"second".to_vec())],
-    );
+    let result = StandaloneDryRun::begin(project.path(), true)
+        .and_then(|dry_run| dry_run.validate(&[Operation::file(&destination, b"second".to_vec())]));
     assert!(result.is_err());
     assert!(destination.exists());
 
