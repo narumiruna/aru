@@ -30,15 +30,15 @@ Non-interactive standalone commands must provide both `--target` and an explicit
 
 Standalone installation writes a complete independent copy to each unique target path and never creates cross-target symlinks.
 This applies to both project-directory and global standalone installs.
-It rejects an existing same-name destination before any write unless `--force` is passed.
+It rejects an existing same-name destination before writing target content unless `--force` is passed.
 Non-force skill installs also require atomic no-replace rename support from the platform and filesystem, so content created concurrently is preserved; unsupported backends fail rather than falling back to an overwriting rename.
 Transaction plans also reject duplicate or nested paths after conservative Unicode case and normalization comparison, even on case-sensitive filesystems; use unambiguous destination names instead.
 It does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, and the installed copies are not managed by `skill update`, `skill remove`, or `sync`.
-Mutating standalone and managed installs coordinate through aru's durable OS-user state directory, independent of `XDG_STATE_HOME`; the recovery journal is removed after a completed transaction.
+Standalone and managed commands, including previews, coordinate through the same persistent per-user `operation.lock` in aru's durable OS-user state directory, independent of `XDG_STATE_HOME`. They never lock the shared temporary directory itself, so one user's waiting operation does not block another user's lock scope. The recovery journal is removed after a completed transaction.
 Control paths with symlink ancestors are rejected rather than following a potentially retargeted lock or journal. Restore the original directory layout before retrying if existing recovery state is affected.
 An established Unix fallback directory is preferred only when it is owned by the effective UID and is private or contains existing lock/recovery state; unrelated fallback entries do not override a usable account home. Owned recovery state is retained across permission changes; mutations repair its directory permissions and dry runs reject unsafe permissions.
 Both managed and standalone mutations recover an existing legacy project-scoped standalone journal before new writes; dry runs reject pending legacy recovery without changing it.
-`--dry-run` validates and previews the complete installation without writing.
+`--dry-run` validates and previews without changing project files or installing skills. It may create private coordination directories and `operation.lock` outside the project, including on first use; on Unix these are created with modes `0700` and `0600`. It does not recover or modify pending journals. Symlink, non-regular, multiply linked, foreign-owned, or other-user-writable Unix lock files are rejected without replacing them.
 `--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
 
 ## Select exports

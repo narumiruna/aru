@@ -19,9 +19,9 @@ Without `--target`, an interactive terminal opens a searchable multi-select cont
 Non-interactive standalone commands must pass `--target`.
 
 Standalone mode safely merges the named entry into every selected config and preserves unrelated entries and supported comments.
-An existing same-name entry is rejected before any write unless `--force` is passed; force replaces only that entry.
+An existing same-name entry is rejected before writing config content unless `--force` is passed; force replaces only that entry.
 The operation does not create `aru.toml`, `aru.lock`, `.aru/`, ownership state, or a project cache, so `mcp update`, `mcp remove`, and `sync` do not manage the installed entry.
-`--dry-run` resolves and previews every config destination without writing.
+`--dry-run` resolves and previews every config destination without changing project or target files. It may create private per-user coordination directories and `operation.lock` outside the project, but does not recover pending journals.
 `--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
 Registry declarations require network access, while direct HTTPS and stdio declarations can be rendered with `--offline`.
 

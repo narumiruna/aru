@@ -589,7 +589,7 @@ fn finish_execution(
                 prepared.lock.projection_input_hash
             ));
         }
-        output.completion("Dry run complete; no files were changed.");
+        output.completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     }
     let changed = !prepared.operations.is_empty();

@@ -95,7 +95,7 @@ Initialization creates:
 
 ## Adopt existing instructions
 
-Specify each existing `AGENTS.md` file explicitly and preview without writing:
+Specify each existing `AGENTS.md` file explicitly and preview without changing project files:
 
 ```console
 aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
@@ -134,7 +134,7 @@ aru skill add narumiruna/skills
 
 ## Verify replay
 
-Require the committed lock, then check local synchronization without writing:
+Require the committed lock, then check local synchronization without changing project or target files (private per-user lock metadata may be created outside the project):
 
 ```console
 aru sync --locked

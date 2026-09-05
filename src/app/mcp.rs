@@ -88,7 +88,7 @@ pub(super) fn add_standalone(
         }
         policy
             .output
-            .completion("Dry run complete; no files were changed.");
+            .completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     } else {
         apply_standalone_prepared(project, || {

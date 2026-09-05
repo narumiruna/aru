@@ -229,6 +229,10 @@ fn distinct_global_targets_share_one_install_per_destination() {
         let stderr = String::from_utf8_lossy(&result.get_output().stderr);
         let action = if dry_run { "Would create" } else { "Created" };
         assert_eq!(stderr.matches(&format!("{action} skill demo")).count(), 2);
+        if dry_run {
+            assert!(stderr.contains("no project or target files were changed"));
+            assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+        }
         assert_eq!(
             home.join(".agents/skills/demo/SKILL.md").is_file(),
             !dry_run
@@ -239,6 +243,24 @@ fn distinct_global_targets_share_one_install_per_destination() {
         );
     }
     assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
+}
+
+#[test]
+fn preview_help_discloses_private_user_lock_metadata() {
+    for command in [
+        vec!["skill", "add", "--help"],
+        vec!["mcp", "add", "--help"],
+        vec!["sync", "--help"],
+        vec!["lock", "--help"],
+    ] {
+        cargo_bin_cmd!("aru")
+            .args(command)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "may create private user lock metadata",
+            ));
+    }
 }
 
 #[test]

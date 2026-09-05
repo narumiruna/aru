@@ -11,9 +11,6 @@ use super::{
 };
 use crate::error::{AruError, IoContext, Result};
 
-mod bootstrap;
-use bootstrap::BootstrapLock;
-
 pub fn apply_standalone(project: &Path, operations: Vec<Operation>, force: bool) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
@@ -75,14 +72,12 @@ pub(crate) fn validate_no_pending_journal(project: &Path) -> Result<()> {
 }
 
 struct PreviewLock {
-    _file: Option<File>,
-    _bootstrap: Option<BootstrapLock>,
+    _file: File,
     _legacy_file: Option<File>,
 }
 
 fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
     let mut lock = lock_without_pending_journal_at(&global_control_directory()?)?;
-    // The shared guard is already held. Do not acquire bootstrap recursively.
     if let Some(control) = legacy_control_directory(project)?
         && owned_legacy_scope(&control)?
     {
@@ -92,17 +87,12 @@ fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
 }
 
 fn lock_without_pending_journal_at(control: &Path) -> Result<PreviewLock> {
-    let bootstrap = BootstrapLock::acquire(control)?;
-    let lock = lock_existing_without_pending_journal(control)?;
-    let bootstrap = if lock.is_some() {
-        drop(bootstrap);
-        None
-    } else {
-        Some(bootstrap)
-    };
+    // First previews may create private coordination metadata, but never
+    // recover a journal or write project/target content.
+    let (lock, _) = acquire_control_at(control, false)?;
+    reject_pending_journal(control)?;
     Ok(PreviewLock {
         _file: lock,
-        _bootstrap: bootstrap,
         _legacy_file: None,
     })
 }
@@ -113,27 +103,29 @@ fn lock_existing_without_pending_journal(control: &Path) -> Result<Option<File>>
         validate_control_directory(control, false)?;
     }
     let lock_path = control.join("operation.lock");
-    let lock = if lock_path.exists() {
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&lock_path)
-            .at(&lock_path)?;
-        lock.lock_exclusive().map_err(|error| {
-            AruError::msg(format!(
-                "could not acquire standalone operation lock: {error}"
-            ))
-        })?;
-        Some(lock)
-    } else {
-        None
+    let lock = match lock_path.symlink_metadata() {
+        Ok(_) => Some(acquire_lock_file(&lock_path, false)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(AruError::Io {
+                path: lock_path,
+                source,
+            });
+        }
     };
-    if control.join("transaction.toml").exists() {
-        return Err(AruError::msg(
-            "a recoverable standalone transaction is pending; run a mutating aru command before --dry-run",
-        ));
-    }
+    reject_pending_journal(control)?;
     Ok(lock)
+}
+
+fn reject_pending_journal(control: &Path) -> Result<()> {
+    let path = control.join("transaction.toml");
+    match path.symlink_metadata() {
+        Ok(_) => Err(AruError::msg(
+            "a recoverable standalone transaction is pending; run a mutating aru command before --dry-run",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(AruError::Io { path, source }),
+    }
 }
 
 fn validate_no_managed_overlap(operations: &[Operation]) -> Result<()> {
@@ -288,7 +280,6 @@ pub(super) fn acquire_global() -> Result<(File, PathBuf)> {
 }
 
 fn acquire_global_at(control: PathBuf) -> Result<(File, PathBuf)> {
-    let _bootstrap = BootstrapLock::acquire(&control)?;
     acquire_control(control)
 }
 
@@ -452,23 +443,84 @@ fn global_control_directory() -> Result<PathBuf> {
 }
 
 fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
-    validate_control_ancestors(&control)?;
-    std::fs::create_dir_all(&control).at(&control)?;
-    validate_control_directory(&control, true)?;
-    let lock_path = control.join("operation.lock");
-    let lock = OpenOptions::new()
-        .create(true)
+    acquire_control_at(&control, true)
+}
+
+fn acquire_control_at(control: &Path, repair_permissions: bool) -> Result<(File, PathBuf)> {
+    validate_control_ancestors(control)?;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    // A fallback in a shared temporary directory must be private from the
+    // moment it becomes visible, not only after a subsequent chmod.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(control).at(control)?;
+    validate_control_directory(control, repair_permissions)?;
+    let lock = acquire_lock_file(&control.join("operation.lock"), true)?;
+    Ok((lock, control.join("transaction.toml")))
+}
+
+fn acquire_lock_file(path: &Path, create: bool) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options
+        .create(create)
         .truncate(false)
         .read(true)
-        .write(true)
-        .open(&lock_path)
-        .at(&lock_path)?;
+        .write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Do not follow a substituted symlink or block opening a FIFO.
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let lock = options.open(path).at(path)?;
+    let metadata = lock.metadata().at(path)?;
+    if !metadata.is_file() {
+        return Err(AruError::msg(
+            "standalone operation lock must be a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(AruError::msg(
+                "standalone operation lock must be owned by the current user, have one link, and not be writable by other users",
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(AruError::msg(
+                "standalone operation lock must not be a reparse point",
+            ));
+        }
+    }
+    // All callers open the same persistent inode, including concurrent first
+    // callers. Never replace/unlink it or lock a shared system directory.
     lock.lock_exclusive().map_err(|error| {
         AruError::msg(format!(
             "could not acquire standalone operation lock: {error}"
         ))
     })?;
-    Ok((lock, control.join("transaction.toml")))
+    Ok(lock)
 }
 
 // Resolving a symlink anew on each invocation cannot retain a crashed journal's

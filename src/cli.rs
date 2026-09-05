@@ -229,7 +229,7 @@ pub struct PluginAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or persistent cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
@@ -248,7 +248,7 @@ pub struct PluginUpdateArgs {
     /// Update lock intent but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or persistent cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
@@ -264,7 +264,7 @@ pub struct PluginRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or persistent cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -371,7 +371,7 @@ pub struct PackageAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding package instruction blocks.
@@ -389,7 +389,7 @@ pub struct PackageRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -405,7 +405,7 @@ pub struct PackageUpdateArgs {
     /// Update lock intent but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file or cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding package instruction blocks.
@@ -418,20 +418,20 @@ pub struct PackageUpdateArgs {
 
 #[derive(Debug, Args)]
 pub struct LockArgs {
-    /// Check whether aru.lock is up to date without writing.
+    /// Check aru.lock without project changes; may create private user lock metadata.
     #[arg(long, conflicts_with = "dry_run")]
     pub check: bool,
-    /// Resolve and print the plan without writing any file or cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long)]
     pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct SyncArgs {
-    /// Check whether the lock and target paths are synchronized without writing.
+    /// Check lock/target synchronization without changing them; may create private user lock metadata.
     #[arg(long, conflicts_with_all = ["dry_run", "merge", "force"])]
     pub check: bool,
-    /// Resolve and print the plan without writing any file or cache.
+    /// Preview without project/target changes or persistent cache; may create private user lock metadata.
     #[arg(short = 'n', long)]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding instruction blocks.
@@ -483,7 +483,7 @@ pub struct InstructionAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding instruction blocks.
@@ -502,7 +502,7 @@ pub struct InstructionRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Resolve and print the plan without writing any file.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -534,7 +534,7 @@ pub struct TargetAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding instruction blocks.
@@ -553,7 +553,7 @@ pub struct TargetRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -566,7 +566,7 @@ pub struct TargetSetArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Preserve unmanaged Markdown while adding instruction blocks.
@@ -651,7 +651,7 @@ pub struct SkillAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
@@ -668,7 +668,7 @@ pub struct SkillRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -681,7 +681,7 @@ pub struct SkillUpdateArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
@@ -750,7 +750,7 @@ pub struct McpAddArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
@@ -764,7 +764,7 @@ pub struct McpRemoveArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
 }
@@ -777,7 +777,7 @@ pub struct McpUpdateArgs {
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
-    /// Print a deterministic plan without writing.
+    /// Preview without project/target changes; may create private user lock metadata.
     #[arg(short = 'n', long, help_heading = "Apply Options")]
     pub dry_run: bool,
     /// Destructively take over colliding unmanaged entries.
