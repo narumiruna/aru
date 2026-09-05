@@ -52,6 +52,13 @@ url = "2.5"
 walkdir = "2.5"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2"] }
 
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading"
+] }
+
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"

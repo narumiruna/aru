@@ -11,6 +11,9 @@ use super::{
 };
 use crate::error::{AruError, IoContext, Result};
 
+mod bootstrap;
+use bootstrap::BootstrapLock;
+
 pub fn apply_standalone(project: &Path, operations: Vec<Operation>, force: bool) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
@@ -40,7 +43,7 @@ pub fn apply_standalone_global(
 
 /// Keeps collision inspection and plan validation inside the same lock scope.
 pub struct StandaloneDryRun<'a> {
-    _lock: Option<File>,
+    _lock: PreviewLock,
     project: &'a Path,
     global: bool,
 }
@@ -71,10 +74,19 @@ pub(crate) fn validate_no_pending_journal() -> Result<()> {
     lock_without_pending_journal().map(|_| ())
 }
 
-fn lock_without_pending_journal() -> Result<Option<File>> {
-    let control = global_control_directory()?;
+struct PreviewLock {
+    _file: Option<File>,
+    _bootstrap: Option<BootstrapLock>,
+}
+
+fn lock_without_pending_journal() -> Result<PreviewLock> {
+    lock_without_pending_journal_at(&global_control_directory()?)
+}
+
+fn lock_without_pending_journal_at(control: &Path) -> Result<PreviewLock> {
+    let bootstrap = BootstrapLock::acquire(control)?;
     if control.exists() {
-        validate_control_directory(&control, false)?;
+        validate_control_directory(control, false)?;
     }
     let lock_path = control.join("operation.lock");
     let lock = if lock_path.exists() {
@@ -97,7 +109,16 @@ fn lock_without_pending_journal() -> Result<Option<File>> {
             "a recoverable standalone transaction is pending; run a mutating aru command before --dry-run",
         ));
     }
-    Ok(lock)
+    let bootstrap = if lock.is_some() {
+        drop(bootstrap);
+        None
+    } else {
+        Some(bootstrap)
+    };
+    Ok(PreviewLock {
+        _file: lock,
+        _bootstrap: bootstrap,
+    })
 }
 
 fn validate_no_managed_overlap(operations: &[Operation]) -> Result<()> {
@@ -196,7 +217,12 @@ fn acquire_legacy(project: &Path) -> Result<(File, PathBuf)> {
 }
 
 pub(super) fn acquire_global() -> Result<(File, PathBuf)> {
-    acquire_control(global_control_directory()?)
+    acquire_global_at(global_control_directory()?)
+}
+
+fn acquire_global_at(control: PathBuf) -> Result<(File, PathBuf)> {
+    let _bootstrap = BootstrapLock::acquire(&control)?;
+    acquire_control(control)
 }
 
 #[cfg(all(not(test), target_os = "windows"))]
@@ -281,40 +307,56 @@ fn writable_directory(path: &Path) -> bool {
 
 #[cfg(all(not(test), unix, not(target_os = "redox")))]
 fn stable_user_home() -> Result<Option<PathBuf>> {
-    use std::ffi::{CStr, OsString};
-    use std::mem;
-    use std::os::unix::ffi::OsStringExt;
-    use std::ptr;
-
     let size = match unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) } {
         value if value < 0 => 512,
-        value => (value as usize).max(512),
+        value => value as usize,
     };
-    let mut buffer = vec![0_u8; size];
-    let mut passwd: libc::passwd = unsafe { mem::zeroed() };
-    let mut result = ptr::null_mut();
-    let status = unsafe {
+    lookup_user_home(size, |passwd, buffer, result| unsafe {
         libc::getpwuid_r(
             libc::geteuid(),
-            &mut passwd,
+            passwd,
             buffer.as_mut_ptr().cast(),
             buffer.len(),
-            &mut result,
+            result,
         )
-    };
-    if status != 0 {
-        return Err(AruError::msg(format!(
-            "could not query the user account for standalone transaction state: OS error {status}"
-        )));
+    })
+}
+
+#[cfg(all(unix, not(target_os = "redox")))]
+const MAX_PASSWD_BUFFER: usize = 1024 * 1024;
+
+#[cfg(all(unix, not(target_os = "redox")))]
+fn lookup_user_home(
+    initial_size: usize,
+    mut lookup: impl FnMut(&mut libc::passwd, &mut [u8], &mut *mut libc::passwd) -> libc::c_int,
+) -> Result<Option<PathBuf>> {
+    use std::ffi::{CStr, OsString};
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut buffer = vec![0_u8; initial_size.clamp(512, MAX_PASSWD_BUFFER)];
+    loop {
+        let mut passwd: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result = std::ptr::null_mut();
+        let status = lookup(&mut passwd, &mut buffer, &mut result);
+        if status == libc::ERANGE && buffer.len() < MAX_PASSWD_BUFFER {
+            buffer.resize((buffer.len() * 2).min(MAX_PASSWD_BUFFER), 0);
+            continue;
+        }
+        if status != 0 {
+            return Err(AruError::msg(format!(
+                "could not query the user account for standalone transaction state: OS error {status} (buffer {} bytes, limit {MAX_PASSWD_BUFFER})",
+                buffer.len()
+            )));
+        }
+        if result.is_null() || passwd.pw_dir.is_null() {
+            return Ok(None);
+        }
+        let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes();
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(PathBuf::from(OsString::from_vec(bytes.to_vec()))));
     }
-    if result.is_null() || passwd.pw_dir.is_null() {
-        return Ok(None);
-    }
-    let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes();
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PathBuf::from(OsString::from_vec(bytes.to_vec()))))
 }
 
 #[cfg(test)]
@@ -378,9 +420,61 @@ fn validate_control_directory(control: &Path, repair_permissions: bool) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
+#[path = "standalone/preview_tests.rs"]
+mod preview_tests;
+
 #[cfg(all(test, unix, not(target_os = "redox")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passwd_lookup_retries_erange_until_the_record_fits() {
+        let mut sizes = Vec::new();
+        let home = lookup_user_home(512, |passwd, buffer, result| {
+            sizes.push(buffer.len());
+            if buffer.len() < 4096 {
+                return libc::ERANGE;
+            }
+            let home = b"/home/demo\0";
+            buffer[..home.len()].copy_from_slice(home);
+            passwd.pw_dir = buffer.as_mut_ptr().cast();
+            *result = passwd;
+            0
+        })
+        .unwrap();
+        assert_eq!(sizes, [512, 1024, 2048, 4096]);
+        assert_eq!(home, Some(PathBuf::from("/home/demo")));
+    }
+
+    #[test]
+    fn passwd_lookup_growth_is_bounded() {
+        let mut sizes = Vec::new();
+        let result = lookup_user_home(512, |_, buffer, _| {
+            sizes.push(buffer.len());
+            libc::ERANGE
+        });
+        assert!(result.is_err());
+        assert_eq!(sizes.len(), 12);
+        assert_eq!(sizes.last(), Some(&MAX_PASSWD_BUFFER));
+        let result = lookup_user_home(usize::MAX, |_, buffer, _| {
+            assert_eq!(buffer.len(), MAX_PASSWD_BUFFER);
+            libc::ERANGE
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn passwd_lookup_preserves_missing_records_and_other_errors() {
+        assert_eq!(lookup_user_home(512, |_, _, _| 0).unwrap(), None);
+        let mut calls = 0;
+        let result = lookup_user_home(512, |_, _, _| {
+            calls += 1;
+            libc::EIO
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
+    }
 
     #[test]
     fn unix_control_directory_falls_back_to_durable_uid_path() {
