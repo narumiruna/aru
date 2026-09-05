@@ -28,8 +28,8 @@ use crate::sync::{
     CollisionPolicy, ReconcileRequest, SyncResult, garbage_collect, prepare_request,
 };
 use crate::transaction::{
-    JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed,
-    validate_no_standalone_pending_journal,
+    JOURNAL_FILE, Operation, PreviewLock, ProjectLock, apply, lock_without_pending_journal,
+    recover_if_needed,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -617,21 +617,26 @@ fn finish_execution(
     Ok(())
 }
 
-pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
+pub(crate) enum ExecutionGuard {
+    Mutation { _lock: ProjectLock },
+    Preview { _lock: PreviewLock },
+}
+
+pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
     if dry_run {
-        validate_no_standalone_pending_journal(project)?;
+        let guard = lock_without_pending_journal(project)?;
         if project.join(JOURNAL_FILE).exists() {
             return Err(AruError::msg(
                 "a recoverable transaction is pending; run a mutating aru command before --dry-run",
             ));
         }
-        Ok(None)
+        Ok(ExecutionGuard::Preview { _lock: guard })
     } else {
         let guard = ProjectLock::acquire(project)?;
         if recover_if_needed(project)? {
             eprintln!("recovered an interrupted aru transaction");
         }
-        Ok(Some(guard))
+        Ok(ExecutionGuard::Mutation { _lock: guard })
     }
 }
 

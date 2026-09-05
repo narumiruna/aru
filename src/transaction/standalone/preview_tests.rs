@@ -80,8 +80,38 @@ fn established_preview_keeps_the_existing_lock_identity() {
         .unwrap();
     let preview = lock_without_pending_journal_at(&control).unwrap();
     assert!(competing.try_lock_exclusive().is_err());
+    // Model a descriptor inherited by a concurrently forked child before exec.
+    // Closing only the parent's File does not release an flock in that window.
+    let _inherited = preview._file.try_clone().unwrap();
     drop(preview);
     competing.try_lock_exclusive().unwrap();
+}
+
+#[test]
+fn global_guard_releases_operation_and_anchor_with_inherited_descriptors() {
+    let root = tempfile::tempdir().unwrap();
+    let control = root.path().canonicalize().unwrap().join("control");
+    let (file, _) = acquire_global_at(control.clone()).unwrap();
+    let anchor = acquire_lock_file(&control.join("scope.lock"), true).unwrap();
+    let _inherited = [file.try_clone().unwrap(), anchor.try_clone().unwrap()];
+    let competing = ["operation.lock", "scope.lock"].map(|name| {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(control.join(name))
+            .unwrap()
+    });
+    let guard = GlobalLock {
+        _file: file,
+        _anchor: Some(anchor),
+    };
+    for file in &competing {
+        assert!(file.try_lock_exclusive().is_err());
+    }
+    drop(guard);
+    for file in &competing {
+        file.try_lock_exclusive().unwrap();
+    }
 }
 
 #[test]

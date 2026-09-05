@@ -73,17 +73,32 @@ impl StandaloneDryRun {
     }
 }
 
-pub(crate) fn validate_no_pending_journal(project: &Path) -> Result<()> {
-    lock_without_pending_journal(project).map(|_| ())
-}
-
-struct PreviewLock {
+pub(crate) struct PreviewLock {
     _file: File,
     _anchor: Option<File>,
     _legacy_file: Option<File>,
 }
 
-fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
+impl Drop for PreviewLock {
+    fn drop(&mut self) {
+        unlock_files([
+            self._legacy_file.as_ref(),
+            Some(&self._file),
+            self._anchor.as_ref(),
+        ]);
+    }
+}
+
+pub(super) fn unlock_files<const N: usize>(files: [Option<&File>; N]) {
+    // A forked child can temporarily inherit a locked open-file description
+    // before exec closes it. Explicit unlock ends the guard's lifetime even
+    // when another descriptor still refers to that description.
+    for file in files.into_iter().flatten() {
+        let _ = FileExt::unlock(file);
+    }
+}
+
+pub(crate) fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
     let (anchor, control) = control_scope(Some(project), true)?;
     let mut lock = lock_without_pending_journal_at(&control)?;
     lock._anchor = anchor;
@@ -290,6 +305,12 @@ fn inspect_legacy_scope(
 pub(super) struct GlobalLock {
     _file: File,
     _anchor: Option<File>,
+}
+
+impl Drop for GlobalLock {
+    fn drop(&mut self) {
+        unlock_files([Some(&self._file), self._anchor.as_ref()]);
+    }
 }
 
 #[cfg(test)]

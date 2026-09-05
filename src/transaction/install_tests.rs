@@ -77,6 +77,58 @@ fn non_force_installs_preserve_concurrent_content_during_staging_and_commit() {
 }
 
 #[test]
+fn preparation_cleanup_preserves_concurrent_content_in_new_parents() {
+    for global in [false, true] {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = if global {
+            outside.path()
+        } else {
+            project.path()
+        };
+        let _guard = HookGuard;
+        HOOK.with_borrow_mut(|hook| {
+            *hook = Some(Box::new(|phase, destination| {
+                if phase == Event::Staged {
+                    std::fs::write(destination.parent().unwrap().join("manual"), b"preserve")
+                        .unwrap();
+                    // Force a late, non-force collision during preparation.
+                    std::fs::write(destination, b"concurrent").unwrap();
+                }
+            }));
+        });
+        let path = if global {
+            root.join("new/skills/demo")
+        } else {
+            "new/skills/demo".into()
+        };
+        let operations = vec![Operation::file(path, b"planned".to_vec())];
+        let result = if global {
+            apply_standalone_global(project.path(), operations, false)
+        } else {
+            apply_standalone(project.path(), operations, false)
+        };
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("collision"));
+        assert!(error.contains("cleanup left paths for review"));
+        assert_eq!(
+            std::fs::read(root.join("new/skills/manual")).unwrap(),
+            b"preserve"
+        );
+        assert_eq!(
+            std::fs::read(root.join("new/skills/demo")).unwrap(),
+            b"concurrent"
+        );
+        assert_eq!(
+            std::fs::read_dir(root.join("new/skills")).unwrap().count(),
+            2
+        );
+        let (_lock, journal) = crate::transaction::standalone::acquire_global().unwrap();
+        assert!(!journal.exists());
+    }
+}
+
+#[test]
 fn interrupted_create_only_transaction_recovers_without_removing_unapplied_content() {
     let project = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();

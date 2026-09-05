@@ -11,6 +11,7 @@ use crate::error::{AruError, IoContext, Result};
 
 mod destination;
 mod install;
+mod staging;
 mod standalone;
 mod state_file;
 use destination::{normalize_destination, validate_operations};
@@ -19,9 +20,7 @@ pub use standalone::{
     StandaloneDryRun, apply_standalone, apply_standalone_global, apply_standalone_prepared,
 };
 
-pub(crate) fn validate_no_standalone_pending_journal(project: &Path) -> Result<()> {
-    standalone::validate_no_pending_journal(project)
-}
+pub(crate) use standalone::{PreviewLock, lock_without_pending_journal};
 
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
 
@@ -120,6 +119,13 @@ pub struct ProjectLock {
     _standalone_file: standalone::GlobalLock,
     _legacy_file: Option<File>,
     _file: File,
+}
+
+impl Drop for ProjectLock {
+    fn drop(&mut self) {
+        standalone::unlock_files([Some(&self._file), self._legacy_file.as_ref()]);
+        // GlobalLock then releases the shared operation and anchor locks.
+    }
 }
 
 impl ProjectLock {
@@ -280,7 +286,7 @@ fn apply_with_mode(
         },
         entries: Vec::new(),
     };
-    let mut staged_paths = Vec::new();
+    let mut staging = staging::Staging::default();
     let preparation = (|| -> Result<()> {
         for (index, operation) in operations.iter().enumerate() {
             validate_destination(mode, &operation.destination)?;
@@ -289,14 +295,14 @@ fn apply_with_mode(
                 .parent()
                 .ok_or_else(|| AruError::msg("transaction destination has no parent"))?;
             validate_ancestors(mode, &operation.destination)?;
-            std::fs::create_dir_all(parent).at(parent)?;
+            staging.create_parents(parent)?;
             let stage = if matches!(&operation.content, Content::Absent) {
                 None
             } else {
                 Some(parent.join(format!(".aru-stage-{transaction_id}-{index}")))
             };
             if let Some(stage) = &stage {
-                staged_paths.push(stage.clone());
+                staging.paths.push(stage.clone());
                 materialize_stage(stage, &operation.content)?;
                 sync_tree(stage)?;
             }
@@ -335,15 +341,13 @@ fn apply_with_mode(
         Ok(())
     })();
     if let Err(error) = preparation {
-        cleanup_paths(&staged_paths);
-        return Err(error);
+        return Err(staging.cleanup(error));
     }
     if let Err(error) = write_journal(journal_path, &journal) {
         if journal_path.exists() {
             return recover_after_error(mode, journal_path, error);
         }
-        cleanup_paths(&staged_paths);
-        return Err(error);
+        return Err(staging.cleanup(error));
     }
     journal.phase = "applying".into();
     if let Err(error) = write_journal(journal_path, &journal) {
@@ -418,14 +422,6 @@ fn recover_after_error(mode: PathMode<'_>, journal_path: &Path, original: AruErr
         Err(recovery) => Err(AruError::msg(format!(
             "{original}; rollback also failed: {recovery}"
         ))),
-    }
-}
-
-fn cleanup_paths(paths: &[PathBuf]) {
-    for path in paths {
-        if destination_exists(path) {
-            let _ = remove_any(path);
-        }
     }
 }
 
