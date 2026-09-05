@@ -27,7 +27,10 @@ use crate::output::Output;
 use crate::sync::{
     CollisionPolicy, ReconcileRequest, SyncResult, garbage_collect, prepare_request,
 };
-use crate::transaction::{JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed};
+use crate::transaction::{
+    JOURNAL_FILE, Operation, ProjectLock, apply, recover_if_needed,
+    validate_no_standalone_pending_journal,
+};
 
 #[derive(Debug, Clone, Copy)]
 struct ExecutionPolicy {
@@ -586,7 +589,7 @@ fn finish_execution(
                 prepared.lock.projection_input_hash
             ));
         }
-        output.completion("Dry run complete; no files were changed.");
+        output.completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     }
     let changed = !prepared.operations.is_empty();
@@ -614,8 +617,9 @@ fn finish_execution(
     Ok(())
 }
 
-fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
+pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<Option<ProjectLock>> {
     if dry_run {
+        validate_no_standalone_pending_journal(project)?;
         if project.join(JOURNAL_FILE).exists() {
             return Err(AruError::msg(
                 "a recoverable transaction is pending; run a mutating aru command before --dry-run",

@@ -1,0 +1,4 @@
+version = 1
+control = "unix:2f686f6d652f64656d6f2f2e6c6f63616c2f73746174652f6172752f7374616e64616c6f6e65"
+device = 1
+inode = 2

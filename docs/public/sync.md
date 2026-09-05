@@ -7,10 +7,10 @@ Aru separates dependency resolution from target projection so teams can review a
 | Command | Behavior |
 | --- | --- |
 | `aru lock` | Resolve instructions and packages; update `aru.lock` without changing target paths |
-| `aru lock --check` | Check that the existing lock is complete and current without writing or network access |
+| `aru lock --check` | Check that the existing lock is complete and current without project changes or network access |
 | `aru sync` | Reuse compatible locked packages, fill missing lock data, and reconcile target paths |
 | `aru sync --locked` | Require a complete current lock; never update it or advance a branch |
-| `aru sync --check` | Check the lock and every target path locally without writing |
+| `aru sync --check` | Check the lock and every target path locally without changing them |
 | `aru sync --dry-run` | Print the deterministic plan without changing persistent project state |
 
 A practical team workflow is:
@@ -32,6 +32,7 @@ Do not use blanket staging when target projections may include local-only files;
 ## Preview and deferral
 
 `--dry-run` may read Git or HTTP sources through temporary storage, but it does not modify `aru.toml`, `aru.lock`, `.aru/`, or target paths.
+Previews and `--check` may create private per-user coordination directories and `operation.lock` outside the project. They share that lock with mutations, including on first use, and reject pending recovery rather than modifying its journal.
 
 Mutating add, remove, and update commands accept `--no-sync`. They still resolve and transactionally update manifest and lock intent, skip target projections, and print the command required to apply them later.
 

@@ -168,7 +168,7 @@ Replay the committed lock without changing its resolutions:
 aru sync --locked
 ```
 
-Check that the lock and all managed target files are current without writing:
+Check that the lock and all managed target files are current without changing project or target content:
 
 ```console
 aru sync --check
@@ -186,7 +186,7 @@ Do not commit `.aru/`.
 
 Most aru commands follow the same pattern:
 
-1. Preview risky or unfamiliar changes with `--dry-run`.
+1. Preview risky or unfamiliar changes with `--dry-run`. Previews may create private per-user lock metadata outside the project, but do not change project or target files.
 2. Apply the command.
 3. Review `aru.toml`, `aru.lock`, and projected target files.
 4. Run `aru sync --check`.
@@ -229,6 +229,7 @@ aru skill list
 aru skill add owner/repository --skill review
 aru skill add owner/repository --all
 aru skill add --target codex owner/repository --all # works without aru init
+aru skill add --global --target codex owner/repository --skill review
 aru skill update --dry-run
 aru skill update
 aru skill remove owner/repository --skill review
@@ -239,6 +240,7 @@ In an initialized project, a bare `skill add` opens an interactive skill selecto
 
 Without an `aru.toml` in the current directory or an ancestor, `skill add` performs a one-time installation.
 Pass `--target` explicitly or choose one or more targets from the interactive menu.
+Add `-g` or `--global` to install into each target's user-level skill directory instead of the current directory; global mode is rejected when aru discovers an initialized project.
 Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
 
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.
@@ -338,7 +340,7 @@ aru target set codex claude
 ```
 
 Skill-only targets receive skills but not instructions or MCP servers.
-All destinations are project-relative; aru does not install skills into home-directory paths.
+Managed project destinations are project-relative; standalone `aru skill add --global` uses target-native user directories instead.
 At least one target must remain.
 
 Use `target set` when replacing the only configured target.
@@ -352,10 +354,10 @@ Use `target set` when replacing the only configured target.
 | Command | Use it when |
 | --- | --- |
 | `aru lock` | You want to update `aru.lock` without changing target files |
-| `aru lock --check` | You want to verify the lock without writing or using the network |
+| `aru lock --check` | You want to verify the lock without project changes or using the network |
 | `aru sync` | You want to resolve missing lock data and reconcile target files |
 | `aru sync --locked` | You want to reproduce the existing lock without changing it |
-| `aru sync --check` | You want a local, read-only exact-state check |
+| `aru sync --check` | You want a local exact-state check without project or target changes |
 | `aru sync --dry-run` | You want to preview the synchronization plan |
 
 Use `--offline` to disable remote Git and Registry access.

@@ -9,9 +9,19 @@ use walkdir::WalkDir;
 
 use crate::error::{AruError, IoContext, Result};
 
+mod destination;
+mod install;
 mod standalone;
+mod state_file;
+use destination::{normalize_destination, validate_operations};
 
-pub use standalone::{apply_standalone, apply_standalone_prepared};
+pub use standalone::{
+    StandaloneDryRun, apply_standalone, apply_standalone_global, apply_standalone_prepared,
+};
+
+pub(crate) fn validate_no_standalone_pending_journal(project: &Path) -> Result<()> {
+    standalone::validate_no_pending_journal(project)
+}
 
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
 
@@ -84,6 +94,8 @@ impl Operation {
 struct Journal {
     version: u32,
     phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
     entries: Vec<JournalEntry>,
 }
 
@@ -98,12 +110,23 @@ struct JournalEntry {
     applied: bool,
 }
 
+#[derive(Clone, Copy)]
+enum PathMode<'a> {
+    Project(&'a Path),
+    Absolute,
+}
+
 pub struct ProjectLock {
+    _standalone_file: standalone::GlobalLock,
+    _legacy_file: Option<File>,
     _file: File,
 }
 
 impl ProjectLock {
     pub fn acquire(project: &Path) -> Result<Self> {
+        let (standalone_file, legacy_file, standalone_journal) =
+            standalone::acquire_for_project(project)?;
+        recover_standalone_if_needed_at(&standalone_journal)?;
         let aru = project.join(".aru");
         std::fs::create_dir_all(&aru).at(&aru)?;
         let path = aru.join("operation.lock");
@@ -117,7 +140,11 @@ impl ProjectLock {
         file.lock_exclusive().map_err(|error| {
             AruError::msg(format!("could not acquire project operation lock: {error}"))
         })?;
-        Ok(Self { _file: file })
+        Ok(Self {
+            _standalone_file: standalone_file,
+            _legacy_file: legacy_file,
+            _file: file,
+        })
     }
 }
 
@@ -126,22 +153,53 @@ pub fn recover_if_needed(project: &Path) -> Result<bool> {
 }
 
 fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
-    if !path.exists() {
+    recover_with_mode(PathMode::Project(project), path)
+}
+
+fn recover_standalone_if_needed_at(path: &Path) -> Result<bool> {
+    let Some(mut journal) = read_journal(path)? else {
         return Ok(false);
-    }
-    let text = std::fs::read_to_string(path).at(path)?;
-    let mut journal: Journal = toml::from_str(&text).map_err(|source| AruError::Toml {
+    };
+    let root = journal
+        .root
+        .as_deref()
+        .map(decode_absolute_path)
+        .transpose()?;
+    let mode = root
+        .as_deref()
+        .map(PathMode::Project)
+        .unwrap_or(PathMode::Absolute);
+    recover_journal(mode, path, &mut journal)
+}
+
+fn recover_with_mode(mode: PathMode<'_>, path: &Path) -> Result<bool> {
+    let Some(mut journal) = read_journal(path)? else {
+        return Ok(false);
+    };
+    recover_journal(mode, path, &mut journal)
+}
+
+fn read_journal(path: &Path) -> Result<Option<Journal>> {
+    let Some(text) = state_file::read(path)? else {
+        return Ok(None);
+    };
+    let journal = toml::from_str(&text).map_err(|source| AruError::Toml {
         path: path.to_path_buf(),
         source,
     })?;
-    if journal.version != 1 {
+    Ok(Some(journal))
+}
+
+fn recover_journal(mode: PathMode<'_>, path: &Path, journal: &mut Journal) -> Result<bool> {
+    if !matches!(journal.version, 1 | 2) {
         return Err(AruError::msg("unsupported transaction journal version"));
     }
     if journal.phase == "committed" {
         for entry in &journal.entries {
-            let destination = project.join(&entry.destination);
-            validate_destination(project, Path::new(&entry.destination))?;
-            validate_ancestors(project, Path::new(&entry.destination))?;
+            let stored = decode_journal_path(journal.version, mode, &entry.destination)?;
+            validate_destination(mode, &stored)?;
+            validate_ancestors(mode, &stored)?;
+            let destination = resolve_path(mode, &stored);
             if path_digest(&destination)? != entry.new_digest {
                 return Err(AruError::msg(format!(
                     "cannot finish committed transaction: {} no longer matches its new digest",
@@ -150,9 +208,9 @@ fn recover_if_needed_at(project: &Path, path: &Path) -> Result<bool> {
             }
         }
     } else {
-        rollback(project, path, &mut journal)?;
+        rollback(mode, path, journal)?;
     }
-    cleanup_journal_artifacts(project, &journal)?;
+    cleanup_journal_artifacts(mode, journal)?;
     std::fs::remove_file(path).at(path)?;
     sync_parent(path)?;
     Ok(true)
@@ -162,69 +220,112 @@ pub fn apply(project: &Path, operations: Vec<Operation>) -> Result<()> {
     apply_at(project, operations, &project.join(JOURNAL_FILE))
 }
 
-fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
+fn apply_at(project: &Path, operations: Vec<Operation>, journal_path: &Path) -> Result<()> {
+    apply_with_mode(
+        PathMode::Project(project),
+        operations,
+        journal_path,
+        1,
+        true,
+    )
+}
+
+fn apply_standalone_at(
+    project: &Path,
+    operations: Vec<Operation>,
+    journal_path: &Path,
+    replace: bool,
+) -> Result<()> {
+    apply_with_mode(
+        PathMode::Project(project),
+        operations,
+        journal_path,
+        2,
+        replace,
+    )
+}
+
+fn apply_absolute_at(operations: Vec<Operation>, journal_path: &Path, replace: bool) -> Result<()> {
+    apply_with_mode(PathMode::Absolute, operations, journal_path, 2, replace)
+}
+
+fn apply_with_mode(
+    mode: PathMode<'_>,
+    mut operations: Vec<Operation>,
+    journal_path: &Path,
+    journal_version: u32,
+    replace: bool,
+) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
     }
+    validate_operations(mode, &operations, journal_version)?;
     if let Some(parent) = journal_path.parent() {
         std::fs::create_dir_all(parent).at(parent)?;
     }
-    operations.sort_by(|left, right| left.destination.cmp(&right.destination));
-    for pair in operations.windows(2) {
-        if pair[0].destination == pair[1].destination {
-            return Err(AruError::msg(format!(
-                "transaction contains duplicate destination {}",
-                pair[0].destination.display()
-            )));
+    if matches!(mode, PathMode::Absolute) {
+        for operation in &mut operations {
+            operation.destination = normalize_destination(&operation.destination)?;
         }
     }
-    for operation in &operations {
-        validate_destination(project, &operation.destination)?;
-        validate_ancestors(project, &operation.destination)?;
-    }
+    operations.sort_by(|left, right| left.destination.cmp(&right.destination));
 
     let transaction_id = unique_suffix();
     let mut journal = Journal {
-        version: 1,
+        version: journal_version,
         phase: "prepared".into(),
+        root: match (journal_version, mode) {
+            (2, PathMode::Project(project)) => Some(encode_absolute_path(project)?),
+            _ => None,
+        },
         entries: Vec::new(),
     };
     let mut staged_paths = Vec::new();
     let preparation = (|| -> Result<()> {
         for (index, operation) in operations.iter().enumerate() {
-            validate_destination(project, &operation.destination)?;
-            let destination = project.join(&operation.destination);
+            validate_destination(mode, &operation.destination)?;
+            let destination = resolve_path(mode, &operation.destination);
             let parent = destination
                 .parent()
                 .ok_or_else(|| AruError::msg("transaction destination has no parent"))?;
-            validate_ancestors(project, &operation.destination)?;
+            validate_ancestors(mode, &operation.destination)?;
             std::fs::create_dir_all(parent).at(parent)?;
             let stage = if matches!(&operation.content, Content::Absent) {
                 None
             } else {
                 Some(parent.join(format!(".aru-stage-{transaction_id}-{index}")))
             };
-            let backup = if destination_exists(&destination) {
-                Some(parent.join(format!(".aru-backup-{transaction_id}-{index}")))
-            } else {
-                None
-            };
             if let Some(stage) = &stage {
                 staged_paths.push(stage.clone());
                 materialize_stage(stage, &operation.content)?;
                 sync_tree(stage)?;
             }
-            let old_digest = path_digest(&destination)?;
+            #[cfg(test)]
+            install::run_hook(install::Event::Staged, &destination);
+            if !replace && destination_exists(&destination) {
+                return Err(AruError::msg(format!(
+                    "collision: unmanaged entry appeared at {}",
+                    destination.display()
+                )));
+            }
+            let old_digest = if replace {
+                path_digest(&destination)?
+            } else {
+                None
+            };
+            let backup = old_digest
+                .as_ref()
+                .map(|_| parent.join(format!(".aru-backup-{transaction_id}-{index}")));
             let new_digest = stage.as_deref().map(path_digest).transpose()?.flatten();
             journal.entries.push(JournalEntry {
-                destination: relative_string(project, &destination)?,
+                destination: encode_journal_path(journal_version, mode, &destination)?,
                 stage: stage
                     .as_ref()
-                    .map(|path| relative_string(project, path))
+                    .map(|path| encode_journal_path(journal_version, mode, path))
                     .transpose()?,
                 backup: backup
                     .as_ref()
-                    .map(|path| relative_string(project, path))
+                    .map(|path| encode_journal_path(journal_version, mode, path))
                     .transpose()?,
                 old_digest,
                 new_digest,
@@ -239,14 +340,14 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
     }
     if let Err(error) = write_journal(journal_path, &journal) {
         if journal_path.exists() {
-            return recover_after_error(project, journal_path, error);
+            return recover_after_error(mode, journal_path, error);
         }
         cleanup_paths(&staged_paths);
         return Err(error);
     }
     journal.phase = "applying".into();
     if let Err(error) = write_journal(journal_path, &journal) {
-        return recover_after_error(project, journal_path, error);
+        return recover_after_error(mode, journal_path, error);
     }
 
     for index in 0..journal.entries.len() {
@@ -254,25 +355,34 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
             let destination_text = journal.entries[index].destination.clone();
             let backup_text = journal.entries[index].backup.clone();
             let stage_text = journal.entries[index].stage.clone();
-            let destination = project.join(&destination_text);
-            validate_ancestors(project, Path::new(&destination_text))?;
+            let destination_path = decode_journal_path(journal.version, mode, &destination_text)?;
+            let destination = resolve_path(mode, &destination_path);
+            validate_ancestors(mode, &destination_path)?;
             if let Some(backup) = backup_text {
-                let backup = project.join(backup);
+                let backup = decode_journal_path(journal.version, mode, &backup)?;
+                let backup = resolve_path(mode, &backup);
                 if destination_exists(&destination) {
                     std::fs::rename(&destination, &backup).at(&destination)?;
                     sync_parent(&destination)?;
                 }
             }
             if let Some(stage) = stage_text {
-                let stage = project.join(stage);
-                std::fs::rename(&stage, &destination).at(&destination)?;
+                let stage = decode_journal_path(journal.version, mode, &stage)?;
+                let stage = resolve_path(mode, &stage);
+                #[cfg(test)]
+                install::run_hook(install::Event::Installing, &destination);
+                if replace {
+                    std::fs::rename(&stage, &destination).at(&destination)?;
+                } else {
+                    install::rename_no_replace(&stage, &destination)?;
+                }
                 sync_parent(&destination)?;
             }
             journal.entries[index].applied = true;
             write_journal(journal_path, &journal)
         })();
         if let Err(error) = step {
-            return recover_after_error(project, journal_path, error);
+            return recover_after_error(mode, journal_path, error);
         }
         if failure_phase("ARU_TEST_CRASH_AFTER") == Some(index + 1) {
             return Err(AruError::msg(format!(
@@ -282,7 +392,7 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
         }
         if failure_phase("ARU_TEST_FAIL_AFTER") == Some(index + 1) {
             return recover_after_error(
-                project,
+                mode,
                 journal_path,
                 AruError::msg(format!(
                     "simulated apply failure after transaction phase {}",
@@ -294,16 +404,16 @@ fn apply_at(project: &Path, mut operations: Vec<Operation>, journal_path: &Path)
 
     journal.phase = "committed".into();
     if let Err(error) = write_journal(journal_path, &journal) {
-        return recover_after_error(project, journal_path, error);
+        return recover_after_error(mode, journal_path, error);
     }
-    cleanup_journal_artifacts(project, &journal)?;
+    cleanup_journal_artifacts(mode, &journal)?;
     std::fs::remove_file(journal_path).at(journal_path)?;
     sync_parent(journal_path)?;
     Ok(())
 }
 
-fn recover_after_error(project: &Path, journal_path: &Path, original: AruError) -> Result<()> {
-    match recover_if_needed_at(project, journal_path) {
+fn recover_after_error(mode: PathMode<'_>, journal_path: &Path, original: AruError) -> Result<()> {
+    match recover_with_mode(mode, journal_path) {
         Ok(_) => Err(original),
         Err(recovery) => Err(AruError::msg(format!(
             "{original}; rollback also failed: {recovery}"
@@ -319,17 +429,34 @@ fn cleanup_paths(paths: &[PathBuf]) {
     }
 }
 
-fn rollback(project: &Path, journal_path: &Path, journal: &mut Journal) -> Result<()> {
+fn rollback(mode: PathMode<'_>, journal_path: &Path, journal: &mut Journal) -> Result<()> {
     for index in (0..journal.entries.len()).rev() {
         let destination_text = journal.entries[index].destination.clone();
         let old_digest = journal.entries[index].old_digest.clone();
         let new_digest = journal.entries[index].new_digest.clone();
         let backup_text = journal.entries[index].backup.clone();
-        let destination = project.join(&destination_text);
-        validate_destination(project, Path::new(&destination_text))?;
-        validate_ancestors(project, Path::new(&destination_text))?;
+        let destination_path = decode_journal_path(journal.version, mode, &destination_text)?;
+        validate_destination(mode, &destination_path)?;
+        validate_ancestors(mode, &destination_path)?;
+        let destination = resolve_path(mode, &destination_path);
+        // A retained, verified stage with no backup proves this create never
+        // reached its destination. Preserve even identical concurrent content.
+        if !journal.entries[index].applied
+            && backup_text.is_none()
+            && let Some(stage) = journal.entries[index].stage.as_deref()
+        {
+            let stage = decode_journal_path(journal.version, mode, stage)?;
+            let stage = resolve_path(mode, &stage);
+            if destination_exists(&stage) && path_digest(&stage)? == new_digest {
+                continue;
+            }
+        }
         let current = path_digest(&destination)?;
-        let backup = backup_text.as_ref().map(|value| project.join(value));
+        let backup = backup_text
+            .as_ref()
+            .map(|value| decode_journal_path(journal.version, mode, value))
+            .transpose()?
+            .map(|value| resolve_path(mode, &value));
         let backup_digest = backup.as_deref().map(path_digest).transpose()?.flatten();
 
         let current_is_new = current == new_digest;
@@ -457,41 +584,76 @@ fn create_symlink(_target: &Path, _link: &Path) -> Result<()> {
     Err(AruError::msg("directory symlinks are unsupported"))
 }
 
-fn validate_destination(project: &Path, relative: &Path) -> Result<()> {
-    if relative.as_os_str().is_empty() || relative.is_absolute() {
-        return Err(AruError::msg(
-            "transaction destination must be project-relative",
-        ));
+fn validate_destination(mode: PathMode<'_>, destination: &Path) -> Result<()> {
+    if destination.as_os_str().is_empty() {
+        return Err(AruError::msg("transaction destination must not be empty"));
     }
-    if relative
-        .components()
-        .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err(AruError::msg("unsafe transaction destination"));
-    }
-    let canonical_project = project.canonicalize().at(project)?;
-    if !canonical_project.is_dir() {
-        return Err(AruError::msg("project root is not a directory"));
+    match mode {
+        PathMode::Project(project) => {
+            if destination.is_absolute()
+                || destination
+                    .components()
+                    .any(|component| !matches!(component, Component::Normal(_)))
+            {
+                return Err(AruError::msg(
+                    "transaction destination must be a safe project-relative path",
+                ));
+            }
+            let canonical_project = project.canonicalize().at(project)?;
+            if !canonical_project.is_dir() {
+                return Err(AruError::msg("project root is not a directory"));
+            }
+        }
+        PathMode::Absolute => {
+            if !destination.is_absolute()
+                || destination
+                    .components()
+                    .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+            {
+                return Err(AruError::msg(
+                    "global transaction destination must be a safe absolute path",
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-fn validate_ancestors(project: &Path, relative: &Path) -> Result<()> {
-    let canonical_project = project.canonicalize().at(project)?;
-    let mut current = project.to_path_buf();
-    let components: Vec<_> = relative.components().collect();
+fn validate_ancestors(mode: PathMode<'_>, destination: &Path) -> Result<()> {
+    let (mut current, canonical_project) = match mode {
+        PathMode::Project(project) => (
+            project.to_path_buf(),
+            Some(project.canonicalize().at(project)?),
+        ),
+        PathMode::Absolute => (PathBuf::new(), None),
+    };
+    let components: Vec<_> = destination.components().collect();
     for component in components.iter().take(components.len().saturating_sub(1)) {
-        let Component::Normal(component) = component else {
-            return Err(AruError::msg("unsafe destination component"));
-        };
-        current.push(component);
+        match mode {
+            PathMode::Project(_) => {
+                let Component::Normal(component) = component else {
+                    return Err(AruError::msg("unsafe destination component"));
+                };
+                current.push(component);
+            }
+            PathMode::Absolute => current.push(component.as_os_str()),
+        }
         if !current.exists() {
             continue;
         }
         let metadata = std::fs::symlink_metadata(&current).at(&current)?;
         if metadata.file_type().is_symlink() {
             let resolved = current.canonicalize().at(&current)?;
-            if !resolved.starts_with(&canonical_project) {
+            if !resolved.is_dir() {
+                return Err(AruError::msg(format!(
+                    "destination ancestor symlink does not resolve to a directory: {}",
+                    current.display()
+                )));
+            }
+            if canonical_project
+                .as_ref()
+                .is_some_and(|project| !resolved.starts_with(project))
+            {
                 return Err(AruError::msg(format!(
                     "destination ancestor symlink escapes project root: {}",
                     current.display()
@@ -585,25 +747,19 @@ fn hash_file(hasher: &mut Sha256, path: &Path, metadata: &std::fs::Metadata) -> 
 }
 
 fn write_journal(path: &Path, journal: &Journal) -> Result<()> {
-    let temporary = path.with_extension("toml.tmp");
     let body = toml::to_string_pretty(journal)
         .map_err(|error| AruError::msg(format!("could not serialize journal: {error}")))?;
-    {
-        let mut file = File::create(&temporary).at(&temporary)?;
-        file.write_all(body.as_bytes()).at(&temporary)?;
-        file.sync_all().at(&temporary)?;
-    }
-    std::fs::rename(&temporary, path).at(path)?;
-    sync_parent(path)
+    state_file::write_atomic(path, &body)
 }
 
-fn cleanup_journal_artifacts(project: &Path, journal: &Journal) -> Result<()> {
+fn cleanup_journal_artifacts(mode: PathMode<'_>, journal: &Journal) -> Result<()> {
     for entry in &journal.entries {
-        for relative in [entry.stage.as_ref(), entry.backup.as_ref()]
+        for stored in [entry.stage.as_ref(), entry.backup.as_ref()]
             .into_iter()
             .flatten()
         {
-            let path = project.join(relative);
+            let stored = decode_journal_path(journal.version, mode, stored)?;
+            let path = resolve_path(mode, &stored);
             if destination_exists(&path) {
                 remove_any(&path)?;
             }
@@ -625,12 +781,117 @@ fn destination_exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
-fn relative_string(project: &Path, path: &Path) -> Result<String> {
-    path.strip_prefix(project)
-        .map_err(|_| AruError::msg("transaction artifact escaped project"))?
-        .to_str()
-        .map(|value| value.replace(std::path::MAIN_SEPARATOR, "/"))
-        .ok_or_else(|| AruError::msg("transaction path is not UTF-8"))
+fn resolve_path(mode: PathMode<'_>, path: &Path) -> PathBuf {
+    match mode {
+        PathMode::Project(project) => project.join(path),
+        PathMode::Absolute => path.to_path_buf(),
+    }
+}
+
+fn encode_journal_path(version: u32, mode: PathMode<'_>, path: &Path) -> Result<String> {
+    match mode {
+        PathMode::Project(project) => path
+            .strip_prefix(project)
+            .map_err(|_| AruError::msg("transaction artifact escaped project"))?
+            .to_str()
+            .map(|value| value.replace(std::path::MAIN_SEPARATOR, "/"))
+            .ok_or_else(|| AruError::msg("transaction path is not UTF-8")),
+        PathMode::Absolute if version == 1 => path
+            .to_str()
+            .map(|value| value.replace(std::path::MAIN_SEPARATOR, "/"))
+            .ok_or_else(|| AruError::msg("transaction path is not UTF-8")),
+        PathMode::Absolute => encode_absolute_path(path),
+    }
+}
+
+fn decode_journal_path(version: u32, mode: PathMode<'_>, stored: &str) -> Result<PathBuf> {
+    match mode {
+        PathMode::Project(_) => Ok(PathBuf::from(stored)),
+        PathMode::Absolute if version == 1 => Ok(PathBuf::from(stored)),
+        PathMode::Absolute => decode_absolute_path(stored),
+    }
+}
+
+fn encode_absolute_path(path: &Path) -> Result<String> {
+    if !path.is_absolute() {
+        return Err(AruError::msg("standalone journal root must be absolute"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(format!("unix:{}", hex::encode(path.as_os_str().as_bytes())))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let bytes = path
+            .as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        Ok(format!("windows:{}", hex::encode(bytes)))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let value = path
+            .to_str()
+            .ok_or_else(|| AruError::msg("standalone journal path is not UTF-8"))?;
+        Ok(format!("utf8:{}", hex::encode(value.as_bytes())))
+    }
+}
+
+fn decode_absolute_path(stored: &str) -> Result<PathBuf> {
+    let (encoding, encoded) = stored
+        .split_once(':')
+        .ok_or_else(|| AruError::msg("invalid encoded standalone journal path"))?;
+    #[cfg(unix)]
+    if encoding != "unix" {
+        return Err(AruError::msg(
+            "unsupported standalone journal path encoding",
+        ));
+    }
+    #[cfg(windows)]
+    if encoding != "windows" {
+        return Err(AruError::msg(
+            "unsupported standalone journal path encoding",
+        ));
+    }
+    #[cfg(not(any(unix, windows)))]
+    if encoding != "utf8" {
+        return Err(AruError::msg(
+            "unsupported standalone journal path encoding",
+        ));
+    }
+    let bytes = hex::decode(encoded)
+        .map_err(|_| AruError::msg("invalid encoded standalone journal path"))?;
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(bytes))
+    };
+    #[cfg(windows)]
+    let path = {
+        use std::os::windows::ffi::OsStringExt;
+        if bytes.len() % 2 != 0 {
+            return Err(AruError::msg("invalid encoded standalone journal path"));
+        }
+        let wide = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    };
+    #[cfg(not(any(unix, windows)))]
+    let path = PathBuf::from(
+        String::from_utf8(bytes)
+            .map_err(|_| AruError::msg("invalid encoded standalone journal path"))?,
+    );
+    if !path.is_absolute() {
+        return Err(AruError::msg(
+            "encoded standalone journal path must be absolute",
+        ));
+    }
+    Ok(path)
 }
 
 #[cfg(not(test))]
@@ -700,277 +961,4 @@ fn sync_parent(path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn failed_post_copy_verification_leaves_no_stage_or_destination() {
-        let project = tempfile::tempdir().unwrap();
-        let source = project.path().join("source");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(
-            source.join("SKILL.md"),
-            "---\nname: source\ndescription: Source\n---\n# Source\n",
-        )
-        .unwrap();
-        let result = apply(
-            project.path(),
-            vec![Operation::skill_directory(
-                "skills/source",
-                &source,
-                "sha256:not-the-content",
-            )],
-        );
-        assert!(result.is_err());
-        assert!(!project.path().join("skills/source").exists());
-        assert!(!project.path().join(JOURNAL_FILE).exists());
-        assert!(
-            std::fs::read_dir(project.path().join("skills"))
-                .unwrap()
-                .all(|entry| !entry
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".aru-stage-"))
-        );
-    }
-
-    #[test]
-    fn failed_instruction_transaction_restores_outputs_without_touching_sources() {
-        let project = tempfile::tempdir().unwrap();
-        std::fs::create_dir(project.path().join(".aru")).unwrap();
-        std::fs::write(project.path().join("AGENTS.md"), "# User source\n").unwrap();
-        std::fs::write(project.path().join("CLAUDE.md"), "old projection\n").unwrap();
-        std::fs::write(project.path().join("aru.lock"), "old lock\n").unwrap();
-        std::fs::write(project.path().join(".aru/state.toml"), "old state\n").unwrap();
-        set_failure_phase("ARU_TEST_FAIL_AFTER", Some(2));
-        let result = apply(
-            project.path(),
-            vec![
-                Operation::file("CLAUDE.md", b"new projection\n".to_vec()),
-                Operation::file("aru.lock", b"new lock\n".to_vec()),
-                Operation::file(".aru/state.toml", b"new state\n".to_vec()),
-            ],
-        );
-        set_failure_phase("ARU_TEST_FAIL_AFTER", None);
-        assert!(result.is_err());
-        assert_eq!(
-            std::fs::read(project.path().join("AGENTS.md")).unwrap(),
-            b"# User source\n"
-        );
-        assert_eq!(
-            std::fs::read(project.path().join("CLAUDE.md")).unwrap(),
-            b"old projection\n"
-        );
-        assert_eq!(
-            std::fs::read(project.path().join("aru.lock")).unwrap(),
-            b"old lock\n"
-        );
-        assert_eq!(
-            std::fs::read(project.path().join(".aru/state.toml")).unwrap(),
-            b"old state\n"
-        );
-    }
-
-    #[test]
-    fn failed_phase_rolls_back_all_destinations() {
-        for phase in 1..=3 {
-            let project = tempfile::tempdir().unwrap();
-            for name in ["a", "b", "c"] {
-                std::fs::write(project.path().join(name), format!("old-{name}")).unwrap();
-            }
-            set_failure_phase("ARU_TEST_FAIL_AFTER", Some(phase));
-            let result = apply(
-                project.path(),
-                ["a", "b", "c"]
-                    .into_iter()
-                    .map(|name| Operation::file(name, format!("new-{name}").into_bytes()))
-                    .collect(),
-            );
-            set_failure_phase("ARU_TEST_FAIL_AFTER", None);
-            assert!(result.is_err());
-            for name in ["a", "b", "c"] {
-                assert_eq!(
-                    std::fs::read(project.path().join(name)).unwrap(),
-                    format!("old-{name}").as_bytes()
-                );
-            }
-            assert!(!project.path().join(JOURNAL_FILE).exists());
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn mixed_file_directory_and_symlink_transaction_rolls_back() {
-        let project = tempfile::tempdir().unwrap();
-        std::fs::write(project.path().join("config"), "old-config").unwrap();
-        let old_skill = project.path().join("skill");
-        std::fs::create_dir(&old_skill).unwrap();
-        std::fs::write(old_skill.join("old"), "old-skill").unwrap();
-        std::os::unix::fs::symlink("old-target", project.path().join("link")).unwrap();
-        let source = project.path().join("source");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(
-            source.join("SKILL.md"),
-            "---\nname: source\ndescription: Source\n---\n# New\n",
-        )
-        .unwrap();
-        let digest = crate::skill::canonical_skill_digest(&source).unwrap();
-        set_failure_phase("ARU_TEST_FAIL_AFTER", Some(3));
-        let result = apply(
-            project.path(),
-            vec![
-                Operation::file("config", b"new-config".to_vec()),
-                Operation::skill_directory("skill", &source, digest),
-                Operation::symlink("link", "new-target"),
-            ],
-        );
-        set_failure_phase("ARU_TEST_FAIL_AFTER", None);
-        assert!(result.is_err());
-        assert_eq!(
-            std::fs::read(project.path().join("config")).unwrap(),
-            b"old-config"
-        );
-        assert_eq!(
-            std::fs::read(project.path().join("skill/old")).unwrap(),
-            b"old-skill"
-        );
-        assert_eq!(
-            std::fs::read_link(project.path().join("link")).unwrap(),
-            PathBuf::from("old-target")
-        );
-    }
-
-    #[test]
-    fn every_crash_phase_is_recovered_on_next_invocation() {
-        for phase in 1..=3 {
-            let project = tempfile::tempdir().unwrap();
-            for name in ["a", "b", "c"] {
-                std::fs::write(project.path().join(name), format!("old-{name}")).unwrap();
-            }
-            set_failure_phase("ARU_TEST_CRASH_AFTER", Some(phase));
-            let result = apply(
-                project.path(),
-                ["a", "b", "c"]
-                    .into_iter()
-                    .map(|name| Operation::file(name, format!("new-{name}").into_bytes()))
-                    .collect(),
-            );
-            set_failure_phase("ARU_TEST_CRASH_AFTER", None);
-            assert!(result.is_err());
-            assert!(recover_if_needed(project.path()).unwrap());
-            for name in ["a", "b", "c"] {
-                assert_eq!(
-                    std::fs::read(project.path().join(name)).unwrap(),
-                    format!("old-{name}").as_bytes()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn standalone_transaction_recovers_without_project_state() {
-        let project = tempfile::tempdir().unwrap();
-        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
-        let crashed = apply_standalone(
-            project.path(),
-            vec![Operation::file("a", b"new".to_vec())],
-            true,
-        );
-        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
-        assert!(crashed.is_err());
-
-        apply_standalone(
-            project.path(),
-            vec![Operation::file("a", b"new".to_vec())],
-            false,
-        )
-        .unwrap();
-        assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"new");
-        assert!(!project.path().join(".aru").exists());
-        assert!(!project.path().join(JOURNAL_FILE).exists());
-    }
-
-    #[test]
-    fn recovery_stops_on_unknown_manual_content() {
-        let project = tempfile::tempdir().unwrap();
-        std::fs::write(project.path().join("a"), "old").unwrap();
-        set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
-        assert!(apply(project.path(), vec![Operation::file("a", b"new".to_vec())]).is_err());
-        set_failure_phase("ARU_TEST_CRASH_AFTER", None);
-        std::fs::write(project.path().join("a"), "manual").unwrap();
-        assert!(recover_if_needed(project.path()).is_err());
-        assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"manual");
-        assert!(project.path().join(JOURNAL_FILE).exists());
-    }
-
-    #[test]
-    fn committed_journal_rolls_forward_and_cleans_backup() {
-        let project = tempfile::tempdir().unwrap();
-        std::fs::create_dir(project.path().join(".aru")).unwrap();
-        std::fs::write(project.path().join("a"), "new").unwrap();
-        std::fs::write(project.path().join(".backup"), "old").unwrap();
-        let journal = Journal {
-            version: 1,
-            phase: "committed".into(),
-            entries: vec![JournalEntry {
-                destination: "a".into(),
-                stage: None,
-                backup: Some(".backup".into()),
-                old_digest: Some("sha256:old".into()),
-                new_digest: path_digest(&project.path().join("a")).unwrap(),
-                applied: true,
-            }],
-        };
-        write_journal(&project.path().join(JOURNAL_FILE), &journal).unwrap();
-        assert!(recover_if_needed(project.path()).unwrap());
-        assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"new");
-        assert!(!project.path().join(".backup").exists());
-    }
-
-    #[test]
-    fn crash_between_backup_and_stage_rename_restores_old_content() {
-        let project = tempfile::tempdir().unwrap();
-        std::fs::create_dir(project.path().join(".aru")).unwrap();
-        std::fs::write(project.path().join("a"), "old").unwrap();
-        let old_digest = path_digest(&project.path().join("a")).unwrap();
-        let backup = project.path().join(".backup");
-        std::fs::rename(project.path().join("a"), &backup).unwrap();
-        let journal = Journal {
-            version: 1,
-            phase: "applying".into(),
-            entries: vec![JournalEntry {
-                destination: "a".into(),
-                stage: None,
-                backup: Some(".backup".into()),
-                old_digest,
-                new_digest: Some("sha256:new".into()),
-                applied: false,
-            }],
-        };
-        write_journal(&project.path().join(JOURNAL_FILE), &journal).unwrap();
-        assert!(recover_if_needed(project.path()).unwrap());
-        assert_eq!(std::fs::read(project.path().join("a")).unwrap(), b"old");
-    }
-
-    #[test]
-    fn v1_transaction_fixture_has_stable_round_trip() {
-        let fixture = include_str!("../tests/fixtures/contracts/transaction.toml");
-        let journal: Journal = toml::from_str(fixture).unwrap();
-        assert_eq!(toml::to_string_pretty(&journal).unwrap(), fixture);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn escaping_parent_symlink_is_rejected_before_staging() {
-        let project = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), project.path().join(".agents")).unwrap();
-        let result = apply(
-            project.path(),
-            vec![Operation::file(".agents/skills/demo", b"unsafe".to_vec())],
-        );
-        assert!(result.is_err());
-        assert!(!outside.path().join("skills").exists());
-    }
-}
+mod tests;

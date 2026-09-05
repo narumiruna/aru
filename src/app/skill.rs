@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::cache::Cache;
-use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillUpdateArgs};
+use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillTargetArg, SkillUpdateArgs};
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
     InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, TargetChoice,
@@ -16,11 +16,16 @@ use crate::resolver::{
 };
 use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
-use crate::transaction::{Operation, apply_standalone};
+use crate::transaction::{Operation, StandaloneDryRun, apply_standalone, apply_standalone_global};
 
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
 pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
+    if args.global {
+        return Err(AruError::msg(
+            "--global is only supported for standalone skill installation without aru.toml",
+        ));
+    }
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     skill_add_with_policy(project, args, mode, &mut chooser, policy)
@@ -43,20 +48,28 @@ pub(super) fn add_standalone(
     }
     if args.targets.is_empty() {
         let mut chooser = InquireTargetChooser;
-        let choices = crate::target::specs()
+        let mut choices = Vec::new();
+        for spec in crate::target::specs()
             .iter()
             .filter(|spec| spec.capabilities.skills)
-            .map(|spec| TargetChoice::new(spec.target, spec.project_skills))
-            .collect::<Vec<_>>();
+        {
+            if args.global {
+                if crate::target::skill::supports_global(spec.target) {
+                    choices.push(TargetChoice::new(spec.target, "user skill directory"));
+                }
+            } else {
+                choices.push(TargetChoice::new(spec.target, spec.project_skills));
+            }
+        }
         let Some(targets) = terminal_choose_targets(&mut chooser, &choices)? else {
             policy
                 .output
                 .completion("Target selection canceled; no files were changed.");
             return Ok(());
         };
-        args.targets = targets;
+        args.targets = targets.into_iter().map(SkillTargetArg::canonical).collect();
     }
-    validate_standalone_targets(&args.targets)?;
+    validate_standalone_targets(&args.targets, args.global)?;
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     standalone_add_with_policy(project, &args, mode, &mut chooser, policy)
@@ -99,23 +112,45 @@ fn standalone_add_with_policy(
         requirement.normalize();
     }
     let selected = select_candidates(inspection.candidates, &requirement)?;
+    let dry_run = args
+        .dry_run
+        .then(|| StandaloneDryRun::begin(project, args.global))
+        .transpose()?;
     let mut destinations = BTreeSet::new();
     let mut operations = Vec::new();
     let mut plan = Vec::new();
+    let mut collision = None;
     for skill in selected {
-        for target in &args.targets {
-            let destination = crate::target::skill::destination(*target, &skill.name)
-                .ok_or_else(|| AruError::msg(format!("target {target} does not support skills")))?;
-            if !destinations.insert(destination.clone()) {
+        for target_arg in &args.targets {
+            let target = target_arg.target;
+            let destination = if args.global {
+                crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
+                    .ok_or_else(|| {
+                        AruError::msg(format!(
+                            "target {target} does not support global Agent Skills installation"
+                        ))
+                    })?
+                    .join(&skill.name)
+            } else {
+                crate::target::skill::destination(target, &skill.name).ok_or_else(|| {
+                    AruError::msg(format!("target {target} does not support skills"))
+                })?
+            };
+            let absolute_destination = if args.global {
+                destination.clone()
+            } else {
+                project.join(&destination)
+            };
+            if !destinations.insert(absolute_destination.clone()) {
                 continue;
             }
-            let exists = standalone_destination_exists(&project.join(&destination))?;
-            if exists && !args.force && args.dry_run {
-                return Err(AruError::msg(format!(
+            let exists = standalone_destination_exists(&absolute_destination)?;
+            if exists && !args.force && args.dry_run && collision.is_none() {
+                collision = Some(format!(
                     "collision: unmanaged skill {:?} already exists at {}; inspect it or rerun with --force",
                     skill.name,
                     destination.display()
-                )));
+                ));
             }
             let verb = if exists { "force replace" } else { "create" };
             plan.push(format!(
@@ -131,41 +166,66 @@ fn standalone_add_with_policy(
         }
     }
     plan.sort();
-    if args.dry_run {
+    if let Some(dry_run) = dry_run {
+        dry_run.validate(&operations)?;
+        if let Some(collision) = collision {
+            return Err(AruError::msg(collision));
+        }
         for item in &plan {
             policy.output.plan(item, true);
         }
         policy
             .output
-            .completion("Dry run complete; no files were changed.");
+            .completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     }
-    apply_standalone(project, operations, args.force)?;
+    if args.global {
+        apply_standalone_global(project, operations, args.force)?;
+    } else {
+        apply_standalone(project, operations, args.force)?;
+    }
     for item in &plan {
         policy.output.plan(item, false);
     }
-    policy
-        .output
-        .completion("Standalone skills installed; no aru project state was created.");
+    let completion = if args.global {
+        "Global skills installed; no aru project state was created."
+    } else {
+        "Standalone skills installed; no aru project state was created."
+    };
+    policy.output.completion(completion);
     Ok(())
 }
 
-fn validate_standalone_targets(targets: &[crate::manifest::Target]) -> Result<()> {
+fn validate_standalone_targets(targets: &[SkillTargetArg], global: bool) -> Result<()> {
     if targets.is_empty() {
         return Err(AruError::msg(
             "standalone skill installation requires a target",
         ));
     }
-    if targets.iter().collect::<BTreeSet<_>>().len() != targets.len() {
-        return Err(AruError::msg(
-            "skill dependency targets contains duplicates",
-        ));
-    }
-    for target in targets {
-        if !crate::target::capabilities(*target).skills {
+    let mut identities = BTreeSet::new();
+    for target_arg in targets {
+        let target = target_arg.target;
+        if !crate::target::capabilities(target).skills {
             return Err(AruError::msg(format!(
                 "target {target} does not support Agent Skills"
             )));
+        }
+        let identity = if global {
+            let directory =
+                crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
+                    .ok_or_else(|| {
+                        AruError::msg(format!(
+                            "target {target} does not support global Agent Skills installation"
+                        ))
+                    })?;
+            (target, Some(directory))
+        } else {
+            (target, None)
+        };
+        if !identities.insert(identity) {
+            return Err(AruError::msg(
+                "skill dependency targets contains duplicates",
+            ));
         }
     }
     Ok(())
@@ -415,7 +475,7 @@ fn skill_add_base_requirement(
         requirement.branch = None;
     }
     if !args.targets.is_empty() {
-        requirement.targets = Some(args.targets.clone());
+        requirement.targets = Some(args.targets.iter().map(|target| target.target).collect());
     }
     requirement
 }
