@@ -155,6 +155,12 @@ fn interrupted_create_only_transaction_recovers_without_removing_unapplied_conte
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+))]
 #[test]
 fn exclusive_rename_installs_files_and_directories_at_absent_destinations() {
     for directory in [false, true] {
@@ -178,6 +184,12 @@ fn exclusive_rename_installs_files_and_directories_at_absent_destinations() {
     }
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+))]
 #[test]
 fn exclusive_rename_reports_missing_source() {
     let root = tempfile::tempdir().unwrap();
