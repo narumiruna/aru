@@ -155,6 +155,51 @@ fn interrupted_create_only_transaction_recovers_without_removing_unapplied_conte
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
 }
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+))]
+#[test]
+fn exclusive_rename_installs_files_and_directories_at_absent_destinations() {
+    for directory in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let stage = root.path().join("stage");
+        let destination = root.path().join("destination");
+        if directory {
+            std::fs::create_dir(&stage).unwrap();
+            std::fs::write(stage.join("SKILL.md"), b"new").unwrap();
+        } else {
+            std::fs::write(&stage, b"new").unwrap();
+        }
+        rename_no_replace(&stage, &destination).unwrap();
+        assert!(!stage.exists());
+        let content = if directory {
+            destination.join("SKILL.md")
+        } else {
+            destination
+        };
+        assert_eq!(std::fs::read(content).unwrap(), b"new");
+    }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    windows
+))]
+#[test]
+fn exclusive_rename_reports_missing_source() {
+    let root = tempfile::tempdir().unwrap();
+    let stage = root.path().join("missing");
+    let destination = root.path().join("destination");
+    let error = rename_exclusive(&stage, &destination).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(!destination.exists());
+}
+
 #[test]
 fn exclusive_rename_never_replaces_files_or_empty_directories() {
     for directory in [false, true] {
