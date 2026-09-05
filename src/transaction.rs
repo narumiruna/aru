@@ -12,6 +12,7 @@ use crate::error::{AruError, IoContext, Result};
 mod destination;
 mod install;
 mod standalone;
+mod state_file;
 use destination::{normalize_destination, validate_operations};
 
 pub use standalone::{
@@ -116,7 +117,7 @@ enum PathMode<'a> {
 }
 
 pub struct ProjectLock {
-    _standalone_file: File,
+    _standalone_file: standalone::GlobalLock,
     _legacy_file: Option<File>,
     _file: File,
 }
@@ -179,10 +180,9 @@ fn recover_with_mode(mode: PathMode<'_>, path: &Path) -> Result<bool> {
 }
 
 fn read_journal(path: &Path) -> Result<Option<Journal>> {
-    if !path.exists() {
+    let Some(text) = state_file::read(path)? else {
         return Ok(None);
-    }
-    let text = std::fs::read_to_string(path).at(path)?;
+    };
     let journal = toml::from_str(&text).map_err(|source| AruError::Toml {
         path: path.to_path_buf(),
         source,
@@ -747,16 +747,9 @@ fn hash_file(hasher: &mut Sha256, path: &Path, metadata: &std::fs::Metadata) -> 
 }
 
 fn write_journal(path: &Path, journal: &Journal) -> Result<()> {
-    let temporary = path.with_extension("toml.tmp");
     let body = toml::to_string_pretty(journal)
         .map_err(|error| AruError::msg(format!("could not serialize journal: {error}")))?;
-    {
-        let mut file = File::create(&temporary).at(&temporary)?;
-        file.write_all(body.as_bytes()).at(&temporary)?;
-        file.sync_all().at(&temporary)?;
-    }
-    std::fs::rename(&temporary, path).at(path)?;
-    sync_parent(path)
+    state_file::write_atomic(path, &body)
 }
 
 fn cleanup_journal_artifacts(mode: PathMode<'_>, journal: &Journal) -> Result<()> {

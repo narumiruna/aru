@@ -11,6 +11,9 @@ use super::{
 };
 use crate::error::{AruError, IoContext, Result};
 
+#[cfg(all(unix, not(target_os = "redox")))]
+mod scope;
+
 pub fn apply_standalone(project: &Path, operations: Vec<Operation>, force: bool) -> Result<()> {
     if operations.is_empty() {
         return Ok(());
@@ -29,6 +32,8 @@ pub fn apply_standalone_global(
     if operations.is_empty() {
         return Ok(());
     }
+    let project = project.canonicalize().at(project)?;
+    let project = project.as_path();
     let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
     recover_standalone_if_needed_at(&journal_path)?;
     validate_standalone_root(project, "global skill")?;
@@ -39,16 +44,17 @@ pub fn apply_standalone_global(
 }
 
 /// Keeps collision inspection and plan validation inside the same lock scope.
-pub struct StandaloneDryRun<'a> {
+pub struct StandaloneDryRun {
     _lock: PreviewLock,
-    project: &'a Path,
+    project: PathBuf,
     global: bool,
 }
 
-impl<'a> StandaloneDryRun<'a> {
-    pub fn begin(project: &'a Path, global: bool) -> Result<Self> {
-        let lock = lock_without_pending_journal(project)?;
-        validate_standalone_root(project, "standalone")?;
+impl StandaloneDryRun {
+    pub fn begin(project: &Path, global: bool) -> Result<Self> {
+        let project = project.canonicalize().at(project)?;
+        let lock = lock_without_pending_journal(&project)?;
+        validate_standalone_root(&project, "standalone")?;
         Ok(Self {
             _lock: lock,
             project,
@@ -57,12 +63,12 @@ impl<'a> StandaloneDryRun<'a> {
     }
 
     pub fn validate(&self, operations: &[Operation]) -> Result<()> {
-        validate_standalone_root(self.project, "standalone")?;
+        validate_standalone_root(&self.project, "standalone")?;
         if self.global {
             validate_operations(PathMode::Absolute, operations, 2)?;
             validate_no_managed_overlap(operations)
         } else {
-            validate_operations(PathMode::Project(self.project), operations, 2)
+            validate_operations(PathMode::Project(&self.project), operations, 2)
         }
     }
 }
@@ -73,11 +79,14 @@ pub(crate) fn validate_no_pending_journal(project: &Path) -> Result<()> {
 
 struct PreviewLock {
     _file: File,
+    _anchor: Option<File>,
     _legacy_file: Option<File>,
 }
 
 fn lock_without_pending_journal(project: &Path) -> Result<PreviewLock> {
-    let mut lock = lock_without_pending_journal_at(&global_control_directory()?)?;
+    let (anchor, control) = control_scope(Some(project), true)?;
+    let mut lock = lock_without_pending_journal_at(&control)?;
+    lock._anchor = anchor;
     if let Some(control) = legacy_control_directory(project)?
         && owned_legacy_scope(&control)?
     {
@@ -93,6 +102,7 @@ fn lock_without_pending_journal_at(control: &Path) -> Result<PreviewLock> {
     reject_pending_journal(control)?;
     Ok(PreviewLock {
         _file: lock,
+        _anchor: None,
         _legacy_file: None,
     })
 }
@@ -194,6 +204,8 @@ fn apply_standalone_prepared_with_policy<T>(
     replace: bool,
     prepare: impl FnOnce() -> Result<(Vec<Operation>, T)>,
 ) -> Result<T> {
+    let project = project.canonicalize().at(project)?;
+    let project = project.as_path();
     let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
     recover_standalone_if_needed_at(&journal_path)?;
     validate_standalone_root(project, "standalone")?;
@@ -215,8 +227,8 @@ fn validate_standalone_root(project: &Path, operation: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn acquire_for_project(project: &Path) -> Result<(File, Option<File>, PathBuf)> {
-    let (global_lock, journal_path) = acquire_global()?;
+pub(super) fn acquire_for_project(project: &Path) -> Result<(GlobalLock, Option<File>, PathBuf)> {
+    let (global_lock, journal_path) = acquire_global_for(Some(project))?;
     let legacy_lock = if let Some(control) = legacy_control_directory(project)?
         && owned_legacy_scope(&control)?
     {
@@ -275,8 +287,61 @@ fn inspect_legacy_scope(
     Ok(metadata.is_dir() && owned(&metadata))
 }
 
-pub(super) fn acquire_global() -> Result<(File, PathBuf)> {
-    acquire_global_at(global_control_directory()?)
+pub(super) struct GlobalLock {
+    _file: File,
+    _anchor: Option<File>,
+}
+
+#[cfg(test)]
+pub(super) fn acquire_global() -> Result<(GlobalLock, PathBuf)> {
+    acquire_global_for(None)
+}
+
+fn acquire_global_for(project: Option<&Path>) -> Result<(GlobalLock, PathBuf)> {
+    let (anchor, control) = control_scope(project, false)?;
+    let (file, journal) = acquire_global_at(control)?;
+    Ok((
+        GlobalLock {
+            _file: file,
+            _anchor: anchor,
+        },
+        journal,
+    ))
+}
+
+#[cfg(all(not(test), unix, not(target_os = "redox")))]
+fn control_scope(project: Option<&Path>, preview: bool) -> Result<(Option<File>, PathBuf)> {
+    scope::select(
+        stable_user_home()?.as_deref(),
+        unsafe { libc::geteuid() },
+        project,
+        preview,
+    )
+}
+
+#[cfg(any(test, not(all(unix, not(target_os = "redox")))))]
+fn control_scope(project: Option<&Path>, _preview: bool) -> Result<(Option<File>, PathBuf)> {
+    let control = global_control_directory()?;
+    reject_project_control(&control, project)?;
+    Ok((None, control))
+}
+
+fn reject_project_control(control: &Path, project: Option<&Path>) -> Result<()> {
+    if control_overlaps_project(control, project)? {
+        return Err(AruError::msg(
+            "user transaction state overlaps this project; refusing to create project files or switch an established recovery scope",
+        ));
+    }
+    Ok(())
+}
+
+fn control_overlaps_project(control: &Path, project: Option<&Path>) -> Result<bool> {
+    let Some(project) = project else {
+        return Ok(false);
+    };
+    let project = project.canonicalize().at(project)?;
+    let control = normalize_destination(&control.join("operation.lock"))?;
+    Ok(control.starts_with(&project))
 }
 
 fn acquire_global_at(control: PathBuf) -> Result<(File, PathBuf)> {
@@ -291,12 +356,6 @@ fn global_control_directory() -> Result<PathBuf> {
         )
     })?;
     Ok(root.join("aru/standalone"))
-}
-
-#[cfg(all(not(test), unix, not(target_os = "redox")))]
-fn global_control_directory() -> Result<PathBuf> {
-    let uid = unsafe { libc::geteuid() };
-    unix_control_directory(stable_user_home()?.as_deref(), uid)
 }
 
 #[cfg(all(
@@ -453,6 +512,12 @@ fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
 }
 
 fn acquire_control_at(control: &Path, repair_permissions: bool) -> Result<(File, PathBuf)> {
+    prepare_control_directory(control, repair_permissions)?;
+    let lock = acquire_lock_file(&control.join("operation.lock"), true)?;
+    Ok((lock, control.join("transaction.toml")))
+}
+
+fn prepare_control_directory(control: &Path, repair_permissions: bool) -> Result<()> {
     validate_control_ancestors(control)?;
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -464,9 +529,7 @@ fn acquire_control_at(control: &Path, repair_permissions: bool) -> Result<(File,
         builder.mode(0o700);
     }
     builder.create(control).at(control)?;
-    validate_control_directory(control, repair_permissions)?;
-    let lock = acquire_lock_file(&control.join("operation.lock"), true)?;
-    Ok((lock, control.join("transaction.toml")))
+    validate_control_directory(control, repair_permissions)
 }
 
 fn acquire_lock_file(path: &Path, create: bool) -> Result<File> {
@@ -594,6 +657,12 @@ fn validate_control_directory(control: &Path, repair_permissions: bool) -> Resul
                 control.display()
             )));
         }
+        if metadata.mode() & 0o022 != 0 {
+            return Err(AruError::msg(
+                "transaction control directory is writable by other users; preserve its contents for manual review instead of repairing permissions",
+            ));
+        }
+        validate_control_files(control)?;
         if repair_permissions {
             std::fs::set_permissions(control, std::fs::Permissions::from_mode(0o700))
                 .at(control)?;
@@ -604,12 +673,32 @@ fn validate_control_directory(control: &Path, repair_permissions: bool) -> Resul
             )));
         }
     }
+    #[cfg(not(unix))]
+    validate_control_files(control)?;
+    Ok(())
+}
+
+fn validate_control_files(control: &Path) -> Result<()> {
+    for name in [
+        "operation.lock",
+        "transaction.toml",
+        "transaction.toml.tmp",
+        "scope.lock",
+        "scope.toml",
+        "scope.toml.tmp",
+    ] {
+        super::state_file::validate(&control.join(name))?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 #[path = "standalone/preview_tests.rs"]
 mod preview_tests;
+
+#[cfg(all(test, unix))]
+#[path = "standalone/security_tests.rs"]
+mod security_tests;
 
 #[cfg(all(test, unix, not(target_os = "redox")))]
 #[path = "standalone/control_tests.rs"]
