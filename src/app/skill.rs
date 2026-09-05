@@ -3,10 +3,10 @@ use std::path::Path;
 
 use crate::cache::Cache;
 use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillTargetArg, SkillUpdateArgs};
-use crate::error::{AruError, IoContext, Result};
+use crate::error::{AruError, Result};
 use crate::interactive::{
     InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, TargetChoice,
-    choose_skills, terminal_choose_targets, terminal_selection_mode,
+    choose_skills, selection_mode, terminal_choose_targets,
 };
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
@@ -18,10 +18,17 @@ use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
 use crate::transaction::{Operation, StandaloneDryRun, apply_standalone, apply_standalone_global};
 
-use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
+use super::prompt::ProjectSnapshot;
+use super::{ExecutionPolicy, ProjectionPolicy, execute};
 
 pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
+    let mode = selection_mode(
+        args.all,
+        !args.skills.is_empty(),
+        args.path.is_some(),
+        policy.interactive,
+        policy.interactive,
+    )?;
     let mut chooser = InquireSkillChooser;
     skill_add_with_policy(project, args, mode, &mut chooser, policy)
 }
@@ -46,6 +53,11 @@ pub(super) fn add_standalone(
         }));
     }
     if args.targets.is_empty() {
+        if !policy.interactive {
+            return Err(AruError::msg(
+                "interactive target selection requires a terminal and prompts enabled; pass --target",
+            ));
+        }
         let mut chooser = InquireTargetChooser;
         let mut choices = Vec::new();
         for spec in crate::target::specs()
@@ -69,7 +81,13 @@ pub(super) fn add_standalone(
         args.targets = targets.into_iter().map(SkillTargetArg::canonical).collect();
     }
     validate_standalone_targets(&args.targets, args.global)?;
-    let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
+    let mode = selection_mode(
+        args.all,
+        !args.skills.is_empty(),
+        args.path.is_some(),
+        policy.interactive,
+        policy.interactive,
+    )?;
     let mut chooser = InquireSkillChooser;
     standalone_add_with_policy(project, &args, mode, &mut chooser, policy)
 }
@@ -295,7 +313,7 @@ fn skill_add_with_policy(
     }
 
     let (snapshot, key, requirement, existing, previous) = {
-        let _guard = begin(project, args.dry_run)?;
+        let _guard = policy.begin(project, true)?;
         let snapshot = ProjectSnapshot::read(project)?;
         let document = ManifestDocument::load(project)?;
         let manifest = document.manifest()?;
@@ -319,7 +337,7 @@ fn skill_add_with_policy(
         } else {
             previous.as_ref()
         },
-        args.dry_run,
+        true, // Inspect with an ephemeral cache until the selection is accepted.
         policy.offline,
     )?;
     let names = inspection
@@ -343,7 +361,7 @@ fn skill_add_with_policy(
         return Ok(());
     };
 
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     if ProjectSnapshot::read(project)? != snapshot {
         return Err(AruError::msg(
             "aru.toml or aru.lock changed during interactive skill selection; retry the command",
@@ -397,7 +415,7 @@ fn skill_add_explicit(
     mode: SkillAddSelectionMode,
     policy: ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let key =
@@ -479,28 +497,8 @@ fn skill_add_base_requirement(
     requirement
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct ProjectSnapshot {
-    manifest: Vec<u8>,
-    lock: Option<Vec<u8>>,
-}
-
-impl ProjectSnapshot {
-    fn read(project: &Path) -> Result<Self> {
-        let manifest_path = project.join(crate::manifest::MANIFEST_FILE);
-        let lock_path = project.join(crate::lockfile::LOCK_FILE);
-        let manifest = std::fs::read(&manifest_path).at(&manifest_path)?;
-        let lock = if lock_path.exists() {
-            Some(std::fs::read(&lock_path).at(&lock_path)?)
-        } else {
-            None
-        };
-        Ok(Self { manifest, lock })
-    }
-}
-
 pub(super) fn remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let key = declared_skill_source_key(project, &manifest, &args.source)?
@@ -560,7 +558,7 @@ pub(super) fn list(project: &Path) -> Result<()> {
 }
 
 pub(super) fn update(project: &Path, args: SkillUpdateArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let updates = canonical_update_skill_targets(project, &manifest, &args.sources)?;

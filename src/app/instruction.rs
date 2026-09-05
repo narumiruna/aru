@@ -13,7 +13,7 @@ pub(super) fn add(
     args: InstructionAddArgs,
     policy: super::ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = super::begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let mut files = args.files.clone();
@@ -68,7 +68,7 @@ pub(super) fn remove(
     args: InstructionRemoveArgs,
     policy: super::ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = super::begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let requested = args.files.into_iter().collect::<BTreeSet<_>>();

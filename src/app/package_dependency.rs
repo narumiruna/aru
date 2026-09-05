@@ -7,10 +7,10 @@ use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, ManifestDocument, validate_name};
 use crate::sync::{CollisionPolicy, UpdateSelection};
 
-use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
+use super::{ExecutionPolicy, ProjectionPolicy, execute};
 
 pub(super) fn add(project: &Path, args: PackageAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let key = find_package_key(project, &manifest, &args.source)?.unwrap_or(args.source.clone());
@@ -74,7 +74,7 @@ pub(super) fn remove(
     args: PackageRemoveArgs,
     policy: ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let key = find_package_key(project, &manifest, &args.source)?.ok_or_else(|| {
@@ -102,7 +102,7 @@ pub(super) fn update(
     args: PackageUpdateArgs,
     policy: ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     if manifest.packages.is_empty() {
@@ -133,13 +133,19 @@ pub(super) fn update(
     } else {
         let mut selected = BTreeSet::new();
         for requested in &args.packages {
-            let canonical = crate::source::git::canonicalize(project, requested)?;
-            if !available.contains(&canonical.identity) {
+            // Interactive choices include exact locked identities, including
+            // transitive packages. These are selectors, not new fetch inputs.
+            let identity = if available.contains(requested) {
+                requested.clone()
+            } else {
+                crate::source::git::canonicalize(project, requested)?.identity
+            };
+            if !available.contains(&identity) {
                 return Err(AruError::msg(format!(
                     "aru package {requested:?} is not present in the locked package graph"
                 )));
             }
-            selected.insert(canonical.identity);
+            selected.insert(identity);
         }
         selected
     };

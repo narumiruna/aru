@@ -4,6 +4,12 @@ use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
 use crate::manifest::{PluginComponent, PluginFormat, Target};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SkillInstallScope {
+    Project,
+    Global,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum ColorChoice {
     #[default]
@@ -82,6 +88,9 @@ pub struct Cli {
     /// Hide progress output.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub no_progress: bool,
+    /// Disable interactive prompts; provide required selections explicitly.
+    #[arg(long, global = true, help_heading = "Global Options")]
+    pub no_interactive: bool,
     /// Assert that aru.lock will remain unchanged.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub locked: bool,
@@ -239,7 +248,7 @@ pub struct PluginAddArgs {
 
 #[derive(Debug, Args)]
 pub struct PluginUpdateArgs {
-    /// Configured plugin name; omit to update all.
+    /// Configured plugin name; omit to choose interactively or update all without prompts.
     #[arg(value_name = "NAME")]
     pub names: Vec<String>,
     /// Select one exact SemVer version compatible with the declaration.
@@ -258,8 +267,8 @@ pub struct PluginUpdateArgs {
 
 #[derive(Debug, Args)]
 pub struct PluginRemoveArgs {
-    /// Configured plugin name.
-    #[arg(value_name = "NAME")]
+    /// Configured plugin name; omit to choose interactively.
+    #[arg(value_name = "NAME", default_value = "", hide_default_value = true)]
     pub name: String,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -340,8 +349,8 @@ pub struct InitArgs {
     /// Directory to initialize (defaults to the current directory).
     #[arg(value_name = "PATH")]
     pub path: Option<PathBuf>,
-    /// Target to configure; may be repeated.
-    #[arg(long, value_name = "TARGET", required = true, action = ArgAction::Append)]
+    /// Target to configure; omit to choose interactively.
+    #[arg(long, value_name = "TARGET", action = ArgAction::Append)]
     pub target: Vec<Target>,
 }
 
@@ -384,7 +393,8 @@ pub struct PackageAddArgs {
 
 #[derive(Debug, Args)]
 pub struct PackageRemoveArgs {
-    /// Declared native aru package source.
+    /// Declared native aru package source; omit to choose interactively.
+    #[arg(default_value = "", hide_default_value = true)]
     pub source: String,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -396,7 +406,7 @@ pub struct PackageRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct PackageUpdateArgs {
-    /// Declared or transitive package source; omit to update all.
+    /// Declared or transitive package source; omit to choose interactively or update all without prompts.
     #[arg(value_name = "PACKAGE")]
     pub packages: Vec<String>,
     /// Select one exact SemVer version compatible with its declared requirement.
@@ -477,8 +487,8 @@ pub enum InstructionCommand {
 
 #[derive(Debug, Args)]
 pub struct InstructionAddArgs {
-    /// Exact project-relative AGENTS.md file path; may be repeated.
-    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    /// Exact project-relative AGENTS.md file path; omit to enter one interactively.
+    #[arg(value_name = "FILE", num_args = 1..)]
     pub files: Vec<String>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -496,8 +506,8 @@ pub struct InstructionAddArgs {
 
 #[derive(Debug, Args)]
 pub struct InstructionRemoveArgs {
-    /// Exact declared file selector to remove; may be repeated.
-    #[arg(value_name = "FILE", required = true, num_args = 1..)]
+    /// Exact declared file selector to remove; omit to choose interactively.
+    #[arg(value_name = "FILE", num_args = 1..)]
     pub files: Vec<String>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -528,8 +538,8 @@ pub struct TargetListArgs {
 
 #[derive(Debug, Args)]
 pub struct TargetAddArgs {
-    /// Target to add; may be repeated.
-    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    /// Target to add; omit to choose interactively.
+    #[arg(value_name = "TARGET", num_args = 1..)]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -547,8 +557,8 @@ pub struct TargetAddArgs {
 
 #[derive(Debug, Args)]
 pub struct TargetRemoveArgs {
-    /// Configured target to remove; may be repeated.
-    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    /// Configured target to remove; omit to choose interactively.
+    #[arg(value_name = "TARGET", num_args = 1..)]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -560,8 +570,8 @@ pub struct TargetRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct TargetSetArgs {
-    /// Exact target set.
-    #[arg(value_name = "TARGET", required = true, num_args = 1..)]
+    /// Exact target set; omit to choose interactively.
+    #[arg(value_name = "TARGET", num_args = 1..)]
     pub targets: Vec<Target>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -646,8 +656,16 @@ pub struct SkillAddArgs {
     #[arg(short = 'U', long, help_heading = "Source Options")]
     pub upgrade: bool,
     /// Install into target-native user directories instead of the current directory.
-    #[arg(short = 'g', long, help_heading = "Apply Options")]
+    #[arg(
+        short = 'g',
+        long,
+        conflicts_with = "scope",
+        help_heading = "Apply Options"
+    )]
     pub global: bool,
+    /// Installation scope; omit to choose interactively (defaults to project without prompts).
+    #[arg(long, value_enum, help_heading = "Apply Options")]
+    pub scope: Option<SkillInstallScope>,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
     pub no_sync: bool,
@@ -661,6 +679,8 @@ pub struct SkillAddArgs {
 
 #[derive(Debug, Args)]
 pub struct SkillRemoveArgs {
+    /// Declared skill source; omit to choose interactively.
+    #[arg(default_value = "", hide_default_value = true)]
     pub source: String,
     /// Remove only this export; may be repeated.
     #[arg(long = "skill", value_name = "NAME", action = ArgAction::Append)]
@@ -675,7 +695,7 @@ pub struct SkillRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct SkillUpdateArgs {
-    /// Declared source to update; omit to update all.
+    /// Declared source to update; omit to choose interactively or update all without prompts.
     #[arg(value_name = "SOURCE")]
     pub sources: Vec<String>,
     /// Update manifest and lock but skip target project paths.
@@ -760,6 +780,8 @@ pub struct McpAddArgs {
 
 #[derive(Debug, Args)]
 pub struct McpRemoveArgs {
+    /// Configured MCP name; omit to choose interactively.
+    #[arg(default_value = "", hide_default_value = true)]
     pub name: String,
     /// Update manifest and lock but skip target project paths.
     #[arg(long, help_heading = "Apply Options")]
@@ -771,7 +793,7 @@ pub struct McpRemoveArgs {
 
 #[derive(Debug, Args)]
 pub struct McpUpdateArgs {
-    /// MCP names to update; omit to update every Registry server.
+    /// MCP names to update; omit to choose Registry servers interactively or update all without prompts.
     #[arg(value_name = "NAME")]
     pub names: Vec<String>,
     /// Update manifest and lock but skip target project paths.

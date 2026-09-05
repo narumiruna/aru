@@ -11,6 +11,7 @@ aru instruction add AGENTS.md src/api/AGENTS.md --dry-run
 aru instruction add AGENTS.md src/api/AGENTS.md
 ```
 
+In a terminal, omitting paths opens a prompt for one exact project-relative `AGENTS.md` path.
 The command does not search the project for instruction files.
 Configure glob selectors directly in `aru.toml` when needed.
 
@@ -22,7 +23,9 @@ aru instruction remove AGENTS.md --dry-run
 aru instruction remove AGENTS.md
 ```
 
+Omit selectors in a terminal to choose from the declared selectors, including any configured globs.
 Removing a selector does not remove the canonical source file.
+With `--no-interactive` or without a terminal, both add and remove require explicit paths or selectors.
 
 ## Configure sources
 

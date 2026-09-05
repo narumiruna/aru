@@ -13,7 +13,7 @@ use crate::transaction::{Operation, StandaloneDryRun, apply_standalone_prepared}
 use super::{ExecutionPolicy, ProjectionPolicy};
 
 pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = super::begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let intent = mcp_add_intent(args)?;
     let mut document = ManifestDocument::load(project)?;
     document.set_mcp(&intent.name, &intent.requirement);
@@ -49,6 +49,11 @@ pub(super) fn add_standalone(
         ));
     }
     if args.targets.is_empty() {
+        if !policy.interactive {
+            return Err(AruError::msg(
+                "interactive target selection requires a terminal and prompts enabled; pass --target",
+            ));
+        }
         let choices = crate::target::specs()
             .iter()
             .filter(|spec| spec.capabilities.mcp)
@@ -255,7 +260,7 @@ fn parse_header_env(assignments: &[String]) -> Result<BTreeMap<String, String>> 
 }
 
 pub(super) fn remove(project: &Path, args: McpRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = super::begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     if !manifest.mcp.contains_key(&args.name) {
@@ -312,7 +317,7 @@ pub(super) fn list(project: &Path) -> Result<()> {
 }
 
 pub(super) fn update(project: &Path, args: McpUpdateArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = super::begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     let updates: BTreeSet<String> = if args.names.is_empty() {

@@ -76,6 +76,7 @@ fn add_args(source: &Path) -> SkillAddArgs {
         targets: Vec::new(),
         upgrade: false,
         global: false,
+        scope: None,
         no_sync: false,
         dry_run: false,
         force: false,

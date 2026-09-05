@@ -6,6 +6,7 @@ mod mcp;
 mod package_archive;
 mod package_dependency;
 mod plugin;
+mod prompt;
 mod self_update;
 mod shell_completion;
 mod skill;
@@ -37,6 +38,8 @@ struct ExecutionPolicy {
     locked: bool,
     offline: bool,
     output: Output,
+    interactive: bool,
+    selection_snapshot: Option<prompt::ProjectSnapshot>,
 }
 
 impl Default for ExecutionPolicy {
@@ -45,6 +48,8 @@ impl Default for ExecutionPolicy {
             locked: false,
             offline: false,
             output: Output::new(false, 0, crate::cli::ColorChoice::Never, true),
+            interactive: crate::interactive::enabled(false),
+            selection_snapshot: None,
         }
     }
 }
@@ -56,6 +61,10 @@ enum ProjectionPolicy {
 }
 
 impl ExecutionPolicy {
+    fn begin(self, project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
+        begin_with_snapshot(project, dry_run, self.selection_snapshot)
+    }
+
     fn request(self, dry_run: bool, projection: ProjectionPolicy) -> ReconcileRequest {
         match projection {
             ProjectionPolicy::LockOnly => {
@@ -69,13 +78,24 @@ impl ExecutionPolicy {
 }
 
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
-    let project_option = cli.project;
-    let policy = ExecutionPolicy {
+    let mut cli = Cli::parse();
+    let mut project_option = cli.project;
+    let mut policy = ExecutionPolicy {
         locked: cli.locked || cli.frozen,
         offline: cli.offline || cli.frozen,
         output: Output::new(cli.quiet, cli.verbose, cli.color, cli.no_progress),
+        interactive: crate::interactive::enabled(cli.no_interactive),
+        selection_snapshot: None,
     };
+    match prompt::prepare(&mut cli.command, &mut project_option, policy.interactive)? {
+        prompt::Prepared::Canceled => {
+            policy
+                .output
+                .completion("Selection canceled; no files were changed.");
+            return Ok(());
+        }
+        prompt::Prepared::Ready(snapshot) => policy.selection_snapshot = snapshot,
+    }
     match cli.command {
         Command::Init(args) => init_with_output(
             project_for_init(project_option, args.path)?,
@@ -160,7 +180,14 @@ pub fn run() -> Result<()> {
             command: SkillCommand::Add(args),
         } => match discover_add_root(project_option)? {
             AddRoot::Managed(project) => skill::add(&project, args, policy),
-            AddRoot::Standalone(project) => skill::add_standalone(&project, args, policy),
+            AddRoot::Standalone(project) => {
+                if policy.selection_snapshot.is_some() {
+                    return Err(AruError::msg(
+                        "aru.toml changed during interactive selection; retry the command",
+                    ));
+                }
+                skill::add_standalone(&project, args, policy)
+            }
         },
         Command::Skill { command } => {
             let project = discover_project(project_option)?;
@@ -175,7 +202,14 @@ pub fn run() -> Result<()> {
             command: McpCommand::Add(args),
         } => match discover_add_root(project_option)? {
             AddRoot::Managed(project) => mcp::add(&project, *args, policy),
-            AddRoot::Standalone(project) => mcp::add_standalone(&project, *args, policy),
+            AddRoot::Standalone(project) => {
+                if policy.selection_snapshot.is_some() {
+                    return Err(AruError::msg(
+                        "aru.toml changed during interactive selection; retry the command",
+                    ));
+                }
+                mcp::add_standalone(&project, *args, policy)
+            }
         },
         Command::Mcp { command } => {
             let project = discover_project(project_option)?;
@@ -352,7 +386,7 @@ fn target_list_available() -> Result<()> {
 }
 
 fn target_add(project: &Path, args: TargetAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
     let mut targets = current.clone();
@@ -372,7 +406,7 @@ fn target_add(project: &Path, args: TargetAddArgs, policy: ExecutionPolicy) -> R
 }
 
 fn target_remove(project: &Path, args: TargetRemoveArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
     let mut requested = args.targets;
@@ -408,7 +442,7 @@ fn target_remove(project: &Path, args: TargetRemoveArgs, policy: ExecutionPolicy
 }
 
 fn target_set(project: &Path, args: TargetSetArgs, policy: ExecutionPolicy) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let current = document.manifest()?.project.targets;
     let mut targets = args.targets;
@@ -617,6 +651,14 @@ pub(crate) enum ExecutionGuard {
 }
 
 pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
+    begin_with_snapshot(project, dry_run, None)
+}
+
+fn begin_with_snapshot(
+    project: &Path,
+    dry_run: bool,
+    snapshot: Option<prompt::ProjectSnapshot>,
+) -> Result<ExecutionGuard> {
     if dry_run {
         let guard = lock_without_pending_journal(project)?;
         if project.join(JOURNAL_FILE).exists() {
@@ -624,9 +666,20 @@ pub(crate) fn begin(project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
                 "a recoverable transaction is pending; run a mutating aru command before --dry-run",
             ));
         }
+        if let Some(snapshot) = snapshot {
+            snapshot.verify(project)?;
+        }
         Ok(ExecutionGuard::Preview { _lock: guard })
     } else {
         let guard = ProjectLock::acquire(project)?;
+        if let Some(snapshot) = snapshot {
+            snapshot.verify(project)?;
+            if project.join(JOURNAL_FILE).exists() {
+                return Err(AruError::msg(
+                    "a transaction appeared during interactive selection; run aru sync before retrying",
+                ));
+            }
+        }
         if recover_if_needed(project)? {
             eprintln!("recovered an interrupted aru transaction");
         }

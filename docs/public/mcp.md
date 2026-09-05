@@ -17,6 +17,9 @@ aru mcp add \
 If no `aru.toml` exists in the current directory or an ancestor, `mcp add` uses standalone mode.
 Without `--target`, an interactive terminal opens a searchable multi-select containing only Codex, Claude Code, Copilot CLI, and OpenCode with their native project config paths.
 Non-interactive standalone commands must pass `--target`.
+In a managed project, omitting `--target` in a terminal offers configured MCP-capable targets; without prompts, the existing configured-target default applies.
+`aru mcp remove` without a name offers configured servers, and `aru mcp update` without names offers Registry-backed servers with all checked.
+Pass `--no-interactive` to disable these prompts. MCP installation remains project-scoped; there is no Global scope menu.
 
 Standalone mode safely merges the named entry into every selected config and preserves unrelated entries and supported comments.
 An existing same-name entry is rejected before writing config content unless `--force` is passed; force replaces only that entry.

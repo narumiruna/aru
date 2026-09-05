@@ -72,7 +72,7 @@ fn instruction_help_exposes_add_remove_list_and_merge_contract() {
         .args(["instruction", "add", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("<FILE>..."))
+        .stdout(predicate::str::contains("[FILE]..."))
         .stdout(predicate::str::contains("--discover").not())
         .stdout(predicate::str::contains("-n, --dry-run"))
         .stdout(predicate::str::contains("--no-sync"))

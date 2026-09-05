@@ -2,8 +2,13 @@
 
 Aru resolves skills from Git repositories and installs each selected skill into compatible targets' native skill directories.
 
-In an initialized aru project, `skill add` without `--global` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state.
-In a directory without an `aru.toml` in it or an ancestor, the same command performs a one-time standalone installation without creating project state.
+In Project scope, `skill add` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state when an initialized aru project is found.
+Without an `aru.toml` in the current directory or an ancestor, Project scope performs a one-time standalone installation without creating project state.
+
+In a terminal, omitting both `--scope` and `--global` opens an Installation scope menu, with Project first and Global second.
+Pass `--scope project` to select Project explicitly; `--scope global`, `--global`, and `-g` select Global.
+`--global` and `--scope` cannot be combined. The existing `--project PATH` option chooses a directory, not an installation scope.
+Without a terminal, or with `--no-interactive`, omitted scope defaults to Project.
 
 ## Standalone installation
 
@@ -24,7 +29,8 @@ Global mode preserves aliases whose user-level paths differ from their canonical
 For home-based paths, Windows prefers `USERPROFILE` over `HOME`; other platforms prefer `HOME`.
 Eve and PromptScript do not support global installation.
 
-If `--target` is omitted in an interactive terminal, aru first opens a searchable multi-select target menu.
+After scope selection, if `--target` is omitted in an interactive terminal, aru opens a searchable multi-select target menu.
+In managed Project scope, it offers configured skill-capable targets, initially checked. Standalone Project scope offers all skill targets; Global scope offers only targets with user-level skill directories.
 Global paths and environment overrides are validated only for the selected targets, after the menu completes.
 It then applies the normal skill selection rules, so a bare source opens the skill menu while `--all`, `--skill`, or `--path` skips it.
 Non-interactive standalone commands must provide both `--target` and an explicit skill selector.
@@ -59,7 +65,9 @@ aru skill add owner/repository --path extras/review    # non-standard layout
 aru skill add owner/repository --all --target codex    # target subset
 ```
 
-A bare command requires an interactive terminal. Scripts, pipes, redirected shells, and CI must pass `--all`, `--skill`, or `--path` explicitly.
+A bare command requires both stdin and stderr to be terminals. Scripts, pipes, redirected shells, and CI must pass `--all`, `--skill`, or `--path` explicitly.
+These flags skip only the skill menu; scope and target menus still appear for omitted selections in a terminal.
+Use `--no-interactive` to disable every prompt, including when running a script in a terminal.
 
 Aru discovers a skill at the repository root (`./SKILL.md`) or in any nested directory (`**/SKILL.md`) within the discovery limits.
 When the source repository contains a valid `aru.lock`, automatic discovery ignores a locked skill only when its content digest still matches and it is under a hidden projection directory corresponding to that skill's locked targets, such as `.agents/skills/` or `.pi/skills/`.
@@ -106,6 +114,10 @@ aru skill update owner/repository
 aru skill remove owner/repository --skill review
 aru skill remove owner/repository
 ```
+
+In a terminal, `aru skill update` offers declared sources with all checked, and `aru skill remove` offers a single source to remove.
+Explicit sources skip these menus. Without prompts, bare `skill update` still updates all sources, while `skill remove` requires a source.
+These commands manage initialized project intent only; they do not update or remove standalone/global installations.
 
 Ordinary `sync` and `sync --locked` retain a branch's locked commit. Run `skill update` or add with `--upgrade` to move it.
 

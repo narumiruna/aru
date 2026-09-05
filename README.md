@@ -196,6 +196,20 @@ Add, remove, update, and target commands normally update the manifest, lockfile,
 
 Use `--no-sync` when you intentionally want to update only `aru.toml` and `aru.lock`, then run `aru sync` later.
 
+## Interactive guidance
+
+In a terminal, aru helps fill omitted selections:
+
+- `aru init` and `aru target add/remove/set` open target menus.
+- `aru skill add owner/repository` asks for Project or Global scope, targets, and skills.
+- Managed `aru add`, `aru plugin add`, and `aru mcp add` offer configured target choices when `--target` is omitted.
+- Bare `remove` and resource `remove` commands offer configured items; bare `update` commands offer a multi-select menu with all eligible items checked.
+- `aru instruction add` prompts for an exact project-relative `AGENTS.md` path.
+
+Use arrow keys to move, space to toggle multi-select items, typing to filter menus, Enter to accept, and Esc to cancel.
+Pass `--no-interactive` to disable all prompts. Without prompts, existing defaults remain: project scope, configured managed targets, and update-all. Required missing selections produce an actionable error.
+Inspection, `sync`, `lock`, packaging, and self-update commands do not gain prompts. Source identifiers, MCP configuration, and trust flags remain explicit.
+
 ## Common tasks
 
 ### Manage instructions
@@ -236,11 +250,12 @@ aru skill remove owner/repository --skill review
 aru skill remove owner/repository
 ```
 
-In an initialized project, a bare `skill add` opens an interactive skill selector and uses the configured project targets.
+A bare `skill add SOURCE` in a terminal asks for installation scope, targets, and skills.
+Use `--scope project` to skip the scope menu, or `-g`, `--global`, or `--scope global` for user-level installation.
 
-Without an `aru.toml` in the current directory or an ancestor, `skill add` performs a one-time installation.
-Pass `--target` explicitly or choose one or more targets from the interactive menu.
-Add `-g` or `--global` to install into each target's user-level skill directory, even from an initialized project. Global mode does not use or update the project's manifest, lockfile, or configured targets; relative sources resolve from the current directory or explicit `--project` directory. Destinations inside managed projects remain rejected to protect managed content.
+Project scope uses the initialized aru project when one is found; otherwise it performs a one-time installation in the current directory.
+Pass `--target` explicitly or choose from the menu. Managed installations offer only configured targets.
+Global scope always performs a standalone installation, even inside an initialized project, without changing its manifest, lockfile, or targets. Relative sources resolve from the current directory or explicit `--project` directory. Destinations inside managed projects remain rejected to protect managed content.
 Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
 
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.

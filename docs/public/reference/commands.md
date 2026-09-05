@@ -2,6 +2,47 @@
 
 Run `aru <command> --help` for the complete option contract installed with your version.
 
+## Interactive behavior
+
+Prompts require both stdin and stderr to be terminals and are disabled by `--no-interactive`.
+Explicit arguments bypass the corresponding menu, not necessarily every menu in a command.
+
+| Command | Omitted selection in a terminal | Without prompts |
+| --- | --- | --- |
+| `init` | Choose project targets | Requires `--target` |
+| `target add/remove/set` | Choose unconfigured, configured, or replacement targets respectively | Requires targets |
+| `skill add SOURCE` | Choose Project/Global scope, then targets and skills | Defaults to Project; requires explicit skills and, for standalone installs, targets |
+| `add SOURCE`, `plugin add SOURCE`, `mcp add ...` | Choose configured dependency targets; standalone MCP offers MCP-capable targets | Uses configured targets; standalone MCP requires `--target` |
+| `instruction add` | Enter one exact project-relative `AGENTS.md` path; no directory scan | Requires file paths |
+| `instruction remove` | Choose declared file selectors, including declared globs | Requires selectors |
+| `remove`, `skill remove`, `plugin remove`, `mcp remove` | Choose one declared source or name | Requires a source or name |
+| `update`, `skill update`, `plugin update`, `mcp update` | Choose items with all eligible items initially checked | Updates all, as before |
+
+Native package updates include locked transitive packages. The MCP update menu lists only Registry-backed servers.
+Managed add menus offer configured targets, initially checked; skill and MCP menus filter by capability.
+`target set` initially checks the current target set. Other mutation menus start unchecked.
+
+Use arrows to move, space to toggle multi-select choices, typing to filter, Enter to accept, and Esc to cancel.
+Multi-select menus require at least one item. Removing the final project target still fails; use `target set` to replace it.
+An empty inventory produces an actionable error instead of an empty menu.
+Canceling does not apply project or target changes. Menu preparation may create private per-user coordination metadata outside the project.
+Managed selections are checked against `aru.toml` and `aru.lock` again under the operation lock before execution; concurrent changes require a retry.
+`--dry-run` still prompts for missing selections but only previews the result.
+
+Only skill installation supports Global scope. `--scope project` and `--scope global` select it explicitly; `--global` is a shorthand for Global and conflicts with `--scope`.
+`--project PATH` remains a directory override, not a scope flag.
+Source identifiers, MCP source/name/options, plugin component selection, and `--trust-mcp` remain explicit. Menus never imply trust or `--force`.
+Listing, inspection, export, metadata, `sync`, `lock`, packaging, shell completion, and self-update retain their existing non-interactive behavior.
+
+```console
+aru init
+aru skill add owner/repository
+aru target set
+aru skill update --dry-run
+aru skill add owner/repository --scope project --target codex --all
+aru update --no-interactive
+```
+
 ## Project lifecycle
 
 | Command | Purpose |
@@ -75,3 +116,4 @@ Run `aru <command> --help` for the complete option contract installed with your 
 | `-v`, `--verbose` | Show more detail; repeat for projection identity detail |
 | `--color auto\|always\|never` | Control status color |
 | `--no-progress` | Hide progress output |
+| `--no-interactive` | Disable all prompts; preserve defaults and reject missing required selections |
