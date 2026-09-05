@@ -13,11 +13,11 @@ use crate::plugin::{inspect_plugin_root, plugin_root};
 use crate::source::git;
 use crate::sync::{CollisionPolicy, UpdateSelection};
 
-use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
+use super::{ExecutionPolicy, ProjectionPolicy, execute};
 
 pub(super) fn add(project: &Path, args: PluginAddArgs, policy: ExecutionPolicy) -> Result<()> {
     validate_cli_selection(&args)?;
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
 
@@ -97,7 +97,7 @@ pub(super) fn remove(
     args: PluginRemoveArgs,
     policy: ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let mut document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     if !manifest.plugins.contains_key(&args.name) {
@@ -120,7 +120,7 @@ pub(super) fn update(
     args: PluginUpdateArgs,
     policy: ExecutionPolicy,
 ) -> Result<()> {
-    let _guard = begin(project, args.dry_run)?;
+    let _guard = policy.begin(project, args.dry_run)?;
     let document = ManifestDocument::load(project)?;
     let manifest = document.manifest()?;
     if manifest.plugins.is_empty() {

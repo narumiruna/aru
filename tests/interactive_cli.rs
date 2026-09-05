@@ -54,6 +54,10 @@ fn interactive_add(
         "skill",
         "add",
         repository.to_str().unwrap(),
+        "--scope",
+        "project",
+        "--target",
+        "codex",
     ]);
     command.args(extra);
     let mut session = Session::spawn(command).unwrap();
@@ -63,9 +67,13 @@ fn interactive_add(
 
 fn standalone_interactive_add(project: &Path, repository: &Path) -> expectrl::session::OsSession {
     let mut command = Command::new(env!("CARGO_BIN_EXE_aru"));
-    command
-        .current_dir(project)
-        .args(["skill", "add", repository.to_str().unwrap()]);
+    command.current_dir(project).args([
+        "skill",
+        "add",
+        repository.to_str().unwrap(),
+        "--scope",
+        "project",
+    ]);
     let mut session = Session::spawn(command).unwrap();
     session.set_expect_timeout(Some(Duration::from_secs(20)));
     session

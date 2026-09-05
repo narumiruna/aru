@@ -1,9 +1,9 @@
 use std::io::{self, IsTerminal};
 
-use inquire::MultiSelect;
 use inquire::error::InquireError;
 use inquire::list_option::ListOption;
 use inquire::validator::Validation;
+use inquire::{MultiSelect, Select, Text};
 
 use crate::error::{AruError, Result};
 use crate::manifest::Target;
@@ -49,6 +49,101 @@ pub fn terminal_selection_mode(
         io::stdin().is_terminal(),
         io::stderr().is_terminal(),
     )
+}
+
+/// Optional prompts run only when both input and the prompt output are terminals.
+pub fn enabled(no_interactive: bool) -> bool {
+    !no_interactive && io::stdin().is_terminal() && io::stderr().is_terminal()
+}
+
+pub fn select_many<T: Clone + std::fmt::Display>(
+    message: &str,
+    mut options: Vec<T>,
+    defaults: &[String],
+) -> Result<Option<Vec<T>>> {
+    options.sort_by_cached_key(ToString::to_string);
+    if options.is_empty() {
+        return Err(AruError::msg(format!("{message}: no selectable items")));
+    }
+    let defaults = options
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| defaults.contains(&value.to_string()).then_some(index))
+        .collect::<Vec<_>>();
+    let page_size = options.len().clamp(1, 12);
+    MultiSelect::new(message, options)
+        .with_default(&defaults)
+        .with_page_size(page_size)
+        .with_help_message(
+            "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel",
+        )
+        .with_validator(|selection: &[ListOption<&T>]| {
+            Ok(if selection.is_empty() {
+                Validation::Invalid("select at least one item".into())
+            } else {
+                Validation::Valid
+            })
+        })
+        .prompt_skippable()
+        .map_err(map_selection_error)
+}
+
+pub fn select_one(message: &str, mut options: Vec<String>) -> Result<Option<String>> {
+    options.sort();
+    options.dedup();
+    if options.is_empty() {
+        return Err(AruError::msg(format!("{message}: no selectable items")));
+    }
+    let page_size = options.len().clamp(1, 12);
+    Select::new(message, options)
+        .with_page_size(page_size)
+        .prompt_skippable()
+        .map_err(map_selection_error)
+}
+
+pub fn installation_scope() -> Result<Option<crate::cli::SkillInstallScope>> {
+    use crate::cli::SkillInstallScope;
+    Select::new(
+        "Installation scope",
+        vec![
+            "Project — use the aru project, or install in the current directory",
+            "Global — install in user directories; leave aru project state unchanged",
+        ],
+    )
+    .prompt_skippable()
+    .map(|value| {
+        value.map(|value| {
+            if value.starts_with("Project") {
+                SkillInstallScope::Project
+            } else {
+                SkillInstallScope::Global
+            }
+        })
+    })
+    .map_err(map_selection_error)
+}
+
+pub fn instruction_path() -> Result<Option<String>> {
+    Text::new("Project-relative AGENTS.md path")
+        .with_placeholder("AGENTS.md")
+        .with_validator(|value: &str| {
+            Ok(if value.trim().is_empty() {
+                Validation::Invalid("enter an exact AGENTS.md path".into())
+            } else {
+                Validation::Valid
+            })
+        })
+        .prompt_skippable()
+        .map_err(map_selection_error)
+}
+
+fn map_selection_error(error: InquireError) -> AruError {
+    match error {
+        InquireError::OperationInterrupted => {
+            AruError::msg("interactive selection was interrupted")
+        }
+        other => AruError::msg(format!("interactive selection failed: {other}")),
+    }
 }
 
 pub trait SkillChooser {
