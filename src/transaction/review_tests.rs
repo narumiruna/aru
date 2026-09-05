@@ -217,21 +217,14 @@ fn standalone_rechecks_all_project_ancestors_before_prepare_or_preview() {
         panic!("must reject the new managed ancestor before preparing writes");
     });
     assert!(local.unwrap_err().to_string().contains("aru.toml appeared"));
-    let global = apply_standalone_global(
-        &project,
-        vec![Operation::file(output.path().join("demo"), b"new".to_vec())],
-        false,
-    );
-    assert!(
-        global
-            .unwrap_err()
-            .to_string()
-            .contains("aru.toml appeared")
-    );
-    for global in [false, true] {
-        assert!(StandaloneDryRun::begin(&project, global).is_err());
-    }
+    assert!(StandaloneDryRun::begin(&project, false).is_err());
+    let operations = vec![Operation::file(output.path().join("demo"), b"new".to_vec())];
+    let preview = StandaloneDryRun::begin(&project, true).unwrap();
+    preview.validate(&operations).unwrap();
+    drop(preview);
     assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+    apply_standalone_global(&project, operations, false).unwrap();
+    assert_eq!(std::fs::read(output.path().join("demo")).unwrap(), b"new");
     assert_eq!(std::fs::read_dir(&project).unwrap().count(), 0);
 }
 

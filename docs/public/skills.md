@@ -2,7 +2,7 @@
 
 Aru resolves skills from Git repositories and installs each selected skill into compatible targets' native skill directories.
 
-In an initialized aru project, `skill add` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state.
+In an initialized aru project, `skill add` without `--global` records reproducible intent in `aru.toml` and `aru.lock` and manages projections through ownership state.
 In a directory without an `aru.toml` in it or an ancestor, the same command performs a one-time standalone installation without creating project state.
 
 ## Standalone installation
@@ -16,7 +16,8 @@ aru skill add --global --target codex owner/repository --skill review
 ```
 
 Use `-g` or `--global` to write to each target's user-level skill directory instead of the current directory.
-Global mode is intentionally standalone: aru rejects it when the discovered root contains `aru.toml`.
+Global mode always selects standalone installation, even when the current directory or an ancestor contains `aru.toml`. It does not use or update the project's manifest, lockfile, or configured targets. Relative sources resolve from the current directory, or from the directory passed with `--project`, without searching for a project root.
+Global destinations inside managed projects, including through symlinks, remain rejected to protect managed content; overlapping pending managed recovery also blocks installation.
 For example, Codex receives `~/.codex/skills/<name>`, Claude receives `~/.claude/skills/<name>`, pi receives `~/.pi/agent/skills/<name>`, and OpenCode receives `${XDG_CONFIG_HOME:-~/.config}/opencode/skills/<name>`.
 Global mode preserves aliases whose user-level paths differ from their canonical target: `universal` uses `${XDG_CONFIG_HOME:-~/.config}/agents/skills/<name>`, `antigravity-cli` uses `~/.gemini/antigravity-cli/skills/<name>`, `qoder-cn` uses `~/.qoder-cn/skills/<name>`, and `trae-cn` uses `~/.trae-cn/skills/<name>`.
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `VIBE_HOME`, `HERMES_HOME`, `AUTOHAND_HOME`, and `GROK_HOME` override their corresponding target roots and must be absolute paths.
@@ -44,7 +45,7 @@ Coordination metadata must remain outside the project being operated on. On firs
 Unix control directories writable by another user are rejected without permission repair; review their contents manually. Existing journal, temporary journal, lock and scope files must be regular, owned by the effective UID, singly linked, and not writable by other users. Validation precedes permission repair, reads do not follow symlinks, and temporary writes use the same checks. Mutations may repair non-private read/execute permissions only after these checks; previews never repair them. State reads and writes are bounded to 16 MiB.
 Both managed and standalone mutations recover an existing legacy project-scoped standalone journal before new writes; dry runs reject pending legacy recovery without changing it.
 `--dry-run` validates and previews without changing project files or installing skills. It may create private coordination directories and `operation.lock` outside the project, including on first use; on Unix these are created with modes `0700` and `0600`. It does not recover or modify pending journals. Standalone project roots are canonicalized before validation and journaling, so relative roots work and retargeting a root symlink does not redirect recovery.
-`--no-sync`, `--locked`, and `--frozen` require an initialized project and are rejected in standalone mode.
+`--no-sync`, `--locked`, and `--frozen` require managed project installation and are rejected in standalone mode, including with `--global` inside an initialized project.
 
 ## Select exports
 
