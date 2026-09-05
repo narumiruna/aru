@@ -53,12 +53,72 @@ fn managed_work_recovers_legacy_standalone_journals_before_project_writes() {
             assert_eq!(std::fs::read(project.path().join("demo")).unwrap(), b"old");
             assert!(!journal.exists());
             assert!(legacy_lock.try_lock_exclusive().is_err());
+            let _inherited_legacy = lock._legacy_file.as_ref().unwrap().try_clone().unwrap();
             drop(lock);
             legacy_lock.try_lock_exclusive().unwrap();
         }
         drop(legacy_lock);
         std::fs::remove_dir_all(legacy).unwrap();
     }
+}
+
+#[test]
+fn managed_preview_retains_shared_and_legacy_locks_until_completion() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("aru.toml"), b"project intent").unwrap();
+    let before = path_digest(project.path()).unwrap();
+    let legacy = standalone::legacy_control_directory(project.path())
+        .unwrap()
+        .unwrap();
+    std::fs::create_dir_all(&legacy).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    File::create(legacy.join("operation.lock")).unwrap();
+    let (lock, journal) = standalone::acquire_global().unwrap();
+    drop(lock);
+    let competing = [
+        journal.with_file_name("operation.lock"),
+        legacy.join("operation.lock"),
+    ]
+    .map(|path| {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap()
+    });
+
+    // Both managed --dry-run and --check enter this shared begin path before
+    // loading manifest, lockfile, ownership state or projections.
+    let preview = crate::app::begin(project.path(), true).unwrap();
+    for lock in &competing {
+        assert!(lock.try_lock_exclusive().is_err());
+    }
+    assert_eq!(path_digest(project.path()).unwrap(), before);
+    assert!(!journal.exists());
+    assert!(!project.path().join(".aru").exists());
+    drop(preview);
+    for lock in &competing {
+        lock.try_lock_exclusive().unwrap();
+        FileExt::unlock(lock).unwrap();
+    }
+
+    // An error after acquiring the guard must also release both locks without
+    // repairing the pending managed journal.
+    std::fs::create_dir(project.path().join(".aru")).unwrap();
+    let pending = project.path().join(JOURNAL_FILE);
+    std::fs::write(&pending, b"pending recovery").unwrap();
+    assert!(crate::app::begin(project.path(), true).is_err());
+    assert_eq!(std::fs::read(&pending).unwrap(), b"pending recovery");
+    for lock in &competing {
+        lock.try_lock_exclusive().unwrap();
+        FileExt::unlock(lock).unwrap();
+    }
+    drop(competing);
+    std::fs::remove_dir_all(legacy).unwrap();
 }
 
 #[test]

@@ -24,15 +24,7 @@ fn failed_post_copy_verification_leaves_no_stage_or_destination() {
     assert!(result.is_err());
     assert!(!project.path().join("skills/source").exists());
     assert!(!project.path().join(JOURNAL_FILE).exists());
-    assert!(
-        std::fs::read_dir(project.path().join("skills"))
-            .unwrap()
-            .all(|entry| !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".aru-stage-"))
-    );
+    assert!(!project.path().join("skills").exists());
 }
 
 #[test]
