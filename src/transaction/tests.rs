@@ -291,6 +291,43 @@ fn local_standalone_recovers_from_a_non_utf8_project_root() {
     assert_eq!(std::fs::read(project.join("second")).unwrap(), b"second");
 }
 
+#[cfg(unix)]
+#[test]
+fn aliased_absolute_destinations_are_rejected_before_staging() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    let alias = root.path().join("alias");
+    std::fs::create_dir_all(real.join("skills")).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let real_destination = real.join("skills/demo");
+    let alias_destination = alias.join("skills/demo");
+    let journal = root.path().join("control/transaction.toml");
+
+    let result = apply_absolute_at(
+        vec![
+            Operation::file(&real_destination, b"real".to_vec()),
+            Operation::file(&alias_destination, b"alias".to_vec()),
+        ],
+        &journal,
+    );
+
+    assert!(result.is_err());
+    assert!(!real_destination.exists());
+    assert!(!journal.exists());
+}
+
+#[test]
+fn large_destination_plan_validates_without_pairwise_comparison() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("skills");
+    std::fs::create_dir(&parent).unwrap();
+    let operations = (0..10_000)
+        .map(|index| Operation::file(parent.join(format!("skill-{index:05}")), Vec::new()))
+        .collect::<Vec<_>>();
+
+    validate_operations(PathMode::Absolute, &operations, 2).unwrap();
+}
+
 #[test]
 fn nested_absolute_destinations_are_rejected_before_staging() {
     let root = tempfile::tempdir().unwrap();
@@ -343,6 +380,30 @@ fn global_dry_run_rejects_pending_recovery_without_mutating_it() {
 }
 
 #[test]
+fn managed_dry_run_rejects_pending_standalone_recovery_without_mutating_it() {
+    let standalone = tempfile::tempdir().unwrap();
+    let managed = tempfile::tempdir().unwrap();
+    let destination_root = tempfile::tempdir().unwrap();
+    let destination = destination_root.path().join("skills/demo");
+
+    set_failure_phase("ARU_TEST_CRASH_AFTER", Some(1));
+    let crashed = apply_standalone_global(
+        standalone.path(),
+        vec![Operation::file(&destination, b"global".to_vec())],
+        true,
+    );
+    set_failure_phase("ARU_TEST_CRASH_AFTER", None);
+    assert!(crashed.is_err());
+
+    let result = crate::app::begin(managed.path(), true);
+    assert!(result.is_err());
+    assert!(destination.exists());
+
+    let _lock = ProjectLock::acquire(managed.path()).unwrap();
+    assert!(!destination.exists());
+}
+
+#[test]
 fn managed_lock_recovers_pending_standalone_transaction() {
     let standalone = tempfile::tempdir().unwrap();
     let managed = tempfile::tempdir().unwrap();
@@ -385,6 +446,44 @@ fn global_transaction_rejects_pending_managed_recovery() {
 
     assert!(recover_if_needed(managed.path()).unwrap());
     assert!(!destination.exists());
+}
+
+#[test]
+fn global_transaction_rejects_destinations_inside_managed_projects() {
+    let managed = tempfile::tempdir().unwrap();
+    let standalone = tempfile::tempdir().unwrap();
+    let destination = managed.path().join(".kiro/skills/demo");
+    std::fs::write(managed.path().join(crate::manifest::MANIFEST_FILE), "").unwrap();
+
+    let result = apply_standalone_global(
+        standalone.path(),
+        vec![Operation::file(&destination, b"global".to_vec())],
+        true,
+    );
+
+    assert!(result.is_err());
+    assert!(!destination.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn global_transaction_rejects_managed_projects_behind_symlinked_roots() {
+    let managed = tempfile::tempdir().unwrap();
+    let standalone = tempfile::tempdir().unwrap();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("managed-alias");
+    std::fs::write(managed.path().join(crate::manifest::MANIFEST_FILE), "").unwrap();
+    std::os::unix::fs::symlink(managed.path(), &alias).unwrap();
+    let destination = alias.join(".kiro/skills/demo");
+
+    let result = apply_standalone_global(
+        standalone.path(),
+        vec![Operation::file(&destination, b"global".to_vec())],
+        true,
+    );
+
+    assert!(result.is_err());
+    assert!(!managed.path().join(".kiro/skills/demo").exists());
 }
 
 #[test]

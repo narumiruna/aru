@@ -16,6 +16,10 @@ pub use standalone::{
     validate_standalone_dry_run, validate_standalone_global_dry_run,
 };
 
+pub(crate) fn validate_no_standalone_pending_journal() -> Result<()> {
+    standalone::validate_no_pending_journal()
+}
+
 pub const JOURNAL_FILE: &str = ".aru/transaction.toml";
 
 #[derive(Debug)]
@@ -737,35 +741,74 @@ fn validate_operations(
     operations: &[Operation],
     journal_version: u32,
 ) -> Result<()> {
+    let mut destinations = Vec::with_capacity(operations.len());
     for operation in operations {
         validate_destination(mode, &operation.destination)?;
         validate_ancestors(mode, &operation.destination)?;
-        encode_journal_path(
-            journal_version,
-            mode,
-            &resolve_path(mode, &operation.destination),
-        )?;
+        let resolved = resolve_path(mode, &operation.destination);
+        encode_journal_path(journal_version, mode, &resolved)?;
+        destinations.push(normalize_destination(&resolved)?);
     }
-    for (index, left) in operations.iter().enumerate() {
-        let left = resolve_path(mode, &left.destination);
-        for right in operations.iter().skip(index + 1) {
-            let right = resolve_path(mode, &right.destination);
-            if left == right {
-                return Err(AruError::msg(format!(
-                    "transaction contains duplicate destination {}",
-                    left.display()
-                )));
+    destinations.sort_unstable();
+    for pair in destinations.windows(2) {
+        let [left, right] = pair else {
+            unreachable!("destination windows always contain two paths")
+        };
+        if left == right {
+            return Err(AruError::msg(format!(
+                "transaction contains duplicate destination {}",
+                left.display()
+            )));
+        }
+        if right.starts_with(left) {
+            return Err(AruError::msg(format!(
+                "transaction destinations must not be nested: {} and {}",
+                left.display(),
+                right.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn normalize_destination(path: &Path) -> Result<PathBuf> {
+    let mut existing = path.parent().unwrap_or(path);
+    let mut suffix = path
+        .file_name()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    loop {
+        match std::fs::symlink_metadata(existing) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = existing.file_name().ok_or_else(|| {
+                    AruError::msg(format!(
+                        "could not find an existing destination ancestor for {}",
+                        path.display()
+                    ))
+                })?;
+                suffix.push(PathBuf::from(component));
+                existing = existing.parent().ok_or_else(|| {
+                    AruError::msg(format!(
+                        "could not find an existing destination ancestor for {}",
+                        path.display()
+                    ))
+                })?;
             }
-            if left.starts_with(&right) || right.starts_with(&left) {
+            Err(error) => {
                 return Err(AruError::msg(format!(
-                    "transaction destinations must not be nested: {} and {}",
-                    left.display(),
-                    right.display()
+                    "could not inspect destination ancestor {}: {error}",
+                    existing.display()
                 )));
             }
         }
     }
-    Ok(())
+    let mut normalized = existing.canonicalize().at(existing)?;
+    for component in suffix.into_iter().rev() {
+        normalized.push(component);
+    }
+    Ok(normalized)
 }
 
 fn resolve_path(mode: PathMode<'_>, path: &Path) -> PathBuf {

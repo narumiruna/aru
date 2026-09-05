@@ -60,6 +60,26 @@ pub(crate) fn destination(target: Target, name: &str) -> Option<PathBuf> {
     )))
 }
 
+pub(crate) fn global_directory_for_input(
+    target: Target,
+    requested: &str,
+) -> Result<Option<PathBuf>> {
+    let spec = crate::target::spec(target);
+    if requested != spec.name && !spec.aliases.contains(&requested) {
+        return Err(AruError::msg(format!(
+            "target spelling {requested:?} does not identify {target}"
+        )));
+    }
+    let directory = match requested {
+        "universal" => Some(config_directory()?.join("agents/skills")),
+        "antigravity-cli" => Some(in_home(".gemini/antigravity-cli/skills")?),
+        "qoder-cn" => Some(in_home(".qoder-cn/skills")?),
+        "trae-cn" => Some(in_home(".trae-cn/skills")?),
+        _ => global_directory(target)?,
+    };
+    Ok(directory)
+}
+
 pub(crate) fn global_directory(target: Target) -> Result<Option<PathBuf>> {
     let directory = match target {
         Target::Agents => in_home(".agents/skills")?,

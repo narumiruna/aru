@@ -6,7 +6,8 @@ use fs2::FileExt;
 
 use super::{
     Operation, PathMode, apply_absolute_at, apply_standalone_at, destination_exists,
-    recover_if_needed_at, recover_standalone_if_needed_at, validate_operations,
+    normalize_destination, recover_if_needed_at, recover_standalone_if_needed_at,
+    validate_operations,
 };
 use crate::error::{AruError, IoContext, Result};
 
@@ -32,7 +33,7 @@ pub fn apply_standalone_global(
     recover_standalone_if_needed_at(&journal_path)?;
     validate_standalone_root(project, "global skill")?;
     validate_operations(PathMode::Absolute, &operations, 2)?;
-    validate_no_managed_recovery(&operations)?;
+    validate_no_managed_overlap(&operations)?;
     validate_collisions(&operations, force, Path::to_path_buf)?;
     apply_absolute_at(operations, &journal_path)
 }
@@ -47,11 +48,14 @@ pub fn validate_standalone_global_dry_run(project: &Path, operations: &[Operatio
     validate_no_pending_journal()?;
     validate_standalone_root(project, "global skill")?;
     validate_operations(PathMode::Absolute, operations, 2)?;
-    validate_no_managed_recovery(operations)
+    validate_no_managed_overlap(operations)
 }
 
-pub(super) fn validate_no_pending_journal() -> Result<()> {
+pub(crate) fn validate_no_pending_journal() -> Result<()> {
     let control = global_control_directory()?;
+    if control.exists() {
+        validate_control_directory(&control, false)?;
+    }
     let lock_path = control.join("operation.lock");
     let _lock = if lock_path.exists() {
         let lock = OpenOptions::new()
@@ -76,20 +80,20 @@ pub(super) fn validate_no_pending_journal() -> Result<()> {
     Ok(())
 }
 
-fn validate_no_managed_recovery(operations: &[Operation]) -> Result<()> {
+fn validate_no_managed_overlap(operations: &[Operation]) -> Result<()> {
     let mut roots = BTreeSet::new();
     for operation in operations {
-        for ancestor in operation.destination.ancestors() {
-            if ancestor.join(crate::manifest::MANIFEST_FILE).is_file()
-                || ancestor.join(super::JOURNAL_FILE).is_file()
-            {
-                roots.insert(ancestor.to_path_buf());
-            }
-        }
+        collect_managed_roots(&operation.destination, &mut roots);
+        collect_managed_roots(&normalize_destination(&operation.destination)?, &mut roots);
     }
     for root in roots {
-        let journal = root.join(super::JOURNAL_FILE);
-        if journal.exists() {
+        if root.join(crate::manifest::MANIFEST_FILE).is_file() {
+            return Err(AruError::msg(format!(
+                "global destination is inside managed aru project {}; use the managed project instead",
+                root.display()
+            )));
+        }
+        if root.join(super::JOURNAL_FILE).exists() {
             return Err(AruError::msg(format!(
                 "a recoverable managed transaction at {} overlaps a global destination; run a mutating aru command in that project first",
                 root.display()
@@ -97,6 +101,16 @@ fn validate_no_managed_recovery(operations: &[Operation]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn collect_managed_roots(destination: &Path, roots: &mut BTreeSet<PathBuf>) {
+    for ancestor in destination.ancestors() {
+        if ancestor.join(crate::manifest::MANIFEST_FILE).is_file()
+            || ancestor.join(super::JOURNAL_FILE).is_file()
+        {
+            roots.insert(ancestor.to_path_buf());
+        }
+    }
 }
 
 fn validate_collisions(
@@ -162,23 +176,49 @@ pub(super) fn acquire_global() -> Result<(File, PathBuf)> {
     acquire_control(global_control_directory()?)
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "windows"))]
 fn global_control_directory() -> Result<PathBuf> {
-    #[cfg(target_os = "windows")]
     let root = dirs::data_local_dir().ok_or_else(|| {
         AruError::msg(
             "could not determine a stable user state directory for standalone transactions",
         )
     })?;
-    #[cfg(target_os = "macos")]
-    let root = stable_user_home()?.join("Library/Application Support");
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let root = stable_user_home()?.join(".local/state");
     Ok(root.join("aru/standalone"))
 }
 
 #[cfg(all(not(test), unix, not(target_os = "redox")))]
-fn stable_user_home() -> Result<PathBuf> {
+fn global_control_directory() -> Result<PathBuf> {
+    let uid = unsafe { libc::geteuid() };
+    Ok(unix_control_directory(stable_user_home()?.as_deref(), uid))
+}
+
+#[cfg(all(
+    not(test),
+    not(target_os = "windows"),
+    not(all(unix, not(target_os = "redox")))
+))]
+fn global_control_directory() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| {
+        AruError::msg(
+            "could not determine a stable home directory for standalone transaction state",
+        )
+    })?;
+    Ok(home.join(".local/state/aru/standalone"))
+}
+
+#[cfg(all(unix, not(target_os = "redox")))]
+fn unix_control_directory(home: Option<&Path>, uid: libc::uid_t) -> PathBuf {
+    match home {
+        #[cfg(target_os = "macos")]
+        Some(home) => home.join("Library/Application Support/aru/standalone"),
+        #[cfg(not(target_os = "macos"))]
+        Some(home) => home.join(".local/state/aru/standalone"),
+        None => PathBuf::from(format!("/var/tmp/aru-standalone-{uid}")),
+    }
+}
+
+#[cfg(all(not(test), unix, not(target_os = "redox")))]
+fn stable_user_home() -> Result<Option<PathBuf>> {
     use std::ffi::{CStr, OsString};
     use std::mem;
     use std::os::unix::ffi::OsStringExt;
@@ -188,43 +228,31 @@ fn stable_user_home() -> Result<PathBuf> {
         value if value < 0 => 512,
         value => (value as usize).max(512),
     };
-    let mut buffer = Vec::<u8>::with_capacity(size);
+    let mut buffer = vec![0_u8; size];
     let mut passwd: libc::passwd = unsafe { mem::zeroed() };
     let mut result = ptr::null_mut();
     let status = unsafe {
         libc::getpwuid_r(
-            libc::getuid(),
+            libc::geteuid(),
             &mut passwd,
             buffer.as_mut_ptr().cast(),
-            buffer.capacity(),
+            buffer.len(),
             &mut result,
         )
     };
-    if status != 0 || result.is_null() || passwd.pw_dir.is_null() {
-        return Err(AruError::msg(
-            "could not determine a stable home directory for standalone transaction state",
-        ));
+    if status != 0 {
+        return Err(AruError::msg(format!(
+            "could not query the user account for standalone transaction state: OS error {status}"
+        )));
+    }
+    if result.is_null() || passwd.pw_dir.is_null() {
+        return Ok(None);
     }
     let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes();
     if bytes.is_empty() {
-        return Err(AruError::msg(
-            "could not determine a stable home directory for standalone transaction state",
-        ));
+        return Ok(None);
     }
-    Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
-}
-
-#[cfg(all(
-    not(test),
-    not(target_os = "windows"),
-    not(all(unix, not(target_os = "redox")))
-))]
-fn stable_user_home() -> Result<PathBuf> {
-    dirs::home_dir().ok_or_else(|| {
-        AruError::msg(
-            "could not determine a stable home directory for standalone transaction state",
-        )
-    })
+    Ok(Some(PathBuf::from(OsString::from_vec(bytes.to_vec()))))
 }
 
 #[cfg(test)]
@@ -237,6 +265,7 @@ fn global_control_directory() -> Result<PathBuf> {
 
 fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
     std::fs::create_dir_all(&control).at(&control)?;
+    validate_control_directory(&control, true)?;
     let lock_path = control.join("operation.lock");
     let lock = OpenOptions::new()
         .create(true)
@@ -251,4 +280,71 @@ fn acquire_control(control: PathBuf) -> Result<(File, PathBuf)> {
         ))
     })?;
     Ok((lock, control.join("transaction.toml")))
+}
+
+fn validate_control_directory(control: &Path, repair_permissions: bool) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = repair_permissions;
+    let metadata = std::fs::symlink_metadata(control).at(control)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AruError::msg(format!(
+            "standalone transaction control path must be an owned directory: {}",
+            control.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let uid = unsafe { libc::geteuid() };
+        if metadata.uid() != uid {
+            return Err(AruError::msg(format!(
+                "standalone transaction control directory {} is not owned by the current user",
+                control.display()
+            )));
+        }
+        if repair_permissions {
+            std::fs::set_permissions(control, std::fs::Permissions::from_mode(0o700))
+                .at(control)?;
+        } else if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(AruError::msg(format!(
+                "standalone transaction control directory {} has unsafe permissions; run a mutating aru command to repair it",
+                control.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix, not(target_os = "redox")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_control_directory_falls_back_to_durable_uid_path() {
+        assert_eq!(
+            unix_control_directory(None, 42),
+            PathBuf::from("/var/tmp/aru-standalone-42")
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn unix_control_directory_uses_account_home_when_available() {
+        assert_eq!(
+            unix_control_directory(Some(Path::new("/home/demo")), 42),
+            PathBuf::from("/home/demo/.local/state/aru/standalone")
+        );
+    }
+
+    #[test]
+    fn control_directory_rejects_a_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("real");
+        let alias = root.path().join("alias");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+        assert!(acquire_control(alias).is_err());
+    }
 }

@@ -18,6 +18,7 @@ aru skill add --global --target codex owner/repository --skill review
 Use `-g` or `--global` to write to each target's user-level skill directory instead of the current directory.
 Global mode is intentionally standalone: aru rejects it when the discovered root contains `aru.toml`.
 For example, Codex receives `~/.codex/skills/<name>`, Claude receives `~/.claude/skills/<name>`, pi receives `~/.pi/agent/skills/<name>`, and OpenCode receives `${XDG_CONFIG_HOME:-~/.config}/opencode/skills/<name>`.
+Global mode preserves aliases whose user-level paths differ from their canonical target: `universal` uses `${XDG_CONFIG_HOME:-~/.config}/agents/skills/<name>`, `antigravity-cli` uses `~/.gemini/antigravity-cli/skills/<name>`, `qoder-cn` uses `~/.qoder-cn/skills/<name>`, and `trae-cn` uses `~/.trae-cn/skills/<name>`.
 `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `VIBE_HOME`, `HERMES_HOME`, `AUTOHAND_HOME`, and `GROK_HOME` override their corresponding target roots and must be absolute paths.
 Eve and PromptScript do not support global installation.
 
@@ -110,7 +111,8 @@ Run `aru target list --available` or read the [skill target registry](reference/
 | OpenCode | `.opencode/skills/<name>` |
 
 Skill-only targets include direct paths such as `.kiro/skills/<name>` and `.windsurf/skills/<name>`, shared `.agents/skills/<name>` projections, and explicit exceptions such as `.factory/skills/<name>` for `droid`.
-Aliases such as `claude-code`, `kiro-cli`, and `hermes-agent` normalize to canonical names and are never persisted.
+Aliases such as `claude-code`, `kiro-cli`, and `hermes-agent` normalize to canonical names and are never persisted in initialized projects.
+Standalone global installation retains the requested spelling only when it selects a distinct documented user-level path.
 
 In initialized projects, targets that share one destination create one owned projection while retaining their complete canonical target reach in `aru.lock`.
 On Unix, other native paths link to a selected `.agents` copy when possible.

@@ -130,6 +130,63 @@ fn global_flags_install_to_target_user_directories_without_project_state() {
 }
 
 #[test]
+fn distinct_global_target_aliases_preserve_their_requested_paths() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    let home = temporary.path().join("home");
+    let config_home = temporary.path().join("config-home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    create_repository(&repository, &["demo"]);
+
+    cargo_bin_cmd!("aru")
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .args([
+            "skill",
+            "add",
+            repository.to_str().unwrap(),
+            "--all",
+            "--global",
+            "--target",
+            "agents",
+            "--target",
+            "universal",
+            "--target",
+            "antigravity",
+            "--target",
+            "antigravity-cli",
+            "--target",
+            "qoder",
+            "--target",
+            "qoder-cn",
+            "--target",
+            "trae",
+            "--target",
+            "trae-cn",
+        ])
+        .assert()
+        .success();
+
+    assert!(config_home.join("agents/skills/demo/SKILL.md").is_file());
+    assert!(
+        home.join(".gemini/antigravity-cli/skills/demo/SKILL.md")
+            .is_file()
+    );
+    assert!(home.join(".qoder-cn/skills/demo/SKILL.md").is_file());
+    assert!(home.join(".trae-cn/skills/demo/SKILL.md").is_file());
+    assert!(home.join(".agents/skills/demo/SKILL.md").is_file());
+    assert!(
+        home.join(".gemini/antigravity/skills/demo/SKILL.md")
+            .is_file()
+    );
+    assert!(home.join(".qoder/skills/demo/SKILL.md").is_file());
+    assert!(home.join(".trae/skills/demo/SKILL.md").is_file());
+}
+
+#[test]
 fn complete_target_override_does_not_require_a_home_directory() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

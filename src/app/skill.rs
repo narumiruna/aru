@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::cache::Cache;
-use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillUpdateArgs};
+use crate::cli::{SkillAddArgs, SkillRemoveArgs, SkillTargetArg, SkillUpdateArgs};
 use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{
     InquireSkillChooser, InquireTargetChooser, SkillAddSelectionMode, SkillChooser, TargetChoice,
@@ -73,7 +73,7 @@ pub(super) fn add_standalone(
                 .completion("Target selection canceled; no files were changed.");
             return Ok(());
         };
-        args.targets = targets;
+        args.targets = targets.into_iter().map(SkillTargetArg::canonical).collect();
     }
     validate_standalone_targets(&args.targets, args.global)?;
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
@@ -123,9 +123,10 @@ fn standalone_add_with_policy(
     let mut plan = Vec::new();
     let mut collision = None;
     for skill in selected {
-        for target in &args.targets {
+        for target_arg in &args.targets {
+            let target = target_arg.target;
             let destination = if args.global {
-                crate::target::skill::global_directory(*target)?
+                crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
                     .ok_or_else(|| {
                         AruError::msg(format!(
                             "target {target} does not support global Agent Skills installation"
@@ -133,7 +134,7 @@ fn standalone_add_with_policy(
                     })?
                     .join(&skill.name)
             } else {
-                crate::target::skill::destination(*target, &skill.name).ok_or_else(|| {
+                crate::target::skill::destination(target, &skill.name).ok_or_else(|| {
                     AruError::msg(format!("target {target} does not support skills"))
                 })?
             };
@@ -201,27 +202,34 @@ fn standalone_add_with_policy(
     Ok(())
 }
 
-fn validate_standalone_targets(targets: &[crate::manifest::Target], global: bool) -> Result<()> {
+fn validate_standalone_targets(targets: &[SkillTargetArg], global: bool) -> Result<()> {
     if targets.is_empty() {
         return Err(AruError::msg(
             "standalone skill installation requires a target",
         ));
     }
-    if targets.iter().collect::<BTreeSet<_>>().len() != targets.len() {
-        return Err(AruError::msg(
-            "skill dependency targets contains duplicates",
-        ));
-    }
-    for target in targets {
-        if !crate::target::capabilities(*target).skills {
+    let mut identities = BTreeSet::new();
+    for target_arg in targets {
+        let target = target_arg.target;
+        if !crate::target::capabilities(target).skills {
             return Err(AruError::msg(format!(
                 "target {target} does not support Agent Skills"
             )));
         }
-        if global && crate::target::skill::global_directory(*target)?.is_none() {
-            return Err(AruError::msg(format!(
-                "target {target} does not support global Agent Skills installation"
-            )));
+        let identity = if global {
+            crate::target::skill::global_directory_for_input(target, &target_arg.requested)?
+                .ok_or_else(|| {
+                    AruError::msg(format!(
+                        "target {target} does not support global Agent Skills installation"
+                    ))
+                })?
+        } else {
+            target.to_string().into()
+        };
+        if !identities.insert(identity) {
+            return Err(AruError::msg(
+                "skill dependency targets contains duplicates",
+            ));
         }
     }
     Ok(())
@@ -471,7 +479,7 @@ fn skill_add_base_requirement(
         requirement.branch = None;
     }
     if !args.targets.is_empty() {
-        requirement.targets = Some(args.targets.clone());
+        requirement.targets = Some(args.targets.iter().map(|target| target.target).collect());
     }
     requirement
 }

@@ -589,6 +589,32 @@ pub enum SkillCommand {
     List,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillTargetArg {
+    pub(crate) target: Target,
+    pub(crate) requested: String,
+}
+
+impl SkillTargetArg {
+    pub(crate) fn canonical(target: Target) -> Self {
+        Self {
+            target,
+            requested: target.to_string(),
+        }
+    }
+}
+
+impl std::str::FromStr for SkillTargetArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self {
+            target: value.parse()?,
+            requested: value.to_owned(),
+        })
+    }
+}
+
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selector").args(["all", "skills", "path"]).multiple(false)))]
 #[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
@@ -615,7 +641,7 @@ pub struct SkillAddArgs {
     pub rev: Option<String>,
     /// Target that should receive this dependency; may be repeated.
     #[arg(long = "target", value_name = "TARGET", action = ArgAction::Append, help_heading = "Selection Options")]
-    pub targets: Vec<Target>,
+    pub targets: Vec<SkillTargetArg>,
     /// Resolve the latest compatible tag or branch head instead of reusing the lock.
     #[arg(short = 'U', long, help_heading = "Source Options")]
     pub upgrade: bool,
