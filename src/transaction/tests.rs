@@ -451,14 +451,14 @@ fn global_transaction_rejects_destinations_inside_managed_projects() {
     let destination = managed.path().join(".kiro/skills/demo");
     std::fs::write(managed.path().join(crate::manifest::MANIFEST_FILE), "").unwrap();
 
-    let result = apply_standalone_global(
-        standalone.path(),
-        vec![Operation::file(&destination, b"global".to_vec())],
-        true,
-    );
-
-    assert!(result.is_err());
-    assert!(!destination.exists());
+    for invocation in [standalone.path(), managed.path()] {
+        let operations = vec![Operation::file(&destination, b"global".to_vec())];
+        let preview = StandaloneDryRun::begin(invocation, true).unwrap();
+        assert!(preview.validate(&operations).is_err());
+        drop(preview);
+        assert!(apply_standalone_global(invocation, operations, true).is_err());
+        assert!(!destination.exists());
+    }
 }
 
 #[cfg(unix)]
@@ -483,7 +483,7 @@ fn global_transaction_rejects_managed_projects_behind_symlinked_roots() {
 }
 
 #[test]
-fn global_transaction_rechecks_standalone_root_before_writing() {
+fn global_transaction_allows_managed_invocation_root() {
     let project = tempfile::tempdir().unwrap();
     let destination_root = tempfile::tempdir().unwrap();
     let destination = destination_root.path().join("skills/demo");
@@ -492,11 +492,12 @@ fn global_transaction_rechecks_standalone_root_before_writing() {
     let result = apply_standalone_global(
         project.path(),
         vec![Operation::file(&destination, b"demo".to_vec())],
-        true,
+        false,
     );
 
-    assert!(result.is_err());
-    assert!(!destination.exists());
+    result.unwrap();
+    assert_eq!(std::fs::read(destination).unwrap(), b"demo");
+    assert_eq!(std::fs::read_dir(project.path()).unwrap().count(), 1);
 }
 
 #[test]

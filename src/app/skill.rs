@@ -21,11 +21,6 @@ use crate::transaction::{Operation, StandaloneDryRun, apply_standalone, apply_st
 use super::{ExecutionPolicy, ProjectionPolicy, begin, execute};
 
 pub(super) fn add(project: &Path, args: SkillAddArgs, policy: ExecutionPolicy) -> Result<()> {
-    if args.global {
-        return Err(AruError::msg(
-            "--global is only supported for standalone skill installation without aru.toml",
-        ));
-    }
     let mode = terminal_selection_mode(args.all, !args.skills.is_empty(), args.path.is_some())?;
     let mut chooser = InquireSkillChooser;
     skill_add_with_policy(project, args, mode, &mut chooser, policy)
@@ -37,14 +32,18 @@ pub(super) fn add_standalone(
     policy: ExecutionPolicy,
 ) -> Result<()> {
     if args.no_sync {
-        return Err(AruError::msg(
-            "--no-sync requires an initialized aru project; standalone skill installation writes directly to target paths",
-        ));
+        return Err(AruError::msg(if args.global {
+            "--no-sync is not supported with --global; global skill installation writes directly to user directories"
+        } else {
+            "--no-sync requires an initialized aru project; standalone skill installation writes directly to target paths"
+        }));
     }
     if policy.locked {
-        return Err(AruError::msg(
-            "--locked and --frozen require an initialized aru project with aru.lock",
-        ));
+        return Err(AruError::msg(if args.global {
+            "--locked and --frozen are not supported with --global; global skill installation does not use aru.lock"
+        } else {
+            "--locked and --frozen require an initialized aru project with aru.lock"
+        }));
     }
     if args.targets.is_empty() {
         let mut chooser = InquireTargetChooser;

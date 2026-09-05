@@ -470,14 +470,12 @@ fn global_collisions_fail_before_any_target_is_written() {
 }
 
 #[test]
-fn global_install_rejects_unsupported_targets_and_managed_projects() {
+fn global_install_rejects_unsupported_targets() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");
     let standalone = temporary.path().join("standalone");
-    let managed = temporary.path().join("managed");
     let home = temporary.path().join("home");
     std::fs::create_dir(&standalone).unwrap();
-    std::fs::create_dir(&managed).unwrap();
     std::fs::create_dir(&home).unwrap();
     create_repository(&repository, &["demo"]);
 
@@ -500,34 +498,134 @@ fn global_install_rejects_unsupported_targets_and_managed_projects() {
             "eve does not support global Agent Skills installation",
         ));
     assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
 
-    cargo_bin_cmd!("aru")
-        .args([
-            "--project",
-            managed.to_str().unwrap(),
-            "init",
-            "--target",
-            "codex",
-        ])
-        .assert()
-        .success();
-    cargo_bin_cmd!("aru")
-        .current_dir(&managed)
-        .env("HOME", &home)
-        .env("USERPROFILE", &home)
-        .args([
-            "skill",
-            "add",
-            repository.to_str().unwrap(),
-            "--all",
-            "--global",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "--global is only supported for standalone skill installation",
-        ));
-    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+fn snapshot(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let content = entry
+                .file_type()
+                .is_file()
+                .then(|| std::fs::read(entry.path()).unwrap());
+            (
+                entry.path().strip_prefix(root).unwrap().to_path_buf(),
+                content,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn global_install_ignores_project_state_and_preserves_relative_source_base() {
+    for scenario in ["root", "nested", "explicit", "invalid-state"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let managed = temporary.path().join("managed");
+        let home = temporary.path().join("home");
+        let elsewhere = temporary.path().join("elsewhere");
+        std::fs::create_dir(&managed).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&elsewhere).unwrap();
+        cargo_bin_cmd!("aru")
+            .args([
+                "--project",
+                managed.to_str().unwrap(),
+                "init",
+                "--target",
+                "claude",
+            ])
+            .assert()
+            .success();
+        let base = if matches!(scenario, "nested" | "explicit") {
+            managed.join("nested")
+        } else {
+            managed.clone()
+        };
+        std::fs::create_dir_all(&base).unwrap();
+        create_repository(&base.join("repository"), &["demo"]);
+        if scenario == "invalid-state" {
+            std::fs::write(managed.join("aru.toml"), "not valid TOML [").unwrap();
+            std::fs::write(managed.join("aru.lock"), "not a lockfile").unwrap();
+            std::fs::create_dir_all(managed.join(".aru")).unwrap();
+            std::fs::write(
+                managed.join(".aru/transaction.toml"),
+                "pending managed recovery",
+            )
+            .unwrap();
+        }
+        let before = snapshot(&managed);
+        let destination = home.join(".codex/skills/demo/SKILL.md");
+        for dry_run in [true, false] {
+            let mut command = cargo_bin_cmd!("aru");
+            command
+                .current_dir(if scenario == "explicit" {
+                    &elsewhere
+                } else {
+                    &base
+                })
+                .env("HOME", &home)
+                .env("USERPROFILE", &home)
+                .env_remove("CODEX_HOME")
+                .args([
+                    "skill",
+                    "add",
+                    "repository",
+                    "--offline",
+                    "--all",
+                    "-g",
+                    "--target",
+                    "codex",
+                ]);
+            if scenario == "explicit" {
+                command.args(["--project", base.to_str().unwrap()]);
+            }
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            command
+                .assert()
+                .success()
+                .stderr(predicate::str::contains(if dry_run {
+                    "Would create skill demo"
+                } else {
+                    "Global skills installed"
+                }));
+            assert_eq!(destination.is_file(), !dry_run, "{scenario}");
+            assert_eq!(snapshot(&managed), before, "{scenario}");
+            assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+        }
+    }
+}
+
+#[test]
+fn global_install_in_managed_project_rejects_project_only_options() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("aru.toml"), "not parsed").unwrap();
+    let before = snapshot(&project);
+    for (option, message) in [
+        ("--no-sync", "--no-sync is not supported with --global"),
+        (
+            "--locked",
+            "--locked and --frozen are not supported with --global",
+        ),
+        (
+            "--frozen",
+            "--locked and --frozen are not supported with --global",
+        ),
+    ] {
+        cargo_bin_cmd!("aru")
+            .current_dir(&project)
+            .args([
+                "skill", "add", "missing", "--all", "-g", "--target", "codex", option,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert_eq!(snapshot(&project), before);
+    }
 }
 
 #[test]

@@ -152,6 +152,12 @@ pub fn run() -> Result<()> {
         }
         Command::Skill {
             command: SkillCommand::Add(args),
+        } if args.global => {
+            let directory = installation_directory(project_option)?;
+            skill::add_standalone(&directory, args, policy)
+        }
+        Command::Skill {
+            command: SkillCommand::Add(args),
         } => match discover_add_root(project_option)? {
             AddRoot::Managed(project) => skill::add(&project, args, policy),
             AddRoot::Standalone(project) => skill::add_standalone(&project, args, policy),
@@ -633,12 +639,22 @@ enum AddRoot {
     Standalone(PathBuf),
 }
 
+// Global installs use this directory for relative sources, not project discovery.
+fn installation_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let path = match explicit {
+        Some(path) => path,
+        None => std::env::current_dir().at(".")?,
+    };
+    let path = path.canonicalize().at(&path)?;
+    if !path.is_dir() {
+        return Err(AruError::msg("installation root is not a directory"));
+    }
+    Ok(path)
+}
+
 fn discover_add_root(explicit: Option<PathBuf>) -> Result<AddRoot> {
     if let Some(path) = explicit {
-        let path = path.canonicalize().at(&path)?;
-        if !path.is_dir() {
-            return Err(AruError::msg("installation root is not a directory"));
-        }
+        let path = installation_directory(Some(path))?;
         return Ok(if path.join(crate::manifest::MANIFEST_FILE).is_file() {
             AddRoot::Managed(path)
         } else {

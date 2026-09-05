@@ -36,7 +36,6 @@ pub fn apply_standalone_global(
     let project = project.as_path();
     let (_global_lock, _legacy_lock, journal_path) = acquire_for_project(project)?;
     recover_standalone_if_needed_at(&journal_path)?;
-    validate_standalone_root(project, "global skill")?;
     validate_operations(PathMode::Absolute, &operations, 2)?;
     validate_no_managed_overlap(&operations)?;
     validate_collisions(&operations, force, Path::to_path_buf)?;
@@ -54,7 +53,9 @@ impl StandaloneDryRun {
     pub fn begin(project: &Path, global: bool) -> Result<Self> {
         let project = project.canonicalize().at(project)?;
         let lock = lock_without_pending_journal(&project)?;
-        validate_standalone_root(&project, "standalone")?;
+        if !global {
+            validate_standalone_root(&project, "standalone")?;
+        }
         Ok(Self {
             _lock: lock,
             project,
@@ -63,11 +64,11 @@ impl StandaloneDryRun {
     }
 
     pub fn validate(&self, operations: &[Operation]) -> Result<()> {
-        validate_standalone_root(&self.project, "standalone")?;
         if self.global {
             validate_operations(PathMode::Absolute, operations, 2)?;
             validate_no_managed_overlap(operations)
         } else {
+            validate_standalone_root(&self.project, "standalone")?;
             validate_operations(PathMode::Project(&self.project), operations, 2)
         }
     }

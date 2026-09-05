@@ -240,7 +240,7 @@ In an initialized project, a bare `skill add` opens an interactive skill selecto
 
 Without an `aru.toml` in the current directory or an ancestor, `skill add` performs a one-time installation.
 Pass `--target` explicitly or choose one or more targets from the interactive menu.
-Add `-g` or `--global` to install into each target's user-level skill directory instead of the current directory; global mode is rejected when aru discovers an initialized project.
+Add `-g` or `--global` to install into each target's user-level skill directory, even from an initialized project. Global mode does not use or update the project's manifest, lockfile, or configured targets; relative sources resolve from the current directory or explicit `--project` directory. Destinations inside managed projects remain rejected to protect managed content.
 Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
 
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.
