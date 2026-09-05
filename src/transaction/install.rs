@@ -23,12 +23,16 @@ fn rename_exclusive(stage: &Path, destination: &Path) -> std::io::Result<()> {
     // Both pointers refer to live, NUL-terminated path buffers for this call.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let result = unsafe {
-        libc::renameat2(
+        // Use the syscall directly: manylinux2014's glibc 2.17 and Rust's
+        // bundled musl lack the renameat2 wrapper. Unsupported kernels or
+        // filesystems still fail closed; never fall back to replacing content.
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             stage.as_ptr(),
             libc::AT_FDCWD,
             destination.as_ptr(),
-            libc::RENAME_NOREPLACE as _,
+            libc::RENAME_NOREPLACE,
         )
     };
     #[cfg(target_os = "macos")]
