@@ -23,6 +23,7 @@ Do not push, open or merge pull requests, create tags, dispatch workflows, publi
 - Follow KISS (Keep It Simple) and YAGNI (You Aren't Gonna Need It).
 - Prefer simple, minimal solutions over unnecessary complexity.
 - Split source files over 1,000 lines along clear responsibility boundaries, or document why they must remain intact.
+- Prefer aru CLI structure and terminology to follow uv and Cargo where domain semantics align; retain aru's fail-closed behavior over superficial parity.
 
 ## Project Map
 
@@ -83,6 +84,7 @@ cargo test --locked --all-targets --all-features
 - Do not add a separate full `cargo check` because Clippy already performs compilation checks.
 - Keep routine tests deterministic and offline.
 - Use temporary Git repositories and local fixtures in routine tests.
+- Set repository-local `commit.gpgsign=false` in every temporary Git fixture that creates commits so inherited signing helpers cannot break tests.
 - Keep the explicit public Git smoke test ignored by default.
 - For documentation-only changes, verify referenced paths and commands and inspect the rendered diff.
 - No Markdown checker is configured.
