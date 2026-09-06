@@ -630,6 +630,7 @@ impl std::str::FromStr for SkillTargetArg {
 #[command(group(ArgGroup::new("reference").args(["version", "branch", "rev"]).multiple(false)))]
 pub struct SkillAddArgs {
     /// GitHub owner/repo, Git URL, SSH source, or local Git repository.
+    /// Standalone and global installs default to the source's latest default-branch HEAD.
     pub source: String,
     /// Select every current and future skill exported by this source.
     #[arg(short = 'a', long, help_heading = "Selection Options")]

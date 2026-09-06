@@ -12,7 +12,7 @@ use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, SkillRequirement, validate_name};
 use crate::resolver::{
     canonical_update_skill_targets, declared_skill_source_key, inspect_skill_source,
-    inspect_skill_source_with_cache,
+    inspect_standalone_skill_source,
 };
 use crate::skill::select_candidates;
 use crate::sync::{CollisionPolicy, UpdateSelection};
@@ -104,11 +104,10 @@ fn standalone_add_with_policy(
     policy
         .output
         .progress(&format!("skill source {}", args.source));
-    let inspection = inspect_skill_source_with_cache(
+    let inspection = inspect_standalone_skill_source(
         project,
         &args.source,
         &requirement,
-        None,
         policy.offline,
         &cache,
     )?;

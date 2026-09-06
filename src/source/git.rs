@@ -389,6 +389,23 @@ pub fn checkout_exact(source: &GitSource, revision: &str, destination: &Path) ->
     Ok(resolved.to_ascii_lowercase())
 }
 
+/// Resolve the source's advertised HEAD without preferring release tags or a named branch.
+pub(crate) fn resolve_default_head(source: &GitSource) -> Result<GitResolution> {
+    let output = git_stdout_bounded(
+        &["ls-remote", "--", source.fetch.as_str(), "HEAD"],
+        GIT_TAG_OUTPUT_MAX_BYTES,
+    )?;
+    let stdout =
+        String::from_utf8(output).map_err(|_| AruError::msg("git returned non-UTF-8 HEAD data"))?;
+    if stdout.is_empty() {
+        return Err(AruError::msg("Git source has no default HEAD"));
+    }
+    Ok(GitResolution {
+        version: "HEAD".into(),
+        revision: parse_branch_head(&stdout, "HEAD")?,
+    })
+}
+
 fn resolve_branch(source: &GitSource, branch: &str) -> Result<String> {
     let reference = format!("refs/heads/{branch}");
     let output = git_stdout_bounded(
@@ -767,6 +784,19 @@ mod tests {
             parse_branch_head(&format!("{sha}\trefs/heads/main\n"), "refs/heads/main").unwrap(),
             sha
         );
+        assert_eq!(
+            parse_branch_head(&format!("{sha}\tHEAD\n"), "HEAD").unwrap(),
+            sha
+        );
+        for invalid in [
+            String::new(),
+            "malformed\n".into(),
+            "invalid\tHEAD\n".into(),
+            format!("{sha}\trefs/heads/main\n"),
+            format!("{sha}\tHEAD\n{sha}\tHEAD\n"),
+        ] {
+            assert!(parse_branch_head(&invalid, "HEAD").is_err());
+        }
         assert!(parse_branch_head("malformed\n", "refs/heads/main").is_err());
         assert!(
             parse_branch_head(
