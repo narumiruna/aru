@@ -264,13 +264,59 @@ pub(crate) fn inspect_skill_source_with_cache(
     cache: &Cache,
 ) -> Result<SkillSourceInspection> {
     let source = git::canonicalize(project, manifest_source)?;
-    let descriptor = skill_requirement_descriptor(requirement);
     let old = previous.and_then(|lock| {
         lock.skill_packages
             .iter()
             .find(|package| package.source == source.identity)
     });
     let (version, revision) = resolve_skill_reference(&source, requirement, old, false, offline)?;
+    inspect_skill_checkout(
+        source,
+        requirement,
+        git::GitResolution { version, revision },
+        old,
+        offline,
+        cache,
+    )
+}
+
+pub(crate) fn inspect_standalone_skill_source(
+    project: &Path,
+    manifest_source: &str,
+    requirement: &SkillRequirement,
+    offline: bool,
+    cache: &Cache,
+) -> Result<SkillSourceInspection> {
+    if requirement.version.is_some() || requirement.branch.is_some() || requirement.rev.is_some() {
+        return inspect_skill_source_with_cache(
+            project,
+            manifest_source,
+            requirement,
+            None,
+            offline,
+            cache,
+        );
+    }
+    let source = git::canonicalize(project, manifest_source)?;
+    if offline && !source.is_local() {
+        return Err(AruError::msg(format!(
+            "offline mode cannot resolve remote Git source {}",
+            source.identity
+        )));
+    }
+    let resolved = git::resolve_default_head(&source)?;
+    inspect_skill_checkout(source, requirement, resolved, None, offline, cache)
+}
+
+fn inspect_skill_checkout(
+    source: GitSource,
+    requirement: &SkillRequirement,
+    resolved: git::GitResolution,
+    old: Option<&SkillPackage>,
+    offline: bool,
+    cache: &Cache,
+) -> Result<SkillSourceInspection> {
+    let git::GitResolution { version, revision } = resolved;
     let mut checkout = cache.checkout_with_policy(&source, &revision, offline)?;
     let mut candidates =
         discover_candidates(&checkout, &source.repository_name, &requirement.paths)?;
@@ -289,7 +335,7 @@ pub(crate) fn inspect_skill_source_with_cache(
     }
     Ok(SkillSourceInspection {
         source: source.identity,
-        requirement: descriptor,
+        requirement: skill_requirement_descriptor(requirement),
         version,
         revision,
         candidates,

@@ -92,13 +92,18 @@ aru skill add owner/repository --rev 67cd354 --skill review
 
 | Option | Resolution behavior |
 | --- | --- |
-| No reference | Latest matching SemVer tag, falling back to `main` when none exists |
+| No reference (standalone or global) | Source's current default-branch `HEAD`, queried on every invocation |
+| No reference (managed project) | Reuse a compatible lock; otherwise select the latest matching SemVer tag, falling back to `main` when none exists |
 | `--version 0.5.0` | Cargo caret semantics: `^0.5.0` |
 | `--version '=0.5.0'` | Exact tag |
-| `--branch main` | Current branch head pinned to an exact commit in `aru.lock` |
+| `--branch main` | Current branch head; managed projects pin the exact commit in `aru.lock` |
 | `--rev 67cd354` | Exact immutable commit |
 
-The `main` fallback applies only when no reference option is provided.
+Standalone and global installs without a reference query the source's advertised `HEAD` before skill selection, including during `--dry-run`, then fetch that exact commit. Release tags do not override this default, and the default branch need not be named `main`. A missing or invalid `HEAD`, or a failed remote query, fails instead of falling back to a tag or stale content. Existing destinations remain protected by collision checks; refreshing the source does not authorize replacement.
+
+`--offline` does not query remote sources and therefore rejects standalone remote installation. Local Git sources remain usable offline. Explicit `--version`, `--branch`, and `--rev` retain their selection rules.
+
+The `main` fallback applies only to managed projects when no reference option is provided.
 An explicit `--version` remains strict and never falls back to a branch.
 The fallback commit is pinned in `aru.lock`; a later update prefers a matching SemVer tag if the repository adds one.
 

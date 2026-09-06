@@ -257,6 +257,7 @@ Project scope uses the initialized aru project when one is found; otherwise it p
 Pass `--target` explicitly or choose from the menu. Managed installations offer only configured targets.
 Global scope always performs a standalone installation, even inside an initialized project, without changing its manifest, lockfile, or targets. Relative sources resolve from the current directory or explicit `--project` directory. Destinations inside managed projects remain rejected to protect managed content.
 Standalone installation leaves no manifest, lockfile, ownership state, or project cache.
+Without `--version`, `--branch`, or `--rev`, standalone and global installs query the source's default-branch `HEAD` on every invocation, including previews, and fetch that exact commit rather than preferring release tags. `--offline` rejects remote resolution; local Git sources remain usable. Managed project installs retain their existing tag selection and lock reuse rules.
 
 Non-interactive environments must use `--target` in standalone mode and select skills with `--skill`, `--all`, or `--path`.
 
