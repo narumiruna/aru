@@ -122,6 +122,38 @@ fn standalone_and_global_refresh_default_head_before_preview_and_install() {
 }
 
 #[test]
+fn standalone_and_global_ignore_refs_with_a_head_suffix() {
+    for global in [false, true] {
+        let fixture = Fixture::new();
+        for reference in [
+            "refs/tags/HEAD",
+            "refs/tags/nested/HEAD",
+            "refs/heads/topic/HEAD",
+        ] {
+            git(
+                &fixture.repository,
+                &["update-ref", reference, &fixture.release],
+            );
+        }
+        for dry_run in [true, false] {
+            let mut command = fixture.command(global);
+            command.arg(&fixture.repository).args(["--skill", "alpha"]);
+            if dry_run {
+                command.arg("--dry-run");
+            }
+            command.assert().success();
+            assert_eq!(
+                fixture.destination(global).join("alpha/SKILL.md").is_file(),
+                !dry_run
+            );
+        }
+        assert!(!fixture.project.join("aru.toml").exists());
+        assert!(!fixture.project.join("aru.lock").exists());
+        assert!(!fixture.project.join(".aru").exists());
+    }
+}
+
+#[test]
 fn standalone_and_global_honor_explicit_references_instead_of_default_head() {
     for global in [false, true] {
         for option in ["--version", "--branch", "--rev"] {
@@ -152,6 +184,10 @@ fn standalone_and_global_honor_explicit_references_instead_of_default_head() {
 fn standalone_and_global_fail_without_default_head_instead_of_using_a_tag() {
     for global in [false, true] {
         let fixture = Fixture::new();
+        git(
+            &fixture.repository,
+            &["update-ref", "refs/tags/HEAD", &fixture.release],
+        );
         git(
             &fixture.repository,
             &["symbolic-ref", "HEAD", "refs/heads/missing"],

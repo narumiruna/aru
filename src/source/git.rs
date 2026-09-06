@@ -397,13 +397,38 @@ pub(crate) fn resolve_default_head(source: &GitSource) -> Result<GitResolution> 
     )?;
     let stdout =
         String::from_utf8(output).map_err(|_| AruError::msg("git returned non-UTF-8 HEAD data"))?;
-    if stdout.is_empty() {
-        return Err(AruError::msg("Git source has no default HEAD"));
-    }
     Ok(GitResolution {
         version: "HEAD".into(),
-        revision: parse_branch_head(&stdout, "HEAD")?,
+        revision: parse_default_head(&stdout)?,
     })
+}
+
+fn parse_default_head(stdout: &str) -> Result<String> {
+    let mut found = None;
+    for (index, line) in stdout.lines().enumerate() {
+        if index >= GIT_TAG_REF_MAX_RECORDS {
+            return Err(AruError::msg(format!(
+                "Git HEAD inventory exceeds record limit {GIT_TAG_REF_MAX_RECORDS}"
+            )));
+        }
+        let Some((revision, reference)) = line.split_once('\t') else {
+            return Err(AruError::msg("git returned malformed HEAD data"));
+        };
+        if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(AruError::msg("git returned malformed HEAD data"));
+        }
+        // ls-remote patterns also match named refs whose final component is HEAD.
+        if reference.starts_with("refs/") {
+            continue;
+        }
+        if reference != "HEAD" || found.is_some() {
+            return Err(AruError::msg(
+                "git returned ambiguous or malformed HEAD data",
+            ));
+        }
+        found = Some(revision.to_ascii_lowercase());
+    }
+    found.ok_or_else(|| AruError::msg("Git source has no default HEAD"))
 }
 
 fn resolve_branch(source: &GitSource, branch: &str) -> Result<String> {
@@ -775,6 +800,47 @@ mod tests {
         assert_eq!(fallback.revision, revision.trim());
         assert!(resolve_with_fallback(&source, Some("*"), None, None, Some("main")).is_err());
         assert!(resolve(&source, None, None, None).is_err());
+    }
+
+    #[test]
+    fn default_head_parser_ignores_named_refs_but_remains_bounded_and_strict() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let head = format!("{}\tHEAD\n", sha.to_ascii_uppercase());
+        let named = format!("{sha}\trefs/tags/HEAD\n{sha}\trefs/heads/topic/HEAD\n");
+        for inventory in [
+            head.clone(),
+            format!("{named}{head}"),
+            format!("{head}{named}"),
+        ] {
+            assert_eq!(parse_default_head(&inventory).unwrap(), sha);
+        }
+        for inventory in ["", &named] {
+            assert!(
+                parse_default_head(inventory)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no default HEAD")
+            );
+        }
+        for inventory in [
+            "malformed\n".into(),
+            "invalid\tHEAD\n".into(),
+            format!("{head}invalid\trefs/tags/HEAD\n"),
+            format!("{sha}\tNOT_HEAD\n"),
+            format!("{head}{named}{head}"),
+        ] {
+            assert!(parse_default_head(&inventory).is_err());
+        }
+        // Ignored named refs still count against the inventory limit, even after HEAD.
+        let named = format!("{sha}\trefs/tags/HEAD\n");
+        let at_limit = format!("{head}{}", named.repeat(GIT_TAG_REF_MAX_RECORDS - 1));
+        assert_eq!(parse_default_head(&at_limit).unwrap(), sha);
+        assert!(
+            parse_default_head(&format!("{at_limit}{named}"))
+                .unwrap_err()
+                .to_string()
+                .contains("record limit")
+        );
     }
 
     #[test]
