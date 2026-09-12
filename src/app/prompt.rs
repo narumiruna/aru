@@ -13,6 +13,7 @@ use crate::error::{AruError, IoContext, Result};
 use crate::interactive::{self, TargetChoice};
 use crate::lockfile::Lockfile;
 use crate::manifest::{ManifestDocument, Target};
+use crate::output::Output;
 
 use super::{AddRoot, discover_add_root, discover_project};
 
@@ -73,12 +74,14 @@ pub(super) fn prepare(
     command: &mut Command,
     project_option: &mut Option<PathBuf>,
     enabled: bool,
+    output: Output,
 ) -> Result<Prepared> {
     if let Command::Skill {
         command: SkillCommand::Add(args),
     } = command
     {
         if !args.global && args.scope.is_none() && enabled {
+            output.step("Choose installation scope, then targets and skills; explicit selections are skipped.");
             let Some(scope) = interactive::installation_scope()? else {
                 return Ok(Prepared::Canceled);
             };
@@ -98,6 +101,7 @@ pub(super) fn prepare(
             if root.join("aru.toml").exists() {
                 return Err(AruError::msg("aru.toml already exists"));
             }
+            output.step("Choose project targets; next: create aru.toml.");
             if !targets(
                 &mut args.target,
                 all_targets(),
@@ -136,6 +140,7 @@ pub(super) fn prepare(
         )
     };
     let configured = &manifest.project.targets;
+    output.step("Choose command inputs; next: resolve a change plan.");
     let accepted = match command {
         Command::Add(args) => managed_targets(&mut args.targets, configured.clone())?,
         Command::Remove(args) => one(

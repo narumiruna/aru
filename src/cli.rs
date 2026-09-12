@@ -85,10 +85,10 @@ pub struct Cli {
     /// Disable remote Git and Registry access.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub offline: bool,
-    /// Hide progress output.
+    /// Hide spinners and progress status.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub no_progress: bool,
-    /// Disable interactive prompts; provide required selections explicitly.
+    /// Disable prompts, step hints, plan summaries, and animation; provide required selections explicitly.
     #[arg(long, global = true, help_heading = "Global Options")]
     pub no_interactive: bool,
     /// Assert that aru.lock will remain unchanged.

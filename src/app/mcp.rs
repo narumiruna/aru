@@ -66,6 +66,9 @@ pub(super) fn add_standalone(
             })
             .collect::<Vec<_>>();
         let mut chooser = InquireTargetChooser;
+        policy
+            .output
+            .step("Choose MCP targets; next: resolve and preview configuration changes.");
         let Some(targets) = terminal_choose_targets(&mut chooser, &choices)? else {
             policy
                 .output
@@ -76,18 +79,23 @@ pub(super) fn add_standalone(
     }
     let intent = mcp_add_intent(args)?;
     validate_standalone_targets(&intent.name, &intent.requirement, &intent.targets)?;
-    policy.output.progress(&format!("MCP {}", intent.name));
-    let server = crate::resolver::resolve_mcp_requirement(
-        &intent.name,
-        &intent.requirement,
-        &intent.targets,
-        policy.offline,
-    )?;
+    let server = {
+        let _progress = policy.output.progress(&format!("MCP {}", intent.name));
+        crate::resolver::resolve_mcp_requirement(
+            &intent.name,
+            &intent.requirement,
+            &intent.targets,
+            policy.offline,
+        )?
+    };
     let plan = if intent.dry_run {
         let dry_run = StandaloneDryRun::begin(project, false)?;
         let (operations, plan) =
             prepare_standalone_mcp(project, &intent.name, &server, intent.force)?;
         dry_run.validate(&operations)?;
+        policy
+            .output
+            .step("Preview only; no project or target files will be changed.");
         for item in &plan {
             policy.output.plan(item, true);
         }
@@ -96,9 +104,17 @@ pub(super) fn add_standalone(
             .completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     } else {
-        apply_standalone_prepared(project, || {
-            prepare_standalone_mcp(project, &intent.name, &server, intent.force)
-        })?
+        // Keep preparation and its summary under the existing operation lock.
+        // Return the guard with the plan so it also covers transaction application.
+        let (plan, progress) = apply_standalone_prepared(project, || {
+            let (operations, plan) =
+                prepare_standalone_mcp(project, &intent.name, &server, intent.force)?;
+            policy.output.summary(&plan);
+            let progress = policy.output.applying("MCP configuration");
+            Ok((operations, (plan, progress)))
+        })?;
+        drop(progress);
+        plan
     };
     for item in &plan {
         policy.output.plan(item, false);

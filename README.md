@@ -207,7 +207,10 @@ In a terminal, aru helps fill omitted selections:
 - `aru instruction add` prompts for an exact project-relative `AGENTS.md` path.
 
 Use arrow keys to move, space to toggle multi-select items, typing to filter menus, Enter to accept, and Esc to cancel.
-Pass `--no-interactive` to disable all prompts. Without prompts, existing defaults remain: project scope, configured managed targets, and update-all. Required missing selections produce an actionable error.
+Menus share keyboard hints and colors, show target capabilities beside destinations, and include step hints. Terminal runs show a short change plan before initialization, managed reconciliation, and standalone installation, with spinners during resolution and application. The plan is informational, not another confirmation. For commands that support it, `--dry-run` prints a full preview without applying.
+
+`--no-progress` hides spinners and progress status; `--quiet` also hides step hints and plan summaries but keeps required prompts. `--color never` disables color in menus and status output.
+Pass `--no-interactive` to disable prompts, step hints, plan summaries, and animation. Without prompts, existing defaults remain: project scope, configured managed targets, and update-all. Required missing selections produce an actionable error.
 Inspection, `sync`, `lock`, packaging, and self-update commands do not gain prompts. Source identifiers, MCP configuration, and trust flags remain explicit.
 
 ## Common tasks

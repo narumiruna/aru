@@ -4,10 +4,11 @@ use crate::output::Output;
 use crate::self_update::{UpdateAction, update as apply_update};
 
 pub(super) fn update(args: SelfUpdateArgs, offline: bool, output: Output) -> Result<()> {
-    if crate::self_update::is_standalone_build() && !offline {
-        output.progress("aru release");
-    }
-    let outcome = apply_update(args.dry_run, offline)?;
+    let outcome = {
+        let _progress = (crate::self_update::is_standalone_build() && !offline)
+            .then(|| output.progress("aru release"));
+        apply_update(args.dry_run, offline)?
+    };
     match outcome.action {
         UpdateAction::UpToDate => output.completion(&format!(
             "aru {} is already up to date.",

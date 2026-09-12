@@ -72,6 +72,9 @@ pub(super) fn add_standalone(
                 choices.push(TargetChoice::new(spec.target, spec.project_skills));
             }
         }
+        policy
+            .output
+            .step("Choose installation targets; next: discover skills.");
         let Some(targets) = terminal_choose_targets(&mut chooser, &choices)? else {
             policy
                 .output
@@ -101,22 +104,27 @@ fn standalone_add_with_policy(
 ) -> Result<()> {
     let mut requirement = standalone_requirement(args, mode)?;
     let cache = Cache::ephemeral()?;
-    policy
-        .output
-        .progress(&format!("skill source {}", args.source));
-    let inspection = inspect_standalone_skill_source(
-        project,
-        &args.source,
-        &requirement,
-        policy.offline,
-        &cache,
-    )?;
+    let inspection = {
+        let _progress = policy
+            .output
+            .progress(&format!("skill source {}", args.source));
+        inspect_standalone_skill_source(
+            project,
+            &args.source,
+            &requirement,
+            policy.offline,
+            &cache,
+        )?
+    };
     if mode == SkillAddSelectionMode::Interactive {
         let names = inspection
             .candidates
             .iter()
             .map(|candidate| candidate.name.clone())
             .collect::<Vec<_>>();
+        policy
+            .output
+            .step("Choose skills; next: preview installation changes.");
         let Some(selected) = choose_skills(chooser, &names, &[])? else {
             policy
                 .output
@@ -161,7 +169,7 @@ fn standalone_add_with_policy(
                 continue;
             }
             let exists = standalone_destination_exists(&absolute_destination)?;
-            if exists && !args.force && args.dry_run && collision.is_none() {
+            if exists && !args.force && collision.is_none() {
                 collision = Some(format!(
                     "collision: unmanaged skill {:?} already exists at {}; inspect it or rerun with --force",
                     skill.name,
@@ -187,6 +195,9 @@ fn standalone_add_with_policy(
         if let Some(collision) = collision {
             return Err(AruError::msg(collision));
         }
+        policy
+            .output
+            .step("Preview only; no project or target files will be changed.");
         for item in &plan {
             policy.output.plan(item, true);
         }
@@ -195,10 +206,18 @@ fn standalone_add_with_policy(
             .completion("Dry run complete; no project or target files were changed.");
         return Ok(());
     }
-    if args.global {
-        apply_standalone_global(project, operations, args.force)?;
-    } else {
-        apply_standalone(project, operations, args.force)?;
+    // Do not preview a force replacement without explicit authorization.
+    // Leave collision validation and recovery to the existing transaction.
+    if collision.is_none() {
+        policy.output.summary(&plan);
+    }
+    {
+        let _progress = policy.output.applying("skill installation");
+        if args.global {
+            apply_standalone_global(project, operations, args.force)?;
+        } else {
+            apply_standalone(project, operations, args.force)?;
+        }
     }
     for item in &plan {
         policy.output.plan(item, false);
@@ -326,19 +345,21 @@ fn skill_add_with_policy(
         (snapshot, key, requirement, existing, previous)
     };
 
-    policy.output.progress(&format!("skill source {key}"));
-    let inspection = inspect_skill_source(
-        project,
-        &key,
-        &requirement,
-        if args.upgrade {
-            None
-        } else {
-            previous.as_ref()
-        },
-        true, // Inspect with an ephemeral cache until the selection is accepted.
-        policy.offline,
-    )?;
+    let inspection = {
+        let _progress = policy.output.progress(&format!("skill source {key}"));
+        inspect_skill_source(
+            project,
+            &key,
+            &requirement,
+            if args.upgrade {
+                None
+            } else {
+                previous.as_ref()
+            },
+            true, // Inspect with an ephemeral cache until the selection is accepted.
+            policy.offline,
+        )?
+    };
     let names = inspection
         .candidates
         .iter()
@@ -353,6 +374,9 @@ fn skill_add_with_policy(
             .collect(),
         Some(requirement) => requirement.include.clone(),
     };
+    policy
+        .output
+        .step("Choose skills; next: resolve a change plan.");
     let Some(selected) = choose_skills(chooser, &names, &current)? else {
         policy
             .output

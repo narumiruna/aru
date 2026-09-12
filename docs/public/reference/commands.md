@@ -32,7 +32,22 @@ Managed selections are checked against `aru.toml` and `aru.lock` again under the
 Only skill installation supports Global scope. `--scope project` and `--scope global` select it explicitly; `--global` is a shorthand for Global and conflicts with `--scope`.
 `--project PATH` remains a directory override, not a scope flag.
 Source identifiers, MCP source/name/options, plugin component selection, and `--trust-mcp` remain explicit. Menus never imply trust or `--force`.
-Listing, inspection, export, metadata, `sync`, `lock`, packaging, shell completion, and self-update retain their existing non-interactive behavior.
+Listing, inspection, export, metadata, `sync`, `lock`, packaging, shell completion, and self-update do not ask for input.
+
+### Inline terminal output
+
+When stdin and stderr are terminals and `--no-interactive` is absent:
+
+- Menus share colors and keyboard hints. Target labels include destinations and supported project capabilities; this does not add Global support for other resources.
+- Step hints explain the current choice and what follows. Explicit selections still skip the corresponding menus.
+- Initialization, managed reconciliation (including `sync` and `lock`), and standalone installation show an informational plan before applying changes. Summaries show at most 12 actions and shorten long lines. Commands supporting `--dry-run` retain a full preview without applying; `init` does not support `--dry-run`.
+- Resolution and application use transient spinners, cleared before menus, warnings, results, or errors. `TERM=dumb` uses static progress instead.
+
+The plan is not an approval prompt and does not bypass validation, ownership, trust, or transaction checks. No additional Enter is required. Dry runs keep their full previews and never enter the application phase.
+
+`--no-progress` hides spinners and progress status, but keeps menus, step hints, and summaries. `--quiet` also hides hints, summaries, and routine completion output, but keeps required prompts and warnings. `--color never` removes color, not cursor movement in menus or spinners.
+
+`--no-interactive` disables menus, step hints, summaries, and animation; existing static status remains. If stdin or stderr is not a terminal, aru also omits these interactive elements. Static progress may still appear when stderr is a terminal. Machine-readable and list output stays on stdout; human interaction and status stay on stderr.
 
 ```console
 aru init
@@ -114,6 +129,6 @@ aru update --no-interactive
 | `--frozen` | Equivalent to `--locked --offline` |
 | `-q`, `--quiet` | Suppress routine status output |
 | `-v`, `--verbose` | Show more detail; repeat for projection identity detail |
-| `--color auto\|always\|never` | Control status color |
-| `--no-progress` | Hide progress output |
-| `--no-interactive` | Disable all prompts; preserve defaults and reject missing required selections |
+| `--color auto\|always\|never` | Control menu and status color |
+| `--no-progress` | Hide spinners and progress status |
+| `--no-interactive` | Disable prompts, step hints, summaries, and animation; preserve defaults and reject missing required selections |
