@@ -1,3 +1,7 @@
+use std::path::PathBuf;
+
+use toml_edit::DocumentMut;
+
 use super::*;
 
 #[test]
