@@ -59,7 +59,7 @@ fn interactive_add(
         "--target",
         "codex",
     ]);
-    command.args(extra);
+    command.args(extra).env("TERM", "xterm-256color");
     let mut session = Session::spawn(command).unwrap();
     session.set_expect_timeout(Some(Duration::from_secs(20)));
     session
@@ -228,6 +228,33 @@ fn standalone_target_and_skill_multiselect_install_checked_combination() {
 }
 
 #[test]
+fn standalone_collision_does_not_preview_an_unauthorized_force_replacement() {
+    let temporary = tempfile::tempdir().unwrap();
+    let repository = temporary.path().join("repository");
+    let project = temporary.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    create_repository(&repository, &["alpha"]);
+    let destination = project.join(".agents/skills/alpha");
+    std::fs::create_dir_all(&destination).unwrap();
+    std::fs::write(destination.join("SKILL.md"), "User content\n").unwrap();
+
+    let mut session = interactive_add(&project, &repository, &[]);
+    session.expect("Select skills to install").unwrap();
+    session.send(" \r").unwrap();
+    let output = session.expect(Eof).unwrap();
+    let text = String::from_utf8_lossy(output.as_bytes());
+    assert!(text.contains("collision: unmanaged entry"), "{text}");
+    assert!(!text.contains("planned actions"), "{text}");
+    assert!(!text.contains("force replace"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(destination.join("SKILL.md")).unwrap(),
+        "User content\n"
+    );
+    assert!(!project.join("aru.toml").exists());
+    assert!(!project.join(".aru").exists());
+}
+
+#[test]
 fn standalone_target_cancel_writes_nothing() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");
@@ -335,10 +362,13 @@ fn terminal_escape_cancels_without_project_writes() {
     let before = std::fs::read(project.join("aru.toml")).unwrap();
 
     let mut session = interactive_add(&project, &repository, &[]);
-    session.expect("Select skills to install").unwrap();
+    let before_menu = session.expect("Select skills to install").unwrap();
+    assert!(String::from_utf8_lossy(before_menu.as_bytes()).contains("Resolving"));
     session.send(ControlCode::ESC).unwrap();
-    session.expect("Skill selection canceled").unwrap();
-    session.expect(Eof).unwrap();
+    let canceled = session.expect("Skill selection canceled").unwrap();
+    assert!(!String::from_utf8_lossy(canceled.as_bytes()).contains("Resolving"));
+    let rest = session.expect(Eof).unwrap();
+    assert!(!String::from_utf8_lossy(rest.as_bytes()).contains("Resolving"));
 
     assert_eq!(std::fs::read(project.join("aru.toml")).unwrap(), before);
     assert!(!project.join("aru.lock").exists());

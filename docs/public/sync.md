@@ -84,4 +84,6 @@ List and machine-readable data go to stdout; human-readable status goes to stder
     Finished Project synchronized.
 ```
 
-Use `-v` when exact revisions and digests are needed, `-q` to suppress routine status, and `--color never` for plain logs.
+Interactive terminals also show a bounded pre-apply plan and transient progress spinners; `sync` never asks for input. Redirected output remains static.
+
+Use `-v` when exact revisions and digests are needed and `-q` to suppress routine status. `--no-progress` hides spinners; `--color never` removes color. For static terminal logs without plan summaries, use `--no-interactive --no-progress --color never`.

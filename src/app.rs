@@ -80,14 +80,22 @@ impl ExecutionPolicy {
 pub fn run() -> Result<()> {
     let mut cli = Cli::parse();
     let mut project_option = cli.project;
+    let interactive = crate::interactive::enabled(cli.no_interactive);
     let mut policy = ExecutionPolicy {
         locked: cli.locked || cli.frozen,
         offline: cli.offline || cli.frozen,
-        output: Output::new(cli.quiet, cli.verbose, cli.color, cli.no_progress),
-        interactive: crate::interactive::enabled(cli.no_interactive),
+        output: Output::new(cli.quiet, cli.verbose, cli.color, cli.no_progress)
+            .with_interactive(interactive),
+        interactive,
         selection_snapshot: None,
     };
-    match prompt::prepare(&mut cli.command, &mut project_option, policy.interactive)? {
+    crate::interactive::configure(policy.output.color_enabled());
+    match prompt::prepare(
+        &mut cli.command,
+        &mut project_option,
+        policy.interactive,
+        policy.output,
+    )? {
         prompt::Prepared::Canceled => {
             policy
                 .output
@@ -254,6 +262,14 @@ fn init_with_output(project: PathBuf, mut targets: Vec<Target>, output: Output) 
     }
     let manifest = ManifestDocument::new(&targets);
     manifest.manifest()?;
+    output.summary(&[format!(
+        "create aru.toml (targets: {})",
+        targets
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )]);
     apply(
         &project,
         vec![Operation::file(
@@ -527,8 +543,10 @@ fn execute(
     let dry_run = request.dry_run();
     let project_projections = request.projects();
     let deferred = !project_projections && request.changes_intent();
-    output.progress("project state");
-    let prepared = prepare_request(project, manifest, previous.as_ref(), request)?;
+    let prepared = {
+        let _progress = output.progress("project state");
+        prepare_request(project, manifest, previous.as_ref(), request)?
+    };
     let changed_completion = if deferred {
         "Target paths were not changed; run `aru sync` to apply."
     } else if project_projections {
@@ -567,7 +585,10 @@ fn execute_target_change(
     }
     let dry_run = request.dry_run();
     let project_projections = request.projects();
-    let mut prepared = prepare_request(project, manifest, previous.as_ref(), request)?;
+    let mut prepared = {
+        let _progress = output.progress("project targets");
+        prepare_request(project, manifest, previous.as_ref(), request)?
+    };
     prepared.plan.extend(target_plan);
     prepared.plan.sort();
     let configured = targets
@@ -602,6 +623,7 @@ fn finish_execution(
         output.warning(warning);
     }
     if dry_run {
+        output.step("Preview only; no project or target files will be changed.");
         for preview in &prepared.previews {
             output.preview(preview);
         }
@@ -622,6 +644,8 @@ fn finish_execution(
     }
     let changed = !prepared.operations.is_empty();
     if changed {
+        output.summary(&prepared.plan);
+        let _progress = output.applying("project changes");
         apply(project, prepared.operations)?;
     }
     garbage_collect(project, &prepared.lock)?;

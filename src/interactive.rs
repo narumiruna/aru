@@ -2,11 +2,37 @@ use std::io::{self, IsTerminal};
 
 use inquire::error::InquireError;
 use inquire::list_option::ListOption;
+use inquire::ui::{Color, RenderConfig, Styled};
 use inquire::validator::Validation;
 use inquire::{MultiSelect, Select, Text};
 
 use crate::error::{AruError, Result};
 use crate::manifest::Target;
+
+const SELECT_HELP: &str = "↑↓ move, type filter, enter confirm, esc cancel";
+const MULTISELECT_HELP: &str =
+    "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel";
+
+pub(crate) fn configure(color: bool) {
+    inquire::set_global_render_config(render_config(color));
+}
+
+fn render_config(color: bool) -> RenderConfig<'static> {
+    if color {
+        RenderConfig::default_colored()
+            .with_prompt_prefix(Styled::new("?").with_fg(Color::LightCyan))
+            .with_answered_prompt_prefix(Styled::new("+").with_fg(Color::LightGreen))
+    } else {
+        RenderConfig::empty().with_answered_prompt_prefix(Styled::new("+"))
+    }
+}
+
+fn multiselect<T: std::fmt::Display>(message: &str, options: Vec<T>) -> MultiSelect<'_, T> {
+    let page_size = options.len().clamp(1, 12);
+    MultiSelect::new(message, options)
+        .with_page_size(page_size)
+        .with_help_message(MULTISELECT_HELP)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillAddSelectionMode {
@@ -70,13 +96,8 @@ pub fn select_many<T: Clone + std::fmt::Display>(
         .enumerate()
         .filter_map(|(index, value)| defaults.contains(&value.to_string()).then_some(index))
         .collect::<Vec<_>>();
-    let page_size = options.len().clamp(1, 12);
-    MultiSelect::new(message, options)
+    multiselect(message, options)
         .with_default(&defaults)
-        .with_page_size(page_size)
-        .with_help_message(
-            "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel",
-        )
         .with_validator(|selection: &[ListOption<&T>]| {
             Ok(if selection.is_empty() {
                 Validation::Invalid("select at least one item".into())
@@ -97,6 +118,7 @@ pub fn select_one(message: &str, mut options: Vec<String>) -> Result<Option<Stri
     let page_size = options.len().clamp(1, 12);
     Select::new(message, options)
         .with_page_size(page_size)
+        .with_help_message(SELECT_HELP)
         .prompt_skippable()
         .map_err(map_selection_error)
 }
@@ -110,6 +132,7 @@ pub fn installation_scope() -> Result<Option<crate::cli::SkillInstallScope>> {
             "Global — install in user directories; leave aru project state unchanged",
         ],
     )
+    .with_help_message(SELECT_HELP)
     .prompt_skippable()
     .map(|value| {
         value.map(|value| {
@@ -126,6 +149,7 @@ pub fn installation_scope() -> Result<Option<crate::cli::SkillInstallScope>> {
 pub fn instruction_path() -> Result<Option<String>> {
     Text::new("Project-relative AGENTS.md path")
         .with_placeholder("AGENTS.md")
+        .with_help_message("Exact path only; no directory scan. Enter confirm, esc cancel")
         .with_validator(|value: &str| {
             Ok(if value.trim().is_empty() {
                 Validation::Invalid("enter an exact AGENTS.md path".into())
@@ -164,9 +188,22 @@ pub struct TargetChoice {
 
 impl TargetChoice {
     pub fn new(target: Target, destination: &str) -> Self {
+        let capabilities = crate::target::capabilities(target);
+        let supported = [
+            capabilities
+                .instructions
+                .is_some()
+                .then_some("instructions"),
+            capabilities.skills.then_some("skills"),
+            capabilities.mcp.then_some("MCP"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
         Self {
             target,
-            label: format!("{target} ({destination})"),
+            label: format!("{target} ({destination}) — {supported}"),
         }
     }
 }
@@ -179,11 +216,7 @@ impl std::fmt::Display for TargetChoice {
 
 impl TargetChooser for InquireTargetChooser {
     fn choose(&mut self, choices: &[TargetChoice]) -> Result<Option<Vec<Target>>> {
-        MultiSelect::new("Select targets to install to", choices.to_vec())
-            .with_page_size(choices.len().clamp(1, 12))
-            .with_help_message(
-                "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel",
-            )
+        multiselect("Select targets to install to", choices.to_vec())
             .with_validator(|selection: &[ListOption<&TargetChoice>]| {
                 Ok(if selection.is_empty() {
                     Validation::Invalid("select at least one target".into())
@@ -244,12 +277,8 @@ pub struct InquireSkillChooser;
 
 impl SkillChooser for InquireSkillChooser {
     fn choose(&mut self, names: &[String], defaults: &[usize]) -> Result<Option<Vec<String>>> {
-        MultiSelect::new("Select skills to install", names.to_vec())
+        multiselect("Select skills to install", names.to_vec())
             .with_default(defaults)
-            .with_page_size(names.len().clamp(1, 12))
-            .with_help_message(
-                "↑↓ move, space select, → all, ← none, type filter, enter confirm, esc cancel",
-            )
             .with_validator(|selection: &[ListOption<&String>]| {
                 Ok(if selection.is_empty() {
                     Validation::Invalid("select at least one skill".into())
@@ -336,6 +365,58 @@ mod tests {
     }
 
     #[test]
+    fn prompt_theme_honors_color_and_uses_consistent_markers() {
+        let plain = render_config(false);
+        assert!(plain.prompt_prefix.style.is_empty());
+        assert!(plain.answered_prompt_prefix.style.is_empty());
+        assert!(plain.answer.is_empty());
+        assert!(plain.help_message.is_empty());
+        assert!(plain.selected_checkbox.style.is_empty());
+        assert_eq!(plain.answered_prompt_prefix.content, "+");
+        let colored = render_config(true);
+        assert_eq!(colored.prompt_prefix.style.fg, Some(Color::LightCyan));
+        assert_eq!(
+            colored.answered_prompt_prefix.style.fg,
+            Some(Color::LightGreen)
+        );
+        assert_eq!(
+            colored.selected_checkbox.content,
+            plain.selected_checkbox.content
+        );
+    }
+
+    #[test]
+    fn target_labels_describe_only_supported_capabilities() {
+        assert_eq!(
+            TargetChoice::new(Target::Codex, ".agents/skills").label,
+            "codex (.agents/skills) — instructions, skills, MCP"
+        );
+        let skill_only = crate::target::specs()
+            .iter()
+            .find(|spec| {
+                spec.capabilities.skills
+                    && spec.capabilities.instructions.is_none()
+                    && !spec.capabilities.mcp
+            })
+            .unwrap();
+        assert_eq!(
+            TargetChoice::new(skill_only.target, skill_only.project_skills).label,
+            format!(
+                "{} ({}) — skills",
+                skill_only.name, skill_only.project_skills
+            )
+        );
+    }
+
+    #[test]
+    fn multiselects_share_help_and_bounded_pages() {
+        let prompt = multiselect("Choose", (0..50).collect());
+        assert_eq!(prompt.page_size, 12);
+        assert_eq!(prompt.help_message, Some(MULTISELECT_HELP));
+        assert_eq!(multiselect("Choose", vec!["one"]).page_size, 1);
+    }
+
+    #[test]
     fn selection_mode_requires_both_terminals_for_bare_add() {
         assert_eq!(
             selection_mode(false, false, false, true, true).unwrap(),
@@ -396,7 +477,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             [Target::Claude, Target::Codex, Target::Kiro]
         );
-        assert_eq!(chooser.seen_choices[0].label, "claude (.mcp.json)");
+        assert_eq!(
+            chooser.seen_choices[0].label,
+            "claude (.mcp.json) — instructions, skills, MCP"
+        );
         assert_eq!(selected, [Target::Codex, Target::Kiro]);
 
         let mut unknown = FakeTargetChooser {

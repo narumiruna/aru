@@ -23,7 +23,13 @@ fn explicit_scopes_normalize_without_prompts() {
         argv.extend(flags);
         let mut cli = Cli::try_parse_from(argv).unwrap();
         assert!(matches!(
-            prepare(&mut cli.command, &mut None, false).unwrap(),
+            prepare(
+                &mut cli.command,
+                &mut None,
+                false,
+                super::super::ExecutionPolicy::default().output
+            )
+            .unwrap(),
             Prepared::Ready(None)
         ));
         let Command::Skill {
@@ -64,7 +70,13 @@ fn non_interactive_update_all_and_explicit_selections_remain_unchanged() {
         let mut cli = Cli::try_parse_from(argv).unwrap();
         let before = format!("{:?}", cli.command);
         assert!(matches!(
-            prepare(&mut cli.command, &mut None, false).unwrap(),
+            prepare(
+                &mut cli.command,
+                &mut None,
+                false,
+                super::super::ExecutionPolicy::default().output
+            )
+            .unwrap(),
             Prepared::Ready(None)
         ));
         assert_eq!(format!("{:?}", cli.command), before);
