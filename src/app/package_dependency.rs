@@ -186,24 +186,12 @@ fn find_package_key(
     if manifest.packages.contains_key(requested) {
         return Ok(Some(requested.into()));
     }
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.packages.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
+    crate::source::git::find_declared_source_key(project, manifest.packages.keys(), requested)
 }
 
 #[cfg(test)]
 mod tests;
 
 fn find_trust_key(project: &Path, manifest: &Manifest, requested: &str) -> Result<Option<String>> {
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.package_trust.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
+    crate::source::git::find_declared_source_key(project, manifest.package_trust.keys(), requested)
 }

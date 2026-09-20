@@ -379,13 +379,7 @@ pub(crate) fn declared_skill_source_key(
     if manifest.skills.contains_key(requested) {
         return Ok(Some(requested.into()));
     }
-    let canonical = git::canonicalize(project, requested)?;
-    for key in manifest.skills.keys() {
-        if git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
+    git::find_declared_source_key(project, manifest.skills.keys(), requested)
 }
 
 fn resolve_skill_reference(

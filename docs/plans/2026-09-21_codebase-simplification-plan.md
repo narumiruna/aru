@@ -57,9 +57,9 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 3. Centralize canonical declared-source matching
 
-- [ ] Add one domain-specific Git-source helper for the canonical identity scan. Preserve exact-key shortcuts in the skill/package callers and unconditional canonicalization in package-trust lookup; the latter currently has no exact-key shortcut. Keep caller-specific missing-resource errors outside the helper. Acceptance: local paths and repository URLs return the original declared key with unchanged error and scan ordering.
-- [ ] Use the helper from `declared_skill_source_key` in `src/resolver/skill.rs` and package/package-trust lookup in `src/app/package_dependency.rs`. Acceptance: `find_package_key` and `find_trust_key` are removed or reduced to resource-specific behavior rather than repeating canonicalization loops.
-- [ ] Verify add, update, and remove continue to recognize equivalent local paths and repository identities. Acceptance: focused resolver tests and `tests/cli.rs` plus `tests/package_cli.rs` pass without output or fixture changes.
+- [x] Add `git::find_declared_source_key` for canonical scanning without changing exact-key shortcuts or trust scan order. Evidence: characterization tests for aliases, exact matches, sorted selection, and missing-source errors pass.
+- [x] Replace three independent loops with the Git-source helper. Skill/package wrappers retain only exact-key precedence; trust delegates without a shortcut.
+- [x] Verify lifecycle and resolution behavior. Evidence: resolver skill tests (3), package app tests (2), `cli` (19), and `package_cli` (15) pass; no fixture changes.
 
 ### 4. Centralize projection-policy construction
 
