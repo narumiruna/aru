@@ -216,7 +216,7 @@ fn prepare_projections(
     warn_unowned_removed_projections(project, previous, lock, &state_map, warnings);
 
     for entry in &state.entries {
-        let identity = state_identity(entry);
+        let identity = entry.owned_identity();
         if entry.kind == "skill" && !processed.contains(&identity) {
             let destination = PathBuf::from(&entry.destination);
             let expected_link =
@@ -289,7 +289,7 @@ fn prepare_projections(
     )?;
 
     for entry in &state.entries {
-        if !processed.contains(&state_identity(entry)) {
+        if !processed.contains(&entry.owned_identity()) {
             next_state.push(entry.clone());
         }
     }
@@ -622,7 +622,7 @@ fn prepare_mcp(
     }
 
     for entry in &state.entries {
-        let identity = state_identity(entry);
+        let identity = entry.owned_identity();
         if entry.kind != "mcp" || processed.contains(&identity) {
             continue;
         }
@@ -714,14 +714,6 @@ fn push_file_if_changed(
     operations.push(Operation::file(destination, bytes));
     plan.push(description.into());
     Ok(())
-}
-
-fn state_identity(entry: &StateEntry) -> (String, String, String) {
-    (
-        entry.kind.clone(),
-        entry.key.clone(),
-        entry.destination.clone(),
-    )
 }
 
 fn portable(path: &Path) -> Result<String> {

@@ -51,9 +51,9 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 2. Centralize ownership-state identity
 
-- [ ] Add a focused identity method on `StateEntry` in `src/ownership.rs` that preserves the exact `(kind, key, destination)` ordering and supports existing borrowed or owned collection use without exposing a new public abstraction unnecessarily. Acceptance: `State::normalize` and `State::by_identity` use the method and produce identical ordering and keys.
-- [ ] Replace `state_identity` in `src/sync.rs` and `identity` in `src/instruction/sync.rs` with the `StateEntry` method. Acceptance: the duplicate helpers are removed and all ownership processed-set lookups compile unchanged.
-- [ ] Verify state serialization remains byte-stable. Acceptance: ownership unit tests pass and `tests/fixtures/contracts/state.toml` plus `tests/fixtures/contracts/state-skill-metadata.toml` have no diff.
+- [x] Centralize borrowed identity and its owned conversion on `StateEntry`; use them for normalization and indexing. Evidence: four ownership tests pass, including ordering, deduplication, and lookup equivalence.
+- [x] Replace both sync identity helpers with `StateEntry::owned_identity`. Evidence: `cli`, `instruction_cli`, and `target_cli` suites pass (50 tests).
+- [x] Verify state bytes. Evidence: v1 ownership and skill-metadata golden tests pass; both contract fixtures have no diff.
 
 ### 3. Centralize canonical declared-source matching
 
