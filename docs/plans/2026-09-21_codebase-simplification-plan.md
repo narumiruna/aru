@@ -83,11 +83,12 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 7. Final validation and review
 
-- [ ] Run `cargo fmt --all -- --check`. Acceptance: exits successfully.
-- [ ] Run `cargo clippy --locked --all-targets --all-features -- -D warnings`. Acceptance: exits successfully with no warnings.
-- [ ] Run `cargo test --locked --all-targets --all-features`. Acceptance: all enabled tests pass; the explicit public-network smoke test may remain ignored.
-- [ ] Inspect `git diff --check` and the complete diff. Acceptance: no whitespace errors, persisted fixture changes, public API removals, unrelated edits, or new generic framework are present.
-- [ ] Confirm `cargo run --locked --quiet -- sync --locked --dry-run` is unnecessary because no manifest, lock identity, capability schema, instruction source, or projection format changed; if implementation changes any of those unexpectedly, run the repository-required sync and investigate rather than accepting incidental generated changes. Acceptance: the final diff demonstrates that no regeneration trigger occurred, or the required commands pass with intentional reviewed outputs.
+- [x] `cargo fmt --all -- --check` passed.
+- [x] `cargo clippy --locked --all-targets --all-features -- -D warnings` passed without warnings.
+- [x] `cargo test --locked --all-targets --all-features --quiet` passed: 451 tests, one intentionally ignored public-network smoke test.
+- [x] Review the complete source/test diff and run `git diff --check origin/main...HEAD`. Evidence: no whitespace errors, public API removals, unrelated changes, or generic framework. Locking, recovery, journaling, transaction application, and secret handling are untouched; new tests cover existing lookup/error precedence, target mismatch rejection, and state identity semantics.
+- [x] No sync regeneration trigger occurred. Evidence: manifest, lockfile, dependency files, contract fixtures, capability schema, target paths, and instruction sources are unchanged; MCP projection bytes and ownership bytes were checked against the pre-refactor binary. Repository-local sync was not needed.
+- [ ] Push the signed focused branch and open the requested pull request with verification evidence and platform limitations. After handoff, remove this completed plan and push that cleanup.
 
 ## Risks
 
@@ -103,10 +104,15 @@ Each simplification is independently revertible and should be implemented as a s
 
 ## Completion Checklist
 
-- [ ] All five duplicate implementations are consolidated at their current domain boundaries.
-- [ ] Public `ClaudeConfig` and `CopilotConfig` APIs remain available and source-compatible.
-- [ ] CLI text, flag precedence, project discovery, target paths, and projection bytes remain unchanged.
-- [ ] Manifest, lockfile, ownership-state, journal, capability schema, and contract fixtures remain unchanged.
-- [ ] No new traits, generic utility framework, or speculative extension points were introduced.
-- [ ] Formatting, Clippy, and the full enabled test suite pass.
-- [ ] The final diff contains only scoped source and test changes required by this plan.
+- [x] All five duplicate implementations are consolidated at their current domain boundaries.
+- [x] Public `ClaudeConfig` and `CopilotConfig` APIs remain available and source-compatible; concrete API integration tests pass.
+- [x] CLI text, flag precedence, project discovery, target paths, and projection bytes remain unchanged, backed by characterization tests and binary comparison.
+- [x] Manifest, lockfile, ownership-state, journal, capability schema, and contract fixtures remain unchanged.
+- [x] No new traits, generic utility framework, or speculative extension points were introduced.
+- [x] Formatting, Clippy, and the full enabled test suite pass.
+- [x] The reviewed diff contains only scoped source/test changes and this plan's lifecycle updates.
+- [ ] Signed changes are pushed and the pull request is open; report its URL and remove the completed plan.
+
+## Verification Limitations
+
+Validation ran on Linux. Windows and macOS execution, installer scripts, wheel builds, and the intentionally ignored public-network smoke test were not run; platform-specific and distribution code is unchanged. No unresolved implementation or acceptance failure remains.
