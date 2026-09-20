@@ -75,11 +75,11 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 6. Share Claude/Copilot MCP JSON implementation
 
-- [ ] Introduce one private object-backed MCP JSON implementation under `src/target/` for loading a configured path, validating the root and `mcpServers`, computing entry digests, setting/removing entries, and serializing pretty JSON with a final newline. Keep path-specific error context injectable and explicit. Acceptance: the implementation contains no target capability branching and all common storage behavior has one implementation.
-- [ ] Refactor `ClaudeConfig` and `CopilotConfig` to delegate to the shared implementation while retaining their public names, method signatures, configuration paths, and error strings. Acceptance: downstream code using either public type continues to compile without source changes.
-- [ ] Extract focused shared rendering for the common Claude/Copilot stdio fields and streamable-HTTP fields in `src/target/mod.rs`; apply Copilot's `tools: ["*"]` addition explicitly after common rendering. Acceptance: each normalized entry is byte-for-byte JSON-equivalent after canonical serialization.
-- [ ] Keep `McpConfig` dispatch in `src/target/mcp.rs` explicit. Acceptance: Codex, Claude, Copilot, and Opencode remain visibly distinct variants and mismatched target/config combinations still fail closed.
-- [ ] Verify managed and standalone MCP merging and replay. Acceptance: target adapter unit tests, `tests/mcp_cli.rs`, and `tests/standalone_mcp_cli.rs` pass; generated `.mcp.json` and `.github/mcp.json` fixtures from representative commands match pre-refactor bytes.
+- [x] Add private `src/target/json_mcp.rs` with shared map operations and path-specific errors; no new state, trait, or capability branching.
+- [x] Delegate both public adapters without changing their root fields, derived Debug/Clone representation, paths, or signatures. Evidence: `json_mcp_api` passes through both concrete APIs, including cross-target set compatibility.
+- [x] Combine the Claude/Copilot transport match arms and keep Copilot tools explicit. Evidence: exact transport values and optional-field behavior pass.
+- [x] Preserve explicit `McpConfig` dispatch. Evidence: a new test rejects every mismatched configured/requested target pair without changing serialized config.
+- [x] Verify MCP behavior. Evidence: target tests (25), `json_mcp_api` (3), `mcp_cli` (9), and `standalone_mcp_cli` (9) pass. A temporary pre/post-binary comparison of managed and standalone stdio/HTTP installs confirms identical JSON bytes, CLI output, manifest, lockfile, and ownership state; temporary files were removed.
 
 ### 7. Final validation and review
 

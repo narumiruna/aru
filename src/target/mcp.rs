@@ -93,6 +93,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dispatch_rejects_mismatched_targets_without_mutating_config() {
+        let project = tempfile::tempdir().unwrap();
+        for configured in [
+            Target::Codex,
+            Target::Claude,
+            Target::Copilot,
+            Target::Opencode,
+        ] {
+            let mut config = McpConfig::load(project.path(), configured).unwrap();
+            let before = config.bytes().unwrap();
+            for requested in [
+                Target::Codex,
+                Target::Claude,
+                Target::Copilot,
+                Target::Opencode,
+                Target::Agents,
+            ] {
+                if requested == configured {
+                    continue;
+                }
+                let target = McpTarget {
+                    target: requested,
+                    kind: "command".into(),
+                    transport: "stdio".into(),
+                    command: Some("demo".into()),
+                    args: Vec::new(),
+                    env_vars: Vec::new(),
+                    env_http_headers: Default::default(),
+                    url: None,
+                    bearer_token_env: None,
+                    package: None,
+                };
+                assert_eq!(
+                    config.set("demo", &target).unwrap_err().to_string(),
+                    "internal error: MCP target does not match its configuration adapter"
+                );
+                assert_eq!(config.bytes().unwrap(), before);
+            }
+        }
+        assert!(McpConfig::load(project.path(), Target::Agents).is_err());
+    }
+
+    #[test]
     fn destinations_round_trip_to_supported_targets() {
         for target in [
             Target::Codex,
