@@ -131,6 +131,20 @@ pub(crate) fn select_reference(
     )
 }
 
+pub(crate) fn find_declared_source_key<'a>(
+    project: &Path,
+    keys: impl Iterator<Item = &'a String>,
+    requested: &str,
+) -> Result<Option<String>> {
+    let canonical = canonicalize(project, requested)?;
+    for key in keys {
+        if canonicalize(project, key)?.identity == canonical.identity {
+            return Ok(Some(key.clone()));
+        }
+    }
+    Ok(None)
+}
+
 pub fn canonicalize(project: &Path, input: &str) -> Result<GitSource> {
     validate_source_argument(input)?;
 

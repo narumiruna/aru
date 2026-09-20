@@ -24,6 +24,55 @@ fn write_skill(repository: &Path, name: &str) {
 }
 
 #[test]
+fn declared_skill_keys_prefer_exact_then_canonical_identity() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path();
+    std::fs::create_dir(project.join("repo")).unwrap();
+    let mut manifest = crate::manifest::ManifestDocument::new(&[Target::Codex])
+        .manifest()
+        .unwrap();
+    for key in ["repo", "./repo/.", "owner/repo"] {
+        manifest
+            .skills
+            .insert(key.into(), SkillRequirement::default());
+    }
+    assert_eq!(
+        declared_skill_source_key(project, &manifest, "repo")
+            .unwrap()
+            .as_deref(),
+        Some("repo")
+    );
+    let absolute = project.join("repo");
+    assert_eq!(
+        declared_skill_source_key(project, &manifest, absolute.to_str().unwrap())
+            .unwrap()
+            .as_deref(),
+        Some("./repo/.")
+    );
+    assert_eq!(
+        declared_skill_source_key(project, &manifest, "https://github.com/owner/repo.git")
+            .unwrap()
+            .as_deref(),
+        Some("owner/repo")
+    );
+    assert_eq!(
+        declared_skill_source_key(project, &manifest, "other/repo").unwrap(),
+        None
+    );
+    manifest
+        .skills
+        .insert("./missing/.".into(), SkillRequirement::default());
+    assert_eq!(
+        declared_skill_source_key(project, &manifest, "./missing/.")
+            .unwrap()
+            .as_deref(),
+        Some("./missing/.")
+    );
+    assert!(declared_skill_source_key(project, &manifest, "./absent/.").is_err());
+    assert!(declared_skill_source_key(project, &manifest, "other/repo").is_err());
+}
+
+#[test]
 fn inspection_reuses_locks_and_hint_pins_the_previewed_revision() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("repository");

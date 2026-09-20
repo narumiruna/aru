@@ -2,10 +2,9 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use crate::digest::canonical_json_digest;
-use crate::error::{AruError, IoContext, Result};
+use crate::error::Result;
 use crate::lockfile::McpTarget;
-use crate::target::normalized_entry;
+use crate::target::json_mcp;
 
 pub const CONFIG_PATH: &str = ".github/mcp.json";
 
@@ -16,70 +15,25 @@ pub struct CopilotConfig {
 
 impl CopilotConfig {
     pub fn load(project: &Path) -> Result<Self> {
-        let path = project.join(CONFIG_PATH);
-        let root = if path.exists() {
-            let bytes = std::fs::read(&path).at(&path)?;
-            let value: Value = serde_json::from_slice(&bytes).map_err(|source| AruError::Json {
-                path: path.clone(),
-                source,
-            })?;
-            value
-                .as_object()
-                .cloned()
-                .ok_or_else(|| AruError::msg(".github/mcp.json root must be a JSON object"))?
-        } else {
-            Map::new()
-        };
-        if root
-            .get("mcpServers")
-            .is_some_and(|value| !value.is_object())
-        {
-            return Err(AruError::msg(
-                ".github/mcp.json mcpServers must be an object",
-            ));
-        }
-        Ok(Self { root })
+        Ok(Self {
+            root: json_mcp::load(project, CONFIG_PATH)?,
+        })
     }
 
     pub fn digest(&self, name: &str) -> Result<Option<String>> {
-        let value = self
-            .root
-            .get("mcpServers")
-            .and_then(Value::as_object)
-            .and_then(|servers| servers.get(name));
-        value.map(canonical_json_digest).transpose()
+        json_mcp::digest(&self.root, name)
     }
 
     pub fn set(&mut self, name: &str, target: &McpTarget) -> Result<()> {
-        if !self.root.contains_key("mcpServers") {
-            self.root
-                .insert("mcpServers".into(), Value::Object(Map::new()));
-        }
-        let servers = self
-            .root
-            .get_mut("mcpServers")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| AruError::msg(".github/mcp.json mcpServers must be an object"))?;
-        servers.insert(name.into(), normalized_entry(target)?);
-        Ok(())
+        json_mcp::set(&mut self.root, CONFIG_PATH, name, target)
     }
 
     pub fn remove(&mut self, name: &str) {
-        if let Some(servers) = self
-            .root
-            .get_mut("mcpServers")
-            .and_then(Value::as_object_mut)
-        {
-            servers.remove(name);
-        }
+        json_mcp::remove(&mut self.root, name);
     }
 
     pub fn bytes(&self) -> Result<Vec<u8>> {
-        let mut bytes = serde_json::to_vec_pretty(&self.root).map_err(|error| {
-            AruError::msg(format!("could not serialize .github/mcp.json: {error}"))
-        })?;
-        bytes.push(b'\n');
-        Ok(bytes)
+        json_mcp::bytes(&self.root, CONFIG_PATH)
     }
 }
 

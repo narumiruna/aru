@@ -95,7 +95,7 @@ pub fn prepare(
     }
 
     for entry in &state.entries {
-        let identity = identity(entry);
+        let identity = entry.owned_identity();
         if entry.kind != "instruction" || processed.contains(&identity) {
             continue;
         }
@@ -321,7 +321,7 @@ fn prepare_shared_document(
             && entry.destination == destination_text
             && !desired_sources.contains(entry.key.as_str())
     }) {
-        let identity = identity(entry);
+        let identity = entry.owned_identity();
         let current = document.block_digest(&entry.key);
         match reconcile(
             &entry.key,
@@ -441,14 +441,6 @@ fn observe_file(project: &Path, relative: &Path) -> Result<Option<String>> {
         )));
     }
     Ok(Some(sha256_bytes(&std::fs::read(&path).at(&path)?)))
-}
-
-fn identity(entry: &StateEntry) -> (String, String, String) {
-    (
-        entry.kind.clone(),
-        entry.key.clone(),
-        entry.destination.clone(),
-    )
 }
 
 fn portable(path: &Path) -> Result<String> {

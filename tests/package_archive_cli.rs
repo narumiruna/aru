@@ -51,6 +51,33 @@ fn package_repository(root: &Path) {
 }
 
 #[test]
+fn package_discovery_uses_nearest_manifest_and_honors_explicit_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let outer = temporary.path().join("outer");
+    let inner = outer.join("inner");
+    package_repository(&outer);
+    std::fs::write(outer.join(".git/info/exclude"), "inner/\n").unwrap();
+    package_repository(&inner);
+    let nested = inner.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(outer.join("only-outer.txt"), "outer").unwrap();
+    git(&outer, &["add", "only-outer.txt"]);
+    git(&outer, &["commit", "--quiet", "-m", "outer marker"]);
+    cargo_bin_cmd!("aru")
+        .current_dir(&nested)
+        .args(["--no-interactive", "package", "--list", "--allow-dirty"])
+        .assert()
+        .success()
+        .stdout("AGENTS.md\naru.toml\nskills/review/SKILL.md\n");
+    aru(&outer)
+        .current_dir(&nested)
+        .args(["--no-interactive", "package", "--list", "--allow-dirty"])
+        .assert()
+        .success()
+        .stdout("AGENTS.md\naru.toml\nonly-outer.txt\nskills/review/SKILL.md\n");
+}
+
+#[test]
 fn package_list_and_archive_are_deterministic_with_normalized_headers() {
     let temporary = tempfile::tempdir().unwrap();
     let repository = temporary.path().join("package");

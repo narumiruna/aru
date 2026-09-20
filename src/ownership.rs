@@ -20,6 +20,17 @@ pub struct StateEntry {
     pub skill_metadata: Option<crate::skill::metadata::MetadataState>,
 }
 
+impl StateEntry {
+    fn identity(&self) -> (&str, &str, &str) {
+        (&self.kind, &self.key, &self.destination)
+    }
+
+    pub(crate) fn owned_identity(&self) -> (String, String, String) {
+        let (kind, key, destination) = self.identity();
+        (kind.to_owned(), key.to_owned(), destination.to_owned())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct State {
     pub version: u32,
@@ -66,18 +77,10 @@ impl State {
             // Older binaries must refuse this state rather than discard overrides.
             self.version = 2;
         }
-        self.entries.sort_by(|left, right| {
-            (&left.kind, &left.key, &left.destination).cmp(&(
-                &right.kind,
-                &right.key,
-                &right.destination,
-            ))
-        });
-        self.entries.dedup_by(|left, right| {
-            left.kind == right.kind
-                && left.key == right.key
-                && left.destination == right.destination
-        });
+        self.entries
+            .sort_by(|left, right| left.identity().cmp(&right.identity()));
+        self.entries
+            .dedup_by(|left, right| left.identity() == right.identity());
     }
 
     pub fn bytes(&self) -> Result<Vec<u8>> {
@@ -91,16 +94,7 @@ impl State {
     pub fn by_identity(&self) -> BTreeMap<(String, String, String), &StateEntry> {
         self.entries
             .iter()
-            .map(|entry| {
-                (
-                    (
-                        entry.kind.clone(),
-                        entry.key.clone(),
-                        entry.destination.clone(),
-                    ),
-                    entry,
-                )
-            })
+            .map(|entry| (entry.owned_identity(), entry))
             .collect()
     }
 }
@@ -199,6 +193,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn normalization_and_lookup_share_kind_key_destination_identity() {
+        let mut entries = Vec::new();
+        for (kind, key, destination) in [
+            ("skill", "b", "a"),
+            ("skill", "a", "z"),
+            ("instruction", "z", "z"),
+            ("skill", "a", "a"),
+        ] {
+            let mut entry = state("first");
+            entry.kind = kind.into();
+            entry.key = key.into();
+            entry.destination = destination.into();
+            entries.push(entry);
+        }
+        let mut duplicate = entries[0].clone();
+        duplicate.mode = "different".into();
+        duplicate.last_applied_digest = "second".into();
+        entries.push(duplicate);
+        let mut state = State {
+            version: 1,
+            entries,
+        };
+        state.normalize();
+        assert_eq!(
+            state
+                .entries
+                .iter()
+                .map(StateEntry::identity)
+                .collect::<Vec<_>>(),
+            [
+                ("instruction", "z", "z"),
+                ("skill", "a", "a"),
+                ("skill", "a", "z"),
+                ("skill", "b", "a"),
+            ]
+        );
+        let indexed = state.by_identity();
+        assert_eq!(indexed.len(), 4);
+        for entry in &state.entries {
+            assert_eq!(indexed[&entry.owned_identity()], entry);
+            assert_eq!(entry.last_applied_digest, "first");
+        }
     }
 
     #[test]

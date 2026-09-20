@@ -5,7 +5,7 @@ use crate::cli::{PackageAddArgs, PackageRemoveArgs, PackageUpdateArgs};
 use crate::error::{AruError, Result};
 use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, ManifestDocument, validate_name};
-use crate::sync::{CollisionPolicy, UpdateSelection};
+use crate::sync::UpdateSelection;
 
 use super::{ExecutionPolicy, ProjectionPolicy, execute};
 
@@ -62,7 +62,7 @@ pub(super) fn add(project: &Path, args: PackageAddArgs, policy: ExecutionPolicy)
     let request = policy
         .request(
             args.dry_run,
-            package_projection(args.no_sync, args.merge, args.force)?,
+            ProjectionPolicy::from_flags(args.no_sync, args.merge, args.force)?,
         )
         .with_manifest_bytes(document.bytes())
         .with_updates(UpdateSelection::default().packages(updates, BTreeMap::new()));
@@ -91,7 +91,7 @@ pub(super) fn remove(
     let request = policy
         .request(
             args.dry_run,
-            package_projection(args.no_sync, false, false)?,
+            ProjectionPolicy::from_flags(args.no_sync, false, false)?,
         )
         .with_manifest_bytes(document.bytes());
     execute(project, &manifest, request, policy.output)
@@ -162,20 +162,10 @@ pub(super) fn update(
     let request = policy
         .request(
             args.dry_run,
-            package_projection(args.no_sync, args.merge, args.force)?,
+            ProjectionPolicy::from_flags(args.no_sync, args.merge, args.force)?,
         )
         .with_updates(UpdateSelection::default().packages(updates, precise));
     execute(project, &manifest, request, policy.output)
-}
-
-fn package_projection(no_sync: bool, merge: bool, force: bool) -> Result<ProjectionPolicy> {
-    if no_sync {
-        Ok(ProjectionPolicy::LockOnly)
-    } else {
-        Ok(ProjectionPolicy::Project(CollisionPolicy::from_flags(
-            merge, force,
-        )?))
-    }
 }
 
 fn find_package_key(
@@ -186,21 +176,12 @@ fn find_package_key(
     if manifest.packages.contains_key(requested) {
         return Ok(Some(requested.into()));
     }
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.packages.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
+    crate::source::git::find_declared_source_key(project, manifest.packages.keys(), requested)
 }
 
+#[cfg(test)]
+mod tests;
+
 fn find_trust_key(project: &Path, manifest: &Manifest, requested: &str) -> Result<Option<String>> {
-    let canonical = crate::source::git::canonicalize(project, requested)?;
-    for key in manifest.package_trust.keys() {
-        if crate::source::git::canonicalize(project, key)?.identity == canonical.identity {
-            return Ok(Some(key.clone()));
-        }
-    }
-    Ok(None)
+    crate::source::git::find_declared_source_key(project, manifest.package_trust.keys(), requested)
 }

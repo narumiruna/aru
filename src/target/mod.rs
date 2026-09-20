@@ -2,6 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod instructions;
+mod json_mcp;
 pub(crate) mod mcp;
 pub mod opencode;
 pub(crate) mod skill;
@@ -347,7 +348,7 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             }
             Ok(Value::Object(map))
         }
-        (Target::Claude, "stdio") => {
+        (Target::Claude | Target::Copilot, "stdio") => {
             let mut map = Map::new();
             map.insert("type".into(), json!("stdio"));
             map.insert("command".into(), json!(target.command));
@@ -360,9 +361,12 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
                     .collect();
                 map.insert("env".into(), Value::Object(environment));
             }
+            if target.target == Target::Copilot {
+                map.insert("tools".into(), json!(["*"]));
+            }
             Ok(Value::Object(map))
         }
-        (Target::Claude, "streamable-http") => {
+        (Target::Claude | Target::Copilot, "streamable-http") => {
             let mut map = Map::new();
             map.insert("type".into(), json!("http"));
             map.insert("url".into(), json!(target.url));
@@ -377,40 +381,9 @@ pub fn normalized_entry(target: &McpTarget) -> Result<Value> {
             if !headers.is_empty() {
                 map.insert("headers".into(), Value::Object(headers));
             }
-            Ok(Value::Object(map))
-        }
-        (Target::Copilot, "stdio") => {
-            let mut map = Map::new();
-            map.insert("type".into(), json!("stdio"));
-            map.insert("command".into(), json!(target.command));
-            map.insert("args".into(), json!(target.args));
-            if !target.env_vars.is_empty() {
-                let environment: Map<String, Value> = target
-                    .env_vars
-                    .iter()
-                    .map(|name| (name.clone(), json!(format!("${{{name}}}"))))
-                    .collect();
-                map.insert("env".into(), Value::Object(environment));
+            if target.target == Target::Copilot {
+                map.insert("tools".into(), json!(["*"]));
             }
-            map.insert("tools".into(), json!(["*"]));
-            Ok(Value::Object(map))
-        }
-        (Target::Copilot, "streamable-http") => {
-            let mut map = Map::new();
-            map.insert("type".into(), json!("http"));
-            map.insert("url".into(), json!(target.url));
-            let mut headers: Map<String, Value> = target
-                .env_http_headers
-                .iter()
-                .map(|(header, env)| (header.clone(), json!(format!("${{{env}}}"))))
-                .collect();
-            if let Some(env) = &target.bearer_token_env {
-                headers.insert("Authorization".into(), json!(format!("Bearer ${{{env}}}")));
-            }
-            if !headers.is_empty() {
-                map.insert("headers".into(), Value::Object(headers));
-            }
-            map.insert("tools".into(), json!(["*"]));
             Ok(Value::Object(map))
         }
         (Target::Opencode, "stdio") => {

@@ -60,6 +60,16 @@ enum ProjectionPolicy {
     Project(CollisionPolicy),
 }
 
+impl ProjectionPolicy {
+    fn from_flags(no_sync: bool, merge: bool, force: bool) -> Result<Self> {
+        if no_sync {
+            Ok(Self::LockOnly)
+        } else {
+            Ok(Self::Project(CollisionPolicy::from_flags(merge, force)?))
+        }
+    }
+}
+
 impl ExecutionPolicy {
     fn begin(self, project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
         begin_with_snapshot(project, dry_run, self.selection_snapshot)
@@ -505,11 +515,7 @@ fn apply_target_change(
         )
         .collect::<Vec<_>>();
     target_plan.sort();
-    let projection = if no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(CollisionPolicy::from_flags(merge_instructions, force)?)
-    };
+    let projection = ProjectionPolicy::from_flags(no_sync, merge_instructions, force)?;
     let request = policy
         .request(dry_run, projection)
         .with_manifest_bytes(document.bytes());
@@ -729,65 +735,67 @@ fn installation_directory(explicit: Option<PathBuf>) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn discover_add_root(explicit: Option<PathBuf>) -> Result<AddRoot> {
+enum ManifestSearch {
+    Found(PathBuf),
+    MissingExplicit(PathBuf),
+    MissingAncestor(PathBuf),
+}
+
+fn find_manifest_root(explicit: Option<PathBuf>) -> Result<ManifestSearch> {
     if let Some(path) = explicit {
-        let path = installation_directory(Some(path))?;
+        let path = path.canonicalize().at(&path)?;
         return Ok(if path.join(crate::manifest::MANIFEST_FILE).is_file() {
-            AddRoot::Managed(path)
+            ManifestSearch::Found(path)
         } else {
-            AddRoot::Standalone(path)
+            ManifestSearch::MissingExplicit(path)
         });
     }
     let current = std::env::current_dir().at(".")?;
     for ancestor in current.ancestors() {
         if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return Ok(AddRoot::Managed(ancestor.canonicalize().at(ancestor)?));
+            return Ok(ManifestSearch::Found(ancestor.canonicalize().at(ancestor)?));
         }
     }
-    Ok(AddRoot::Standalone(current.canonicalize().at(&current)?))
+    Ok(ManifestSearch::MissingAncestor(current))
+}
+
+fn discover_add_root(explicit: Option<PathBuf>) -> Result<AddRoot> {
+    match find_manifest_root(explicit)? {
+        ManifestSearch::Found(path) => Ok(AddRoot::Managed(path)),
+        ManifestSearch::MissingExplicit(path) => {
+            if !path.is_dir() {
+                return Err(AruError::msg("installation root is not a directory"));
+            }
+            Ok(AddRoot::Standalone(path))
+        }
+        ManifestSearch::MissingAncestor(current) => {
+            Ok(AddRoot::Standalone(current.canonicalize().at(&current)?))
+        }
+    }
 }
 
 fn discover_project(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        let path = path.canonicalize().at(&path)?;
-        if !path.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return Err(AruError::msg(format!("no aru.toml in {}", path.display())));
+    match find_manifest_root(explicit)? {
+        ManifestSearch::Found(path) => Ok(path),
+        ManifestSearch::MissingExplicit(path) => {
+            Err(AruError::msg(format!("no aru.toml in {}", path.display())))
         }
-        return Ok(path);
+        ManifestSearch::MissingAncestor(_) => Err(AruError::msg(
+            "no aru.toml found in the current directory or its ancestors; run aru init",
+        )),
     }
-    let current = std::env::current_dir().at(".")?;
-    for ancestor in current.ancestors() {
-        if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return ancestor.canonicalize().at(ancestor);
-        }
-    }
-    Err(AruError::msg(
-        "no aru.toml found in the current directory or its ancestors; run aru init",
-    ))
 }
 
 fn package_for_archive(explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        let path = path.canonicalize().at(&path)?;
-        if !path.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return Err(AruError::msg(format!(
-                "no {} in {}",
-                crate::manifest::MANIFEST_FILE,
-                path.display()
-            )));
+    match find_manifest_root(explicit)? {
+        ManifestSearch::Found(path) => Ok(path),
+        ManifestSearch::MissingExplicit(path) => {
+            Err(AruError::msg(format!("no aru.toml in {}", path.display())))
         }
-        return Ok(path);
+        ManifestSearch::MissingAncestor(_) => Err(AruError::msg(
+            "no aru.toml found in the current directory or its ancestors",
+        )),
     }
-    let current = std::env::current_dir().at(".")?;
-    for ancestor in current.ancestors() {
-        if ancestor.join(crate::manifest::MANIFEST_FILE).is_file() {
-            return ancestor.canonicalize().at(ancestor);
-        }
-    }
-    Err(AruError::msg(format!(
-        "no {} found in the current directory or its ancestors",
-        crate::manifest::MANIFEST_FILE
-    )))
 }
 
 fn project_for_init(explicit: Option<PathBuf>, positional: Option<PathBuf>) -> Result<PathBuf> {
