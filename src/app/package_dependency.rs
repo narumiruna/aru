@@ -195,6 +195,9 @@ fn find_package_key(
     Ok(None)
 }
 
+#[cfg(test)]
+mod tests;
+
 fn find_trust_key(project: &Path, manifest: &Manifest, requested: &str) -> Result<Option<String>> {
     let canonical = crate::source::git::canonicalize(project, requested)?;
     for key in manifest.package_trust.keys() {
