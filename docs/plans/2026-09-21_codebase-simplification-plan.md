@@ -69,9 +69,9 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 5. Consolidate project-root traversal
 
-- [ ] Extract one private helper in `src/app.rs` that canonicalizes an optional explicit root or finds the nearest ancestor containing `aru.toml`. Return enough information for callers to retain their current command-specific outcomes; do not embed standalone fallback or user-facing error policy in the helper. Acceptance: only one ancestor traversal remains.
-- [ ] Rebuild `discover_add_root`, `discover_project`, and `package_for_archive` around the helper while preserving their distinct standalone fallback and exact error messages. Acceptance: explicit `--project`, nearest initialized ancestor, missing manifest, and package-root behavior remain unchanged.
-- [ ] Verify project discovery through `tests/standalone_skill_cli.rs`, `tests/standalone_mcp_cli.rs`, `tests/package_archive_cli.rs`, and relevant `tests/cli_policy.rs` cases. Acceptance: tests pass and captured output is unchanged.
+- [x] Add private `find_manifest_root` with explicit outcomes for found, missing explicit root, and missing ancestor. Evidence: one ancestor traversal remains; only explicit paths and found roots are canonicalized inside the helper.
+- [x] Keep managed/archive errors and standalone fallback in their command wrappers. Evidence: exact-error, explicit-root, nearest-manifest, and Unix symlink characterization tests pass.
+- [x] Verify discovery and standalone behavior. Evidence: `project_discovery_cli`, `standalone_skill_cli`, `standalone_mcp_cli`, `package_archive_cli`, and `cli_policy` pass (47 tests).
 
 ### 6. Share Claude/Copilot MCP JSON implementation
 

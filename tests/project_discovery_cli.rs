@@ -43,6 +43,35 @@ fn managed_commands_choose_nearest_manifest_unless_project_is_explicit() {
         )));
 }
 
+#[cfg(unix)]
+#[test]
+fn explicit_symlink_roots_are_resolved_before_manifest_lookup() {
+    let temporary = tempfile::tempdir().unwrap();
+    let real = temporary.path().join("real");
+    let link = temporary.path().join("link");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    std::fs::write(real.join("aru.toml"), "[project]\ntargets = ['claude']\n").unwrap();
+    aru(temporary.path())
+        .arg("--project")
+        .arg(&link)
+        .args(["target", "list"])
+        .assert()
+        .success()
+        .stdout("claude\n");
+    std::fs::remove_file(real.join("aru.toml")).unwrap();
+    aru(temporary.path())
+        .arg("--project")
+        .arg(&link)
+        .args(["target", "list"])
+        .assert()
+        .failure()
+        .stderr(format!(
+            "error: no aru.toml in {}\n",
+            real.canonicalize().unwrap().display()
+        ));
+}
+
 #[test]
 fn missing_project_errors_remain_command_specific() {
     let temporary = tempfile::tempdir().unwrap();
