@@ -11,7 +11,7 @@ use crate::manifest::{
 };
 use crate::plugin::{inspect_plugin_root, plugin_root};
 use crate::source::git;
-use crate::sync::{CollisionPolicy, UpdateSelection};
+use crate::sync::UpdateSelection;
 
 use super::{ExecutionPolicy, ProjectionPolicy, execute};
 
@@ -87,7 +87,10 @@ pub(super) fn add(project: &Path, args: PluginAddArgs, policy: ExecutionPolicy) 
     }
     let manifest = document.manifest()?;
     let request = policy
-        .request(args.dry_run, projection(args.no_sync, args.force))
+        .request(
+            args.dry_run,
+            ProjectionPolicy::from_flags(args.no_sync, false, args.force)?,
+        )
         .with_manifest_bytes(document.bytes());
     execute(project, &manifest, request, policy.output)
 }
@@ -110,7 +113,10 @@ pub(super) fn remove(
     document.remove_plugin_trust(&args.name);
     let manifest = document.manifest()?;
     let request = policy
-        .request(args.dry_run, projection(args.no_sync, false))
+        .request(
+            args.dry_run,
+            ProjectionPolicy::from_flags(args.no_sync, false, false)?,
+        )
         .with_manifest_bytes(document.bytes());
     execute(project, &manifest, request, policy.output)
 }
@@ -149,7 +155,10 @@ pub(super) fn update(
         BTreeMap::new()
     };
     let request = policy
-        .request(args.dry_run, projection(args.no_sync, args.force))
+        .request(
+            args.dry_run,
+            ProjectionPolicy::from_flags(args.no_sync, false, args.force)?,
+        )
         .with_updates(UpdateSelection::default().plugins(updates, precise));
     execute(project, &manifest, request, policy.output)
 }
@@ -360,14 +369,4 @@ fn validate_cli_selection(args: &PluginAddArgs) -> Result<()> {
         validate_name(name, "plugin resource name")?;
     }
     Ok(())
-}
-
-fn projection(no_sync: bool, force: bool) -> ProjectionPolicy {
-    if no_sync {
-        ProjectionPolicy::LockOnly
-    } else if force {
-        ProjectionPolicy::Project(CollisionPolicy::Force)
-    } else {
-        ProjectionPolicy::Project(CollisionPolicy::Reject)
-    }
 }

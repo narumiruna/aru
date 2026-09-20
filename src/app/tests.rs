@@ -5,6 +5,33 @@ use super::*;
 use crate::cli::{SkillAddArgs, SkillRemoveArgs};
 use crate::interactive::{SkillAddSelectionMode, SkillChooser};
 
+#[test]
+fn projection_flags_preserve_no_sync_precedence() {
+    for merge in [false, true] {
+        for force in [false, true] {
+            assert!(matches!(
+                ProjectionPolicy::from_flags(true, merge, force).unwrap(),
+                ProjectionPolicy::LockOnly
+            ));
+        }
+    }
+    for (merge, force, expected) in [
+        (false, false, CollisionPolicy::Reject),
+        (true, false, CollisionPolicy::MergeInstructions),
+        (false, true, CollisionPolicy::Force),
+    ] {
+        assert!(
+            matches!(ProjectionPolicy::from_flags(false, merge, force).unwrap(), ProjectionPolicy::Project(actual) if actual == expected)
+        );
+    }
+    assert_eq!(
+        ProjectionPolicy::from_flags(false, true, true)
+            .unwrap_err()
+            .to_string(),
+        "--merge and --force cannot be combined"
+    );
+}
+
 fn git(repository: &Path, arguments: &[&str]) {
     assert!(
         Command::new("git")

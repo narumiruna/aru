@@ -6,7 +6,7 @@ use crate::error::{AruError, Result};
 use crate::interactive::{InquireTargetChooser, TargetChoice, terminal_choose_targets};
 use crate::lockfile::{Lockfile, McpServer};
 use crate::manifest::{ManifestDocument, McpRequirement, Target, validate_name};
-use crate::sync::{CollisionPolicy, UpdateSelection};
+use crate::sync::UpdateSelection;
 use crate::target::mcp::McpConfig;
 use crate::transaction::{Operation, StandaloneDryRun, apply_standalone_prepared};
 
@@ -18,15 +18,7 @@ pub(super) fn add(project: &Path, args: McpAddArgs, policy: ExecutionPolicy) -> 
     let mut document = ManifestDocument::load(project)?;
     document.set_mcp(&intent.name, &intent.requirement);
     let manifest = document.manifest()?;
-    let projection = if intent.no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(if intent.force {
-            CollisionPolicy::Force
-        } else {
-            CollisionPolicy::Reject
-        })
-    };
+    let projection = ProjectionPolicy::from_flags(intent.no_sync, false, intent.force)?;
     let request = policy
         .request(intent.dry_run, projection)
         .with_manifest_bytes(document.bytes());
@@ -287,11 +279,7 @@ pub(super) fn remove(project: &Path, args: McpRemoveArgs, policy: ExecutionPolic
     }
     document.remove_mcp(&args.name);
     let manifest = document.manifest()?;
-    let projection = if args.no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(CollisionPolicy::Reject)
-    };
+    let projection = ProjectionPolicy::from_flags(args.no_sync, false, false)?;
     let request = policy
         .request(args.dry_run, projection)
         .with_manifest_bytes(document.bytes());
@@ -346,15 +334,7 @@ pub(super) fn update(project: &Path, args: McpUpdateArgs, policy: ExecutionPolic
         }
         args.names.into_iter().collect()
     };
-    let projection = if args.no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(if args.force {
-            CollisionPolicy::Force
-        } else {
-            CollisionPolicy::Reject
-        })
-    };
+    let projection = ProjectionPolicy::from_flags(args.no_sync, false, args.force)?;
     let request = policy
         .request(args.dry_run, projection)
         .with_updates(UpdateSelection::default().mcp(updates));

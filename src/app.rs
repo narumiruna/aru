@@ -60,6 +60,16 @@ enum ProjectionPolicy {
     Project(CollisionPolicy),
 }
 
+impl ProjectionPolicy {
+    fn from_flags(no_sync: bool, merge: bool, force: bool) -> Result<Self> {
+        if no_sync {
+            Ok(Self::LockOnly)
+        } else {
+            Ok(Self::Project(CollisionPolicy::from_flags(merge, force)?))
+        }
+    }
+}
+
 impl ExecutionPolicy {
     fn begin(self, project: &Path, dry_run: bool) -> Result<ExecutionGuard> {
         begin_with_snapshot(project, dry_run, self.selection_snapshot)
@@ -505,11 +515,7 @@ fn apply_target_change(
         )
         .collect::<Vec<_>>();
     target_plan.sort();
-    let projection = if no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(CollisionPolicy::from_flags(merge_instructions, force)?)
-    };
+    let projection = ProjectionPolicy::from_flags(no_sync, merge_instructions, force)?;
     let request = policy
         .request(dry_run, projection)
         .with_manifest_bytes(document.bytes());

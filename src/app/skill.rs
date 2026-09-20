@@ -15,7 +15,7 @@ use crate::resolver::{
     inspect_standalone_skill_source,
 };
 use crate::skill::select_candidates;
-use crate::sync::{CollisionPolicy, UpdateSelection};
+use crate::sync::UpdateSelection;
 use crate::transaction::{Operation, StandaloneDryRun, apply_standalone, apply_standalone_global};
 
 use super::prompt::ProjectSnapshot;
@@ -420,7 +420,7 @@ fn skill_add_with_policy(
     let manifest = document.manifest()?;
     let hints = BTreeMap::from([(inspection.source.clone(), inspection.hint())]);
     let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    let projection = skill_projection(args.no_sync, args.force);
+    let projection = ProjectionPolicy::from_flags(args.no_sync, false, args.force)?;
     let request = policy
         .request(args.dry_run, projection)
         .with_manifest_bytes(document.bytes())
@@ -473,7 +473,7 @@ fn skill_add_explicit(
     document.set_skill(&key, &requirement);
     let manifest = document.manifest()?;
     let updates = skill_add_update_targets(project, &manifest, &key, args.upgrade)?;
-    let projection = skill_projection(args.no_sync, args.force);
+    let projection = ProjectionPolicy::from_flags(args.no_sync, false, args.force)?;
     let request = policy
         .request(args.dry_run, projection)
         .with_manifest_bytes(document.bytes())
@@ -554,7 +554,10 @@ pub(super) fn remove(project: &Path, args: SkillRemoveArgs, policy: ExecutionPol
     }
     let manifest = document.manifest()?;
     let request = policy
-        .request(args.dry_run, skill_projection(args.no_sync, false))
+        .request(
+            args.dry_run,
+            ProjectionPolicy::from_flags(args.no_sync, false, false)?,
+        )
         .with_manifest_bytes(document.bytes());
     execute(project, &manifest, request, policy.output)
 }
@@ -586,21 +589,12 @@ pub(super) fn update(project: &Path, args: SkillUpdateArgs, policy: ExecutionPol
     let manifest = document.manifest()?;
     let updates = canonical_update_skill_targets(project, &manifest, &args.sources)?;
     let request = policy
-        .request(args.dry_run, skill_projection(args.no_sync, args.force))
+        .request(
+            args.dry_run,
+            ProjectionPolicy::from_flags(args.no_sync, false, args.force)?,
+        )
         .with_updates(UpdateSelection::default().skills(updates));
     execute(project, &manifest, request, policy.output)
-}
-
-fn skill_projection(no_sync: bool, force: bool) -> ProjectionPolicy {
-    if no_sync {
-        ProjectionPolicy::LockOnly
-    } else {
-        ProjectionPolicy::Project(if force {
-            CollisionPolicy::Force
-        } else {
-            CollisionPolicy::Reject
-        })
-    }
 }
 
 fn add_skill_selector(requirement: &mut SkillRequirement, name: &str) {

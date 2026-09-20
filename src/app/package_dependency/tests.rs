@@ -1,33 +1,6 @@
 use super::*;
 
 #[test]
-fn projection_flags_preserve_no_sync_precedence() {
-    for merge in [false, true] {
-        for force in [false, true] {
-            assert!(matches!(
-                package_projection(true, merge, force).unwrap(),
-                ProjectionPolicy::LockOnly
-            ));
-        }
-    }
-    for (merge, force, expected) in [
-        (false, false, CollisionPolicy::Reject),
-        (true, false, CollisionPolicy::MergeInstructions),
-        (false, true, CollisionPolicy::Force),
-    ] {
-        assert!(
-            matches!(package_projection(false, merge, force).unwrap(), ProjectionPolicy::Project(actual) if actual == expected)
-        );
-    }
-    assert_eq!(
-        package_projection(false, true, true)
-            .unwrap_err()
-            .to_string(),
-        "--merge and --force cannot be combined"
-    );
-}
-
-#[test]
 fn declared_package_and_trust_keys_preserve_their_distinct_lookup_order() {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path();

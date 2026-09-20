@@ -63,9 +63,9 @@ Do not introduce traits, dependency injection, or a generic target-adapter frame
 
 ### 4. Centralize projection-policy construction
 
-- [ ] Add one `ProjectionPolicy` constructor in `src/app.rs` for `(no_sync, merge, force)`. Preserve the existing precedence: `no_sync` returns `LockOnly` before projection collision flags are interpreted; projected `merge && force` remains an error. Acceptance: focused policy tests pass with existing error messages.
-- [ ] Replace policy branches in `src/app/instruction.rs`, `src/app/mcp.rs`, `src/app/package_dependency.rs`, `src/app/plugin.rs`, `src/app/skill.rs`, and target-change handling in `src/app.rs`. Commands that do not support merge pass `false` explicitly. Acceptance: `skill_projection`, `package_projection`, plugin `projection`, and equivalent inline branches are removed.
-- [ ] Verify every resource mutation preserves dry-run, no-sync, merge, force, and collision behavior. Acceptance: `tests/cli_policy.rs`, `tests/instruction_cli.rs`, `tests/mcp_cli.rs`, `tests/package_cli.rs`, `tests/plugin_cli.rs`, and `tests/target_cli.rs` pass.
+- [x] Add `ProjectionPolicy::from_flags` with existing no-sync precedence. Evidence: the characterization test now targets the common constructor and passes with the original conflict error.
+- [x] Replace all resource and target-change policy branches; delete the three local helpers. Evidence: source search finds no duplicate helper or inline no-sync projection branch.
+- [x] Verify cross-resource behavior. Evidence: `cli_policy`, `instruction_cli`, `mcp_cli`, `package_cli`, `plugin_cli`, and `target_cli` all pass (73 tests).
 
 ### 5. Consolidate project-root traversal
 
